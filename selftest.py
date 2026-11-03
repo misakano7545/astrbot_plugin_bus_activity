@@ -229,6 +229,24 @@ _ex = query.answer("南宁 999 路有车吗", "玉林市")   # 明写了城市�
 assert "我按" not in _ex, _ex
 query.query, query.cities, query.render_at = _q, _c, _a
 
+# 掌上这座城没实时（hasReal=0，北京/成都）→ 下一问先问车来了，别再空等一轮
+_rq = query.query
+_cit, query.cities = query.cities, lambda: {"测试": {"mygolbs": "X市", "chelaile": "999"}}
+_mg, query._mygolbs = query._mygolbs, lambda c, w: {"source": "掌上公交", "line": "1路",
+                                                   "groups": [("", [])], "note": "", "unknown": True}
+_cl, query._chelaile = query._chelaile, lambda c, w: {"source": "车来了", "line": "1",
+                                                      "groups": [("", [("A", "B", 1)])], "desc": ""}
+query.PREFER_CL.pop("测试", None)
+_rq("测试", ["1"])
+assert query.PREFER_CL.get("测试"), "掌上 unknown 该记下来"
+_seq = []
+query._mygolbs = lambda c, w: (_seq.append(1), {"source": "掌上公交", "line": "1路",
+                                                "groups": [("", [])], "note": "", "unknown": True})[1]
+_rq("测试", ["1"])
+assert not _seq, "第二问该直接先问车来了"
+query.cities, query._mygolbs, query._chelaile = _cit, _mg, _cl
+query.PREFER_CL.pop("测试", None)
+
 # 问首末班时刻 → 回答时间，别拿「末班已开走」糊过去
 _cat = query._catalog
 query._catalog = lambda c: {"buslines": [

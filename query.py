@@ -319,6 +319,10 @@ def _chelaile(city_id, want):
             if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc}
 
 
+# 掌上这座城不给车辆位置（hasReal=0：北京、成都）时，下次把车来了排前面，省一次空等
+PREFER_CL = {}
+
+
 def query(city_key, wants):
     """两家依次试。有车就立刻用，两家都空车才算没车——否则会漏掉另一家有车的城。
 
@@ -326,8 +330,10 @@ def query(city_key, wants):
     """
     ent = cities().get(city_key) or {}
     tried, blank, near = [], None, None
+    order = ("chelaile", "mygolbs") if PREFER_CL.get(city_key) else ("mygolbs", "chelaile")
     for want in wants:
-        for source, fetch in (("mygolbs", _mygolbs), ("chelaile", _chelaile)):
+        for source in order:
+            fetch = {"mygolbs": _mygolbs, "chelaile": _chelaile}[source]
             target = ent.get(source)
             if not target:
                 continue
@@ -345,6 +351,9 @@ def query(city_key, wants):
             if got and any(group for _, group in got["groups"]):
                 return got
             if got:
+                # 掌上这座城没实时（unknown），记下来，下一问直接先问车来了
+                if got.get("unknown") and ent.get("chelaile"):
+                    PREFER_CL[city_key] = True
                 blank = blank or got
         if blank:
             return blank           # 有这条线，只是当下两端都没车
