@@ -129,6 +129,14 @@ assert query.render_company("玉林市", "9") == "9路 归玉林公交\n平台�
 assert query.render_company("玉林市", "1") == "1路 归一汽巴士，咨询电话 020-87763773"
 query._post = _p114
 
+# 地铁也在同一套目录里（掌上「地铁10号线」「轨道交通1号线」，车来了没有）；
+# 归一化要把「轨道交通」和「地铁」当成同一条，否则南宁查不到
+assert query.parse("南宁 轨道交通1号线有哪些站") == ("地铁1号", "南宁")
+assert query.parse("广州地铁1号线站点列表") == ("地铁1号", "广州")
+assert query.parse("地铁广佛线有哪些站")[0] == "地铁广佛"
+assert query.norm_line("轨道交通1号线") == query.norm_line("地铁1号线")
+assert query.parse("8点出门") is None                  # 「8点」不能被当线路
+
 # 逐站换乘：上下行同一个站只算一次，列表里要剔掉本线
 _sq, _st, _cat = query._station_seq, query.stops, query._catalog
 

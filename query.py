@@ -39,7 +39,9 @@ _cache = {}
 # 「玉林 G02 路」「B1 有车吗」「105路」都认；裸数字必须带「路」，防「8点」误判
 # 「路」后面紧跟的定性词（夜班/专线）得一起吃掉，否则「6路夜班」会被截成「6」
 LINE_RE = re.compile(
-    r"(?P<alpha>[A-Za-z]{1,2}\d{1,3})(?:\s*路)?"
+    # 真地铁也在这套目录里：「地铁10号线」「轨道交通1号线」「地铁广佛线」
+    r"(?P<metro>(?:地铁|轨道交通)\s*\d+\s*号线|地铁\s*[\u4e00-\u9fa5]{1,3}线)"
+    r"|(?P<alpha>[A-Za-z]{1,2}\d{1,3})(?:\s*路)?"
     r"|(?P<num>\d{1,3})\s*路(?P<qual>夜班)?"
 )
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
@@ -55,7 +57,7 @@ MIN_CITY_KEY = 2
 
 def norm_line(name):
     s = re.sub(r"[（(].*?[)）]", "", name or "")
-    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"\s+", "", s).replace("轨道交通", "地铁")
     return re.sub(r"(线路|路|线)", "", s).upper()
 
 
@@ -72,7 +74,7 @@ def parse(msg):
     if not m:
         return None
     pre = PREFIX_RE.search(msg[: m.start()])
-    num = (m.group("alpha") or m.group("num")) + (m.group("qual") or "")
+    num = (m.group("alpha") or m.group("num") or m.group("metro")) + (m.group("qual") or "")
     return norm_line(num), (pre.group(1) if pre else "")
 
 
@@ -357,6 +359,8 @@ def render(city_key, want, res):
     line = res["line"]
     if not total:
         # 「没车」和「上游没给车辆位置」是两件事，后者会被乘客读成停运（见 issue #2）
+        if "地铁" in norm_line(line):           # 地铁进得了目录，但全程 hasReal=0
+            return f"{line} 没有实时车辆位置，地铁不上报车机，站表和首末班能查"
         tail = res.get("note") or res.get("desc") or ""
         head = f"{line} 查不到实时车" if res.get("unknown") else f"{line} 这会儿没车"
         return head + ("，" + tail if tail else "")
