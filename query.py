@@ -822,7 +822,11 @@ def answer(msg, default_city, ctx="", key=""):
                     out = render_at(city_key, name, w, msg)
                 if out:
                     return out
-        return render(city_key, wants[0], query(city_key, wants))
+        txt = render(city_key, wants[0], query(city_key, wants))
+        # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
+        if not explicit and txt.startswith("没查到"):
+            txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
+        return txt
     if name:
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
         if SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg):

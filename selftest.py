@@ -219,6 +219,16 @@ assert _cap[-1] == ("玉林", ["陆川1", "1"]), _cap[-1]  # 玉林目录里有�
 query.query, query.cities = _q, _cit
 query.render_company, query.render_stops, query.render_at = _rc, _rs, _ra
 
+# 没写城市、默认城市又查不到：要说明「按谁查的」，别让用户以为这条线不存在
+_q, query.query = query.query, lambda ck, wants: {"error": "没这条线路"}
+_c, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}}
+_a, query.render_at = query.render_at, lambda *a: None          # 别真去打网络
+_txt = query.answer("999 路有车吗", "玉林市")
+assert _txt.startswith("没查到「999」这条线") and "我按玉林查的" in _txt, _txt
+_ex = query.answer("南宁 999 路有车吗", "玉林市")   # 明写了城市就不念这句
+assert "我按" not in _ex, _ex
+query.query, query.cities, query.render_at = _q, _c, _a
+
 # 问首末班时刻 → 回答时间，别拿「末班已开走」糊过去
 _cat = query._catalog
 query._catalog = lambda c: {"buslines": [
