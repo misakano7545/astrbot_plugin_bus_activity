@@ -204,6 +204,62 @@ assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
 assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
                                "note": "末班 20:25 已经开走了"}).startswith("1路 这会儿没车")
 
+# issue #8：前缀是线路名的一部分，明写城市也不丢；前缀自己就是城市时以它为准
+_cap, _q = [], query.query
+query.query = lambda ck, wants: (_cap.append((ck, wants)), {"error": "没这条线路"})[1]
+_cit = query.cities
+query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "容县": {"mygolbs": "容县市"}}
+_rc, query.render_company = query.render_company, lambda *a: None
+_rs, query.render_stops = query.render_stops, lambda *a: None
+_ra, query.render_at = query.render_at, lambda *a: None
+query.answer("玉林 容县 11 路有车吗", "玉林市")
+assert _cap[-1] == ("容县", ["11"]), _cap[-1]          # 别拿玉林的目录查裸号 11
+query.answer("玉林 陆川 1 路有车吗", "玉林市")
+assert _cap[-1] == ("玉林", ["陆川1", "1"]), _cap[-1]  # 玉林目录里有陆川1路
+query.query, query.cities = _q, _cit
+query.render_company, query.render_stops, query.render_at = _rc, _rs, _ra
+
+# issue #10：末班比较不跨零点（字符串比较时 '00:02' < '22:40'）
+import types as _t
+_lt, _real = query.time, sys.modules["time"]
+def _at(hh, mm):
+    s = _real.localtime()
+    query.time = _t.SimpleNamespace(localtime=lambda: s.__replace__(tm_hour=hh, tm_min=mm),
+                                    strftime=_real.strftime)
+for _now, _last, _want in [((0, 2), "22:40", True), ((0, 10), "00:30", False),
+                           ((23, 50), "24:10", False), ((0, 20), "24:10", True),
+                           ((23, 0), "00:10", False), ((12, 0), "12:30", False)]:
+    _at(*_now)
+    assert query._past_last(_last) is _want, (_now, _last, query._past_last(_last))
+query.time = _lt
+
+# issue #11：香港「1」对应五家公司，按名字分组各查各的，别取前两条
+_cl, _mod = query.chelaile.lines, query.chelaile.live
+query.chelaile.lines = lambda cid: [("1（九巴）", "a1"), ("1（九巴）", "a2"),
+                                    ("1（城巴）", "b1"), ("1（城巴）", "b2")]
+query.chelaile.live = lambda cid, lid: {"to": f"往{lid}", "desc": "", "state": 0,
+                                        "buses": [("车" + lid, "站", 100)]}
+query._cache.clear()
+_res = query._chelaile("085", "1")
+assert [g[0] for g in _res["groups"]] == ["往a1（九巴）", "往a2（九巴）", "往b1（城巴）", "往b2（城巴）"]
+assert _res["line"] == "1", _res["line"]              # 抬头不能写成「1（九巴）」
+query.chelaile.lines, query.chelaile.live = _cl, _mod
+
+# issue #9：车来了兜底别把单条线的 desc（「本线路末班时间已过」）当成全城原因
+_cit2, _cl2, _lv2 = query.cities, query.chelaile.lines, query.chelaile.live
+query.cities = lambda: {"北海": {"mygolbs": "北海市", "chelaile": "267"}}
+query.chelaile.lines = lambda cid: [("1", "a"), ("2", "b")]
+query.chelaile.live = lambda cid, lid: {"to": "x", "desc": "本线路末班时间已过",
+                                        "state": -3, "buses": []}
+query._cache.clear()
+assert query._sweep_chelaile("北海市") == "北海市这会儿全线都没车报位置，末班都过了"
+query.chelaile.live = lambda cid, lid: {"to": "x", "desc": "本线路末班时间已过",
+                                        "state": -3 if lid == "a" else -5, "buses": []}
+query._cache.clear()
+assert "本线路" not in query._sweep_chelaile("北海市")   # 说法不一致就别拿一条解释全城
+query.cities, query.chelaile.lines, query.chelaile.live = _cit2, _cl2, _lv2
+query._cache.clear()
+
 print("selftest ok")
 
 if "--live" in sys.argv:

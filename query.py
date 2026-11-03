@@ -186,12 +186,33 @@ def _pick_city_line(catalog, want, city_name):
     return []
 
 
-def _last_bus(city_name, line, direction):
-    """末班时刻 HH:MM，取不到返回空。只在整车数为 0 时调用，回答「是不是收班了」。"""
+def _past_last(last):
+    """末班过了没。字符串比较跨不了零点（'00:20' < '22:40'），按分钟算。"""
+    try:
+        h, m = last.split(":")[:2]
+        last_m = int(h) * 60 + int(m)
+    except ValueError:
+        return False
+    t = time.localtime()
+    now_m = t.tm_hour * 60 + t.tm_min
+    # 按「末班离现在多久」算，跨零点自然成立：00:02 问 22:40 → 1358 分钟前，已开走；
+    # 23:00 问 00:10 → 70 分钟后，还没到。
+    # shortcut: 以 12 小时为界判过去/将来，早班车式的末班（06:00）在下午会判错
+    return (last_m - now_m) % (24 * 60) > 12 * 60
+
+
+def _first_last(city_name, line, direction):
+    """(首班, 末班)，取不到给空串。只在整车数为 0 时调用，回答「是不是收班了」。"""
     r = _cached("firstlast", (city_name, line, direction), CATALOG_TTL,
                 lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
                                "DIRECTION": direction}))
-    return max((x.get("last") or "" for x in r.get("firstLast") or []), default="")
+    fl = r.get("firstLast") or []
+    return (min((x.get("first") or "" for x in fl), default=""),
+            max((x.get("last") or "" for x in fl), default=""))
+
+
+def _last_bus(city_name, line, direction):
+    return _first_last(city_name, line, direction)[1]
 
 
 def _live_my(city_name, name, d, order=1):
@@ -242,7 +263,7 @@ def _mygolbs(city_name, want):
         near = sorted({r["lineName"] for r in rows
                        if norm_line(r["lineName"]).startswith(want)})[:4]
         return {"error": "是 " + " / ".join(near) + " 吗"} if near else None
-    groups, live_known, last, live_flags = [], False, "", []
+    groups, live_known, first, last, live_flags = [], False, "", "", []
     for name, row in hit:
         d = str(row.get("upperOrDown") or "")
         # 传 0/3/空串时服务端会静默退化成方向 1，回一列错方向的车，宁可不报
@@ -255,7 +276,8 @@ def _mygolbs(city_name, want):
             live_known = True
         live_flags.append(str(payload.get("hasReal")) == "0")
         if not cars:
-            last = _last_bus(city_name, name, d) or last
+            f0, l0 = _first_last(city_name, name, d)
+            first, last = first or f0, l0 or last
         groups.append((row.get("to") or "", [(c.get("busNumber"), c.get("stationName"),
                                               c.get("busToStationNiheDistance"), c.get("statusType"))
                                              for c in cars]))
@@ -265,8 +287,9 @@ def _mygolbs(city_name, want):
             # hasReal=0 = 上游这座城根本不给车辆位置（北京、上海、成都等），
             # 不能当成「没车」报，那是假消息（实测玉林 0 车时 hasReal 仍是 1）
             unknown, note = True, "上游对这个城市不提供实时车辆位置"
-        elif last and time.strftime("%H:%M") > last:
-            note = f"末班 {last} 已经开走了"
+        elif last and _past_last(last):
+            # 连带说首班：凌晨问日间线时，用户要知道的是「几点再来」
+            note = f"末班 {last} 已经开走了" + (f"，首班 {first}" if first else "")
         elif live_known:
             note = "线路还在跑，这会儿没车开车机"
     return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
@@ -279,17 +302,21 @@ def _chelaile(city_id, want):
     if not hit:
         return None
     name = hit[0][0]
-    # 目录是方向级的，同一条线上下行是两个 lineId，全都查一遍再合并（见 issue #6）。
-    # 但香港这种一个名字对应多家公司（九巴/城巴/屿巴 都叫「1」），别把别人的车算进来，
-    # 所以只取排在前面的那一条线路的方向对。
-    ids = [lid for n, lid in hit if n == name][:2]
+    # 目录是方向级的：同一条线上下行是两个 lineId，全查再合并（见 issue #6）。
+    # 香港一个「1」对应五家公司（九巴/城巴/屿巴/新界小巴/港岛小巴），名字里的括号
+    # 就是公司，按名字分组查，别取前两条（前两条可能分属两家，混着报）。
     groups, desc = [], ""
-    for line_id in ids:
-        d = _cached("live-cl", (city_id, line_id), LIVE_TTL, lambda i=line_id: chelaile.live(city_id, i))
-        # state=-1 等待发车、-2 临时停运、-3 末班已过，desc 是现成中文文案
-        desc = desc or d.get("desc") or ""
-        groups.append((d.get("to") or "", d["buses"]))
-    return {"source": "车来了", "line": name, "groups": groups, "desc": desc}
+    for nm in dict.fromkeys(n for n, _ in hit):
+        co = re.search(r"[（(](.+?)[)）]", nm)
+        for line_id in [lid for n, lid in hit if n == nm]:
+            d = _cached("live-cl", (city_id, line_id), LIVE_TTL, lambda i=line_id: chelaile.live(city_id, i))
+            # state=-1 等待发车、-2 临时停运、-3 末班已过，desc 是现成中文文案
+            desc = desc or d.get("desc") or ""
+            to = d.get("to") or ""
+            groups.append((f"{to}（{co.group(1)}）" if co else to, d["buses"]))
+    # 多家公司同名时抬头别写成「1（九巴） 有 7 辆」，那不是一家的车
+    return {"source": "车来了", "line": re.sub(r"[（(].*?[)）]", "", name)
+            if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc}
 
 
 def query(city_key, wants):
@@ -457,7 +484,7 @@ def _hop_line(city_name, line, d, ia, ib):
     eta = _etas(payload)
     if not eta:
         last = _last_bus(city_name, line, d)
-        if last and time.strftime("%H:%M") > last:
+        if last and _past_last(last):
             return f"，末班 {last} 已经开走了"
         return "，这会儿没车报位置"
     return f"，下一辆约 {max(1, round(eta[0]))} 分钟后到，坐过去 {max(1, round(_run(payload, ia, ib)))} 分钟"
@@ -630,20 +657,22 @@ def _sweep_chelaile(city_name):
                 if (c or {}).get("mygolbs") == city_name), None)
     if not cid:
         return ""
-    rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))[:120]
+    rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
+    note = f"（抽查了 120 条）" if len(rows) > 120 else ""
+    rows = rows[:120]
 
     def one(row):
         name, lid = row
         try:
             d = _cached("live-cl", (cid, lid), LIVE_TTL, lambda: chelaile.live(cid, lid))
         except Exception:
-            return name, "", 0, ""
-        return name, d.get("to") or "", len(d.get("buses") or []), d.get("desc") or ""
+            return name, "", 0, None, ""
+        return name, d.get("to") or "", len(d.get("buses") or []), d.get("state"), d.get("desc") or ""
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         got = list(pool.map(one, rows))
     per = {}
-    for name, to, n, _ in got:
+    for name, to, n, _, _ in got:
         cnt, ends = per.setdefault(name, [0, set()])
         if n:
             per[name][0] = cnt + n
@@ -651,9 +680,13 @@ def _sweep_chelaile(city_name):
     live = sorted(((k, v[0], "、".join(f"往{e}" for e in sorted(v[1])))
                    for k, v in per.items() if v[0]), key=lambda x: -x[1])
     if not live:
-        desc = next((g[3] for g in got if g[3]), "")
-        return f"{city_name}这会儿全线都没车报位置" + (f"，{desc}" if desc else "，可能都收班了")
-    return (f"{city_name}这会儿有 {len(live)} 条线在跑："
+        # 别拿单条线的文案（「本线路末班时间已过」）解释全城：先看状态是否全一致
+        states = {g[3] for g in got}
+        descs = {g[4] for g in got if g[4]}
+        tail = ("，首班还没到" if states == {-5} else "，末班都过了" if states == {-3}
+                else f"（车来了：{descs.pop()}）" if len(states) == 1 and len(descs) == 1 else "")
+        return f"{city_name}这会儿{f'抽查了 {len(rows)} 条' if note else '全线'}都没车报位置{tail}"
+    return (f"{city_name}这会儿有 {len(live)} 条线在跑{note}："
             + "".join(f"\n{k} {c} 辆（{e}）" for k, c, e in live))
 
 
@@ -670,9 +703,11 @@ def render_sweep(city_name):
     names = [n for n in ends if dirs.get(n)]
     if not names:      # 掌上这座城没有线路目录（北海就是），换车来了扫
         return _sweep_chelaile(city_name)
-    # 先花一次请求问城市有没有实时：北京 1776 条线全是 hasReal=0，扫完也是白扫
-    if str(_live_my(city_name, names[0], dirs[names[0]][0]).get("hasReal")) == "0":
-        return f"{city_name}上游不提供实时车辆位置，线路目录能查到，车在哪查不到"
+    # 抽 3 条线看有没有实时：只问第一条，一条线的 hasReal 就能让整城短路
+    if all(str(_live_my(city_name, n, dirs[n][0]).get("hasReal")) == "0" for n in names[:3]):
+        # 掌上不给（北京、成都），车来了也许给，先问车来了再说查不到
+        return _sweep_chelaile(city_name) or \
+            f"{city_name}上游不提供实时车辆位置，线路目录能查到，车在哪查不到"
     note = ""
     if len(names) > SWEEP_MAX:
         # 上千条线的城市扫不完：按号取前 60 条纯数字主线，够看出这会儿还有没有车在跑
@@ -715,8 +750,14 @@ def answer(msg, default_city, ctx="", key=""):
     msg = AT_RE.sub(" ", msg)
     line = parse(msg)
     prefix = line[1] if line else ""
+    if prefix in ("那", "这", "该", "此", "本"):      # 指示词不是县名，别拼进线路名
+        prefix = ""
     city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
     base = norm_city(default_city)
+    # 前缀自己就是一座城（「玉林 容县 11 路」）时以它为准：玉林的目录里没有容县11路，
+    # 拿玉林的目录查裸号会静默答成玉林 11 路
+    if prefix and norm_city(prefix) in cities():
+        city_key, explicit = norm_city(prefix), True
     if not city_key:
         # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次；
         # 再不行试上一条问过的城市——群里追问「b19 所有站点」不会重报城市名
@@ -748,21 +789,19 @@ def answer(msg, default_city, ctx="", key=""):
             last["line"] = want
             return out
     if line:
-        want = prefix + line[0] if prefix and not explicit else line[0]
-        last["line"] = want
-        if name and COMPANY_RE.search(msg):      # 问公司/找失物/投诉
-            out = render_company(name, want)
-            if out:
-                return out
-        if name and STOPS_RE.search(msg):        # 要的是站表，别回实时车
-            out = render_stops(name, want)
-            if out:
-                return out
+        # 前缀是线路名的一部分（容县11路），明写城市也不该丢——explicit 只管去哪个目录找
+        wants = ([prefix + line[0]] if prefix and norm_city(prefix) != city_key else []) + [line[0]]
+        last["line"] = wants[0]
         if name:
-            out = render_at(city_key, name, want, msg)
-            if out:
-                return out
-        wants = [prefix + line[0], line[0]] if prefix and not explicit else [line[0]]
+            for w in wants:
+                if COMPANY_RE.search(msg):       # 问公司/找失物/投诉
+                    out = render_company(name, w)
+                elif STOPS_RE.search(msg):       # 要的是站表，别回实时车
+                    out = render_stops(name, w)
+                else:
+                    out = render_at(city_key, name, w, msg)
+                if out:
+                    return out
         return render(city_key, wants[0], query(city_key, wants))
     if name:
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
