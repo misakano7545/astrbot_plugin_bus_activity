@@ -535,6 +535,29 @@ def render_stops(city_name, want):
 
 
 TRANSFER_RE = re.compile(r"换乘|能换|可以换|转哪|转到")
+# 「9路是哪家公司的」「丢东西了找谁」——只有 114 的 routeBean 带运营公司
+COMPANY_RE = re.compile(r"哪家公司|哪个公司|哪家公交|所属公司|运营公司|归谁|谁开的|投诉|客服|电话|遗失|丢了|落下|忘在")
+
+
+def render_company(city_name, want):
+    """114.routeBean 有 company（实测几乎全城都有）和 companyMobile（只有部分城市有）。"""
+    d = _cached("bean", (city_name, want), CATALOG_TTL,
+                lambda: _post({"CMD": "114", "CITYNAME": city_name, "KEYWORD": want}))
+    rows = [b.get("routeBean") or {} for b in (d.get("buslines") or [])]
+    hit = _pick([(r["routeName"], r) for r in rows if r.get("routeName")], want)
+    out, seen = [], set()
+    for name, r in hit:
+        co = (r.get("company") or "").strip()
+        if not co or name in seen:
+            continue
+        seen.add(name)
+        tel = (r.get("companyMobile") or "").strip().rsplit(":", 1)
+        out.append(f"{name} 归{co}" + (f"，咨询电话 {tel[-1]}" if len(tel) == 2 else ""))
+    if not out:
+        return None
+    if not any("电话" in o for o in out):
+        out.append("平台没挂咨询电话，丢东西直接打 12345 或去线路终点站的调度室问")
+    return "\n".join(out)
 
 
 def render_transfer(city_name, want):
@@ -711,6 +734,10 @@ def answer(msg, default_city, ctx=""):
     if line:
         want = prefix + line[0] if prefix and not explicit else line[0]
         LAST["line"] = want
+        if name and COMPANY_RE.search(msg):      # 问公司/找失物/投诉
+            out = render_company(name, want)
+            if out:
+                return out
         if name and STOPS_RE.search(msg):        # 要的是站表，别回实时车
             out = render_stops(name, want)
             if out:

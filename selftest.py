@@ -109,6 +109,14 @@ assert query.answer("那39路的那一辆是去往哪个方向呢？", "玉林�
                     "南宁市这会儿有 7 条线在跑") == "有，39路 现在 1 辆在路上\n往A：桂A1 x"
 query.pick_stop, query.query = _ps, _hq
 
+# 运营公司/咨询电话来自 114.routeBean：company 几乎全城都有，companyMobile 只有部分城市有
+_p114, query._post = query._post, lambda p, timeout=8: {"buslines": [
+    {"routeBean": {"routeName": "9路", "company": "玉林公交", "companyMobile": ""}},
+    {"routeBean": {"routeName": "1路", "company": "一汽巴士", "companyMobile": "一汽巴士:020-87763773"}}]}
+assert query.render_company("玉林市", "9") == "9路 归玉林公交\n平台没挂咨询电话，丢东西直接打 12345 或去线路终点站的调度室问"
+assert query.render_company("玉林市", "1") == "1路 归一汽巴士，咨询电话 020-87763773"
+query._post = _p114
+
 # 逐站换乘：上下行同一个站只算一次，列表里要剔掉本线
 _sq, _st, _cat = query._station_seq, query.stops, query._catalog
 
