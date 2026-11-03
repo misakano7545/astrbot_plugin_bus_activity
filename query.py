@@ -386,8 +386,12 @@ def stops(city_name, keyword):
 
 
 def find_stop(city_name, raw):
-    """站名从长到短试，命中即止——用户嘴里不会带括号后缀，得让平台的站名去对。"""
-    for n in (8, 6, 5, 4, 3, 2):
+    """站名从长到短试，命中即止——用户嘴里不会带括号后缀，得让平台的站名去对。
+
+    底线是 3 字：允许退到 2 字时，「南宁机场」会退成「南宁」，搜出「南宁孔庙」
+    这种风马牛不相及的站，比不答更糟。
+    """
+    for n in (8, 6, 5, 4, 3):
         if len(raw) >= n:
             rows = stops(city_name, raw[:n])
             if rows:

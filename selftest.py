@@ -70,6 +70,10 @@ assert query.render("玉林", "999", {"error": "没这条线路"}) == "没查到
 assert query.render("沛县", "1", {"error": "是 11路 / 17路 吗"}) == "没「1」这条，是 11路 / 17路 吗"
 assert query.render("玉林", "1", {"error": "上游这会儿没响应，过会儿再问"}) == "上游这会儿没响应，过会儿再问"
 
+# 站名最多退到 3 字：退到 2 字会让「南宁机场」搜出「南宁孔庙」这种风马牛不相及的站
+assert query.find_stop("南宁市", "南宁机场")[0] is None
+assert query.norm_line("南宁机场") == "南宁机场"
+
 # @ 标记里的 QQ 号看着像「E8 路」，不能当线路号
 assert query.AT_RE.sub(" ", "<@E8CBB6F8BD5822CA314B63B94976> 玉林 1 路").split() == ["玉林", "1", "路"]
 assert query.parse(query.AT_RE.sub(" ", "[At:E279593D8E44520BC3824B9CC89E0859] 1 路有车吗")) == ("1", "")
