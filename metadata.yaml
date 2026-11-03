@@ -1,0 +1,6 @@
+name: astrbot_plugin_bus_activity
+display_name: bus activity
+author: MisakaNo
+desc: 全国公交实时查询，问「玉林 G02 路有没有车」直接回车辆位置。
+version: v1.0.0
+repo: https://github.com/misakano7545/astrbot_plugin_bus_activity
