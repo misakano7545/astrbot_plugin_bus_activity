@@ -20,6 +20,11 @@ except ImportError:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
     from query import answer
 
+# 模型嘴里那句「只接了玉林的数据源」是旧插件的谎话，发出去之前整句删掉
+FALSE_CLAIM = re.compile(r"数据源|只接了|只有玉林|玉林的接口|"
+                         r"查不了.{0,8}(公交|线路)|(公交|线路).{0,8}查不了")
+SENT = re.compile(r"[^。！？\n]*[。！？\n]?")
+
 # 像在问公交才去查：查不到自然返回空串，不耽误别的聊天
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|线路|几路|哪路|路车|末班|首班|到站|几站|"
@@ -44,6 +49,20 @@ class BusActivity(Star):
         logger.info(f"公交直答: {event.message_str[:30]} -> {text[:60]}")
         yield event.plain_result(text)
         event.stop_event()
+
+    @filter.on_decorating_result()
+    async def drop_source_claims(self, event: AstrMessageEvent):
+        """引用历史里模型自己说过「只有玉林数据」，它会一直复读——发之前把这句掐掉。"""
+        res = event.get_result()
+        if not res or not res.chain:
+            return
+        for comp in res.chain:
+            text = getattr(comp, "text", "")
+            if text and FALSE_CLAIM.search(text):
+                comp.text = "".join(
+                    s for s in SENT.findall(text) if not FALSE_CLAIM.search(s)
+                ).strip()
+        res.chain = [c for c in res.chain if getattr(c, "text", None) != ""]
 
     @filter.llm_tool(name="bus_query")
     async def bus_query(self, event: AstrMessageEvent, question: str) -> str:
