@@ -106,7 +106,12 @@ def _post(params, timeout=8):
         data = json.loads(text)
     except ValueError as e:
         return {"status": -9, "msg": f"JSON 解析失败 {e}"}
-    return data if isinstance(data, dict) else {"status": -9, "msg": "响应不是对象"}
+    if not isinstance(data, dict):
+        return {"status": -9, "msg": "响应不是对象"}
+    # 业务失败也是 HTTP 200（status 是字符串 "-1"/"-2"），别当成「没这条线路」或「没车」
+    if str(data.get("status")) != "1":
+        return {"status": data.get("status"), "msg": data.get("msg") or "", "error": True}
+    return data
 
 
 def cities():
@@ -186,36 +191,49 @@ def _last_bus(city_name, line, direction):
     return max((x.get("last") or "" for x in r.get("firstLast") or []), default="")
 
 
-def _live_my(city_name, name, d):
-    """CMD=104 整包：list 是车，dislist/speedlist 是每段里程与均速（m/min），算分钟要用。"""
-    return _cached("live-my", (city_name, name, d), LIVE_TTL,
+def _live_my(city_name, name, d, order=1):
+    """CMD=104 整包。order > 0 时上游给「到这个站」自己的预测（routeOnStationRTimeInfoList），
+    每站最多 2 辆 —— 比自己拿 dislist/speedlist 估准，也更少代码。"""
+    return _cached("live-my", (city_name, name, d, order), LIVE_TTL,
                    lambda: _post({"CMD": "104", "CITYNAME": city_name, "LINENAME": name,
-                                  "DIRECTION": d, "STATIONORDER": "1"}))
+                                  "DIRECTION": d, "STATIONORDER": str(order)}))
 
 
-def _eta(payload, j, bus):
-    """车还有几分钟到第 j 站（0 基）。车速表单位是 m/min（实测与 GPS 位移吻合）。"""
-    i = int(bus.get("index") or 0)
-    if i > j:
-        return None                      # 已经过站了
+def _etas(payload):
+    """目标站的预测里最快一辆 → (分钟, 还有几站, 车牌)。没预测返回 None。
+
+    站已过时上游回 busToStationCount=-1、busNumber 为空，不能用（实测「已过末班时刻」那行）。
+    """
+    rows = [r for r in payload.get("routeOnStationRTimeInfoList") or []
+            if r.get("busNumber") and int(r.get("busToStationCount") or -1) >= 0]
+    if not rows:
+        return None
+    best = min(rows, key=lambda r: float(r.get("busToStationTime") or 0) or 1e9)
+    return (float(best.get("busToStationTime") or 0),
+            int(best.get("busToStationCount") or 0), best["busNumber"])
+
+
+def _run(payload, ia, ib):
+    """a 站到 b 站按每段均速估的分钟数（0 基站序）。上游只给到站预测，区间时长得自己累。"""
     dis = [x.get("d") or 0 for x in payload.get("dislist") or []]
     sp = [x.get("speed") or 0 for x in payload.get("speedlist") or []]
-    leg = lambda k: dis[k] / sp[k] if k < len(dis) and k < len(sp) and sp[k] else 0
-    v0 = sp[i - 1] if 0 < i <= len(sp) else (sp[0] if sp else 0)
-    t = float(bus.get("busToStationNiheDistance") or 0) / v0 if v0 else 0
-    return t + sum(leg(k) for k in range(i, j))
+    return sum(dis[k] / sp[k] for k in range(ia, min(ib, len(sp))) if sp[k])
+
 
 
 def _mygolbs(city_name, want):
-    rows = _cached("catalog-my", city_name, CATALOG_TTL,
-                   lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
+    cat = _cached("catalog-my", city_name, CATALOG_TTL,
+                  lambda: _post({"CMD": "119", "CITYNAME": city_name}))
+    if cat.get("error"):
+        return {"error": cat.get("msg") or "上游这会儿没响应"}     # 例如「当前城市暂无法提供公交查询」
+    rows = cat.get("buslines") or []
     hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
     if not hit:
         # 没有就报候选，别让「沛县 1 路」这种（只有 11/17/18 路）答成「没这条线」
         near = sorted({r["lineName"] for r in rows
                        if norm_line(r["lineName"]).startswith(want)})[:4]
         return {"error": "是 " + " / ".join(near) + " 吗"} if near else None
-    groups, live_known, last = [], False, ""
+    groups, live_known, last, live_flags = [], False, "", []
     for name, row in hit:
         d = str(row.get("upperOrDown") or "")
         # 传 0/3/空串时服务端会静默退化成方向 1，回一列错方向的车，宁可不报
@@ -226,17 +244,24 @@ def _mygolbs(city_name, want):
         # hasReal=1 且回的就是「获取实时数据成功」说明上游认为线路在运营，只是这一趟没有车报 GPS
         if payload.get("hasReal") in ("1", 1) or "成功" in str(payload.get("msg") or ""):
             live_known = True
+        live_flags.append(str(payload.get("hasReal")) == "0")
         if not cars:
             last = _last_bus(city_name, name, d) or last
         groups.append((row.get("to") or "", [(c.get("busNumber"), c.get("stationName"),
-                                              c.get("busToStationNiheDistance")) for c in cars]))
-    note = ""
+                                              c.get("busToStationNiheDistance"), c.get("statusType"))
+                                             for c in cars]))
+    note, unknown = "", False
     if not any(g for _, g in groups):
-        if last and time.strftime("%H:%M") > last:
+        if live_flags and all(live_flags):
+            # hasReal=0 = 上游这座城根本不给车辆位置（北京、上海、成都等），
+            # 不能当成「没车」报，那是假消息（实测玉林 0 车时 hasReal 仍是 1）
+            unknown, note = True, "上游对这个城市不提供实时车辆位置"
+        elif last and time.strftime("%H:%M") > last:
             note = f"末班 {last} 已经开走了"
         elif live_known:
             note = "线路还在跑，这会儿没车开车机"
-    return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups, "note": note}
+    return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
+            "note": note, "unknown": unknown}
 
 
 def _chelaile(city_id, want):
@@ -294,15 +319,21 @@ def query(city_key, wants):
         return near
     if tried and all("异常" in t for t in tried):
         return {"error": "上游这会儿没响应，过会儿再问"}
+    if tried:
+        return {"error": tried[0]}          # 上游自己说的原因，比我编的准
     return {"error": "没这条线路"}
 
 
-def _car(plate, stn, dist):
+def _car(plate, stn, dist, status=""):
+    # statusType "0" = 已到站（官方 H5：到站车辆直接归到最近站）；其余取值语义没确认，
+    # 只信 "2"（在途）带出来的距离，别拿别的状态的数字当「离下一站多远」。
+    if str(status) == "0":
+        return f"{plate} 已到{stn}"
     try:
         dist = float(dist or 0)
     except (TypeError, ValueError):
         dist = 0
-    if dist <= 0:
+    if dist <= 0 or str(status) not in ("", "2"):
         return f"{plate} {stn}"
     return f"{plate} {stn} {dist / 1000:.1f}km" if dist >= 1000 else f"{plate} {stn} {round(dist)}m"
 
@@ -318,9 +349,10 @@ def render(city_key, want, res):
     total = sum(len(b) for _, b in res["groups"])
     line = res["line"]
     if not total:
-        # 「没车」和「上游没给车辆 GPS」是两件事，后者会被乘客读成停运（见 issue #2）
+        # 「没车」和「上游没给车辆位置」是两件事，后者会被乘客读成停运（见 issue #2）
         tail = res.get("note") or res.get("desc") or ""
-        return f"{line} 这会儿没车" + ("，" + tail if tail else "")
+        head = f"{line} 查不到实时车" if res.get("unknown") else f"{line} 这会儿没车"
+        return head + ("，" + tail if tail else "")
     multi = sum(1 for _, b in res["groups"] if b) > 1      # 只有一个方向有车时不念空方向
     rows = [f"有，{line} 现在 {total} 辆在路上"]
     for label, buses in res["groups"]:
@@ -392,23 +424,15 @@ def _goes(city_name, line, a, b):
 
 
 def _hop_line(city_name, line, d, ia, ib):
-    """这一路下一辆车几分钟到 A、从 A 坐到 B 要几分钟。"""
-    payload = _live_my(city_name, line, d)
-    best = None
-    for car in payload.get("list") or []:
-        t = _eta(payload, ia, car)
-        if t is None:
-            continue
-        if best is None or t < best[0]:
-            best = (t, _eta(payload, ib, car))
-    if not best:
+    """这一路下一辆车几分钟到 A（上游预测），从 A 坐到 B 要几分钟（按每段均速累）。"""
+    payload = _live_my(city_name, line, d, ia + 1)      # STATIONORDER 1 基
+    eta = _etas(payload)
+    if not eta:
         last = _last_bus(city_name, line, d)
         if last and time.strftime("%H:%M") > last:
             return f"，末班 {last} 已经开走了"
         return "，这会儿没车报位置"
-    wait = max(1, round(best[0]))
-    ride = max(1, round(best[1] - best[0]))
-    return f"，下一辆约 {wait} 分钟后到，坐过去 {ride} 分钟"
+    return f"，下一辆约 {max(1, round(eta[0]))} 分钟后到，坐过去 {max(1, round(_run(payload, ia, ib)))} 分钟"
 
 
 def render_hop(city_key, city_name, raw):
@@ -439,17 +463,12 @@ def render_hop(city_key, city_name, raw):
     return "\n".join(rows)
 
 
-def _left(seq_index, car_index):
-    """站序是 1 基、车辆 index 是 0 基，差几站 = 站序 - (index+1)。"""
-    return seq_index - (int(car_index or 0) + 1)
-
-
 def _clock(mins):
     return time.strftime("%H:%M", time.localtime(time.time() + mins * 60))
 
 
 def render_at(city_key, city_name, want, msg):
-    """「我在 X 站，N 路还有几站」：按方向给最近一辆的到站时刻和分钟。"""
+    """「我在 X 站，N 路还有几站」：按方向给最近一辆，分钟用上游对该站的预测。"""
     station_name = pick_stop(city_name, msg)
     if not station_name:
         return None
@@ -463,21 +482,12 @@ def render_at(city_key, city_name, want, msg):
         idx = next((i + 1 for i, n in enumerate(names) if station_name in n), None)
         if not idx:
             continue
-        payload = _live_my(city_name, line_name, d)
-        cars = []
-        for c in payload.get("list") or []:
-            left = _left(idx, c.get("index"))
-            if left < 0:
-                continue
-            mins = _eta(payload, idx - 1, c)
-            cars.append((mins if mins is not None else 999, left, c.get("busNumber")))
-        if not cars:
+        eta = _etas(_live_my(city_name, line_name, d, idx))
+        if not eta:
             continue
-        mins, left, plate = min(cars)
-        span = "马上到" if left == 0 else f"还有 {left} 站"
-        if mins < 999:
-            span = f"约 {_clock(mins)} 到（{max(1, round(mins))} 分钟），" + span
-        out.append(f"往{row.get('to') or '?'}：{plate} {span}")
+        mins, left, plate = eta
+        span = "马上到" if left <= 0 else f"还有 {left} 站"
+        out.append(f"往{row.get('to') or '?'}：{plate} 约 {_clock(mins)} 到（{max(1, round(mins))} 分钟），{span}")
     if not out:
         return None
     return f"{hit[0][1]['lineName']} 到{station_name}：" + "；".join(out)
@@ -521,6 +531,9 @@ def render_sweep(city_name):
     names = [n for n in ends if dirs.get(n)]
     if not names:
         return ""
+    # 先花一次请求问城市有没有实时：北京 1776 条线全是 hasReal=0，扫完也是白扫
+    if str(_live_my(city_name, names[0], dirs[names[0]][0]).get("hasReal")) == "0":
+        return f"{city_name}上游不提供实时车辆位置，线路目录能查到，车在哪查不到"
     if len(names) > SWEEP_MAX:
         return f"{city_name}一共 {len(names)} 条线路，扫不过来，说具体哪一路我给你查"
     jobs = [(n, d) for n in names for d in dirs[n]]

@@ -84,18 +84,35 @@ assert query.detect_city("火星 1 路有车吗", "火星", "南宁市") == (Non
 assert query.hop("从十字街到火车站坐什么车") == ("十字街", "火车站")
 assert query.hop("从金城商厦到玉林北站有直达吗") == ("金城商厦", "玉林北站")
 assert query.hop("十字街到火车站") is None          # 没有「从」就不猜方向
-assert query._left(8, 4) == 3                        # 站序 1 基、车 index 0 基
-assert query._left(3, 2) == 0                        # 车就在这一站
-assert query._left(3, 5) == -3                       # 已过站
+# 到站分钟用上游自己的预测（routeOnStationRTimeInfoList），每站最多 2 辆；
+# 站已过时上游回 busToStationCount=-1、busNumber 空，不能拿来当「即将到站」
+p = {"routeOnStationRTimeInfoList": [
+    {"busNumber": "桂K1", "busToStationTime": 13.0, "busToStationCount": 12},
+    {"busNumber": "桂K2", "busToStationTime": 25.0, "busToStationCount": 18}]}
+assert query._etas(p) == (13.0, 12, "桂K1")          # 取最快那辆
+assert query._etas({"routeOnStationRTimeInfoList": [
+    {"busNumber": "", "busToStationTime": 0.0, "busToStationCount": -1,
+     "busToStationTips": "已过末班时刻"}]}) is None
+assert query._etas({}) is None
 
-# 分钟：车在第 i 站前 d0 米，车速表按段给 m/min
-p = {"dislist": [{"d": 100}, {"d": 200}, {"d": 300}, {"d": 0}],
+# 区间时长上游不给，按每段里程 ÷ 均速（m/min）累
+q = {"dislist": [{"d": 100}, {"d": 200}, {"d": 300}, {"d": 0}],
      "speedlist": [{"speed": 100}, {"speed": 100}, {"speed": 100}]}
-bus = {"index": 0, "busToStationNiheDistance": 0}     # 车就停在第 0 站
-assert query._eta(p, 1, bus) == 1                    # 第 0 段 100m，100m·min⁻¹
-assert query._eta(p, 2, bus) == 3                    # + 第 1 段 200m
-assert query._eta(p, 3, bus) == 6
-assert query._eta(p, 0, {"index": 2, "busToStationNiheDistance": 50}) is None   # 已过站
+assert query._run(q, 0, 1) == 1
+assert query._run(q, 0, 2) == 3
+assert query._run(q, 1, 3) == 5
+assert query._run(q, 0, 99) == 6                      # 越界按表长截断
+
+# 车辆距离：只有「已到站」和「在途(statusType=2)」两个状态可信
+assert query._car("桂K1", "十字街", 0, "0") == "桂K1 已到十字街"
+assert query._car("桂K1", "十字街", 245, "2") == "桂K1 十字街 245m"
+assert query._car("桂K1", "十字街", 245, "9") == "桂K1 十字街"   # 别的状态别念距离
+
+# 上游业务失败（HTTP 200 + status "-2"）不能当成「没这条线路」
+_post, query._post = query._post, lambda *a, **k: {"status": "-2", "msg": "当前城市暂无法提供公交查询", "error": True}
+query._cache.clear()
+assert query._mygolbs("火星市", "1")== {"error": "当前城市暂无法提供公交查询"}
+query._post = _post
 
 # 全城扫：认不出站名时才走 sweep，「十字街有几路车」不能被它抢走
 assert query.SWEEP_RE.search("还有哪条线路有公交车")
@@ -104,6 +121,13 @@ _stop, query.render_stop = query.render_stop, lambda *a: None
 assert query.answer("玉林 还有哪条线路有公交车", "玉林市") == "SWEEP:玉林市"
 assert query.answer("玉林 今天天气怎么样", "玉林市") == ""      # 不像公交问题就交给 LLM
 query.render_sweep, query.render_stop = _sweep, _stop
+
+# hasReal=0 是「上游没给车辆位置」，不是「没车」，不能混成一句谎话
+assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
+                               "note": "上游对这个城市不提供实时车辆位置",
+                               "unknown": True}).startswith("1路 查不到实时车")
+assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
+                               "note": "末班 20:25 已经开走了"}).startswith("1路 这会儿没车")
 
 print("selftest ok")
 
