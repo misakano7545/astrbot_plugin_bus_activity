@@ -109,10 +109,12 @@ assert query.answer("那39路的那一辆是去往哪个方向呢？", "玉林�
                     "南宁市这会儿有 7 条线在跑") == "有，39路 现在 1 辆在路上\n往A：桂A1 x"
 query.pick_stop, query.query = _ps, _hq
 
-# 站点与换乘：只认「从X到Y」
+# 站点与换乘：「从」可有可无（群里就有人写「玉林北站到旅游客运站的路线」）
 assert query.hop("从十字街到火车站坐什么车") == ("十字街", "火车站")
 assert query.hop("从金城商厦到玉林北站有直达吗") == ("金城商厦", "玉林北站")
-assert query.hop("十字街到火车站") is None          # 没有「从」就不猜方向
+assert query.hop("十字街到火车站") == ("十字街", "火车站")
+assert query.hop("玉林北站到玉林旅游客运站的路线") == ("玉林北站", "玉林旅游客运站")
+assert query.hop("坐1路到火车站") is None           # 左边是线路号，不是站名
 # 到站分钟用上游自己的预测（routeOnStationRTimeInfoList），每站最多 2 辆；
 # 站已过时上游回 busToStationCount=-1、busNumber 空，不能拿来当「即将到站」
 p = {"routeOnStationRTimeInfoList": [

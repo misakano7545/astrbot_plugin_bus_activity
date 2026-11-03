@@ -4,6 +4,7 @@
 接口细节见姊妹项目 yulin-bus-activity 的 docs/掌上公交API.md 与 docs/车来了API.md。
 """
 
+import difflib
 import json
 import re
 import time
@@ -370,9 +371,9 @@ def render(city_key, want, res):
     return "\n".join(rows)
 
 
-HOP_RE = re.compile(r"从\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
+HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|的话|还有|吗|呢|啊).*$")
+TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的话|还有|吗|呢|啊).*$")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
@@ -396,13 +397,24 @@ def find_stop(city_name, raw):
             rows = stops(city_name, raw[:n])
             if rows:
                 return rows[0], raw[:n]
+    # 用户写的和站牌上的常常差一两个字（「玉林旅游客运站」vs「旅游汽车客运站」），
+    # 拿尾巴当关键词搜一遍，再挑最像的那个，相似度不够宁可不认
+    for n in (3, 2):
+        if len(raw) > n:
+            rows = stops(city_name, raw[-n:])
+            best = max(rows or [], key=lambda r: difflib.SequenceMatcher(
+                None, raw, r.get("stationName") or "").ratio(), default=None)
+            if best and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
+                return best, best["stationName"]
     return None, raw
 
 
 def hop(msg):
     """→ (出发站, 到达站)。只认「从X到Y」，别的句式不猜。"""
     m = HOP_RE.search(msg)
-    return (m.group(1), TAIL.sub("", m.group(2))) if m else None
+    if not m or LINE_RE.search(m.group(1)):     # 「坐1路到火车站」左边是线路号，不是站
+        return None
+    return m.group(1).lstrip("从"), TAIL.sub("", m.group(2)).rstrip("的了")
 
 
 def pick_stop(city_name, msg):
@@ -451,8 +463,10 @@ def render_hop(city_key, city_name, raw):
     """A 站到 B 站：拿两站的经停线路求交，再按站序验方向，验不过的不算直达。"""
     a, a_name = find_stop(city_name, raw[0])
     b, b_name = find_stop(city_name, raw[1])
+    if not a and not b:
+        return None                              # 两边都不是站名，多半本来就不是问公交
     if not a or not b:
-        return None
+        return ""       # 有一边不是公交站（机场、外地地名）就交回给模型，别硬给一句话了事
     ra = set(a.get("relatedRoutes") or [])
     rb = set(b.get("relatedRoutes") or [])
     head = f"从{a['stationName']}到{b['stationName']}"
@@ -502,6 +516,22 @@ def render_at(city_key, city_name, want, msg):
     if not out:
         return None
     return f"{hit[0][1]['lineName']} 到{station_name}：" + "；".join(out)
+
+
+STOPS_RE = re.compile(r"所有?站点|全部站点|站(点)?列(表|出来)|经过哪些站|有哪些站|停哪些站|站序|沿途")
+
+
+def render_stops(city_name, want):
+    """「B19 路所有站点」要的是站表，不是实时车。两个方向站一样，只念主方向。"""
+    rows = _catalog(city_name).get("buslines") or []
+    hit = _pick([(r["lineName"], r) for r in rows], want)
+    out = []
+    for line_name, row in hit:
+        names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, row["upperOrDown"])]
+        if names:
+            body = "\n".join(f"{i}. {n}" for i, n in enumerate(names, 1))
+            out.append(f"{line_name}（往{row.get('to') or '?'}，{len(names)} 站）：\n{body}\n反向同站，顺序倒过来")
+    return "\n\n".join(out) or None
 
 
 def render_stop(city_key, city_name, msg):
@@ -598,6 +628,9 @@ def render_sweep(city_name):
             + "".join(f"\n{n} {c} 辆（{ends[n]}）" for n, c in live))
 
 
+LAST = {}          # 上一条答过的城市，群里追问「b19 所有站点」时用
+
+
 def answer(msg, default_city, ctx=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     msg = AT_RE.sub(" ", msg)
@@ -606,16 +639,20 @@ def answer(msg, default_city, ctx=""):
     city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
     base = norm_city(default_city)
     if not city_key:
-        # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次
-        if line and prefix and base in cities():
-            res = query(base, [prefix + line[0]])
-            if "error" not in res:
-                return render(base, prefix + line[0], res)
-        if hop(msg) or not prefix:      # 「从A到B」「X站有哪几路」不许城市名也能答
+        # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次；
+        # 再不行试上一条问过的城市——群里追问「b19 所有站点」不会重报城市名
+        # shortcut: 进程级共用一个城市，多群同时问不同城会串，够用就升级成按会话记
+        if line:
+            for ck in [base] + ([LAST["city"]] if LAST.get("city") in cities() else []):
+                if ck in cities() and "error" not in query(ck, [prefix + line[0]]):
+                    city_key = ck
+                    break
+        if not city_key and (hop(msg) or not prefix):      # 「从A到B」「X站有哪几路」不许城市名也能答
             city_key = base if base in cities() else None
     if not city_key:
         return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
     name = (cities().get(city_key) or {}).get("mygolbs")
+    LAST["city"] = city_key
     got = hop(msg)
     if got:
         ca = detect_city(got[0], "", "")[0]
@@ -623,11 +660,15 @@ def answer(msg, default_city, ctx=""):
         if ca and cb and ca != cb:
             return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
-        out = render_hop(city_key, name, got)
-        return out or f"没查到「{got[0]}」或「{got[1]}」这站，站名跟站牌上写的一样吗"
+        return render_hop(city_key, name, got) or ""
     if line:
+        want = prefix + line[0] if prefix and not explicit else line[0]
+        if name and STOPS_RE.search(msg):        # 要的是站表，别回实时车
+            out = render_stops(name, want)
+            if out:
+                return out
         if name:
-            out = render_at(city_key, name, prefix + line[0] if prefix and not explicit else line[0], msg)
+            out = render_at(city_key, name, want, msg)
             if out:
                 return out
         wants = [prefix + line[0], line[0]] if prefix and not explicit else [line[0]]
