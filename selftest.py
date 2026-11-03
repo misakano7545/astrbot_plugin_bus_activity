@@ -80,6 +80,16 @@ assert query.detect_city("玉林 G02 路有没有车", "", "南宁市") == ("玉
 assert query.detect_city("2 路有车吗", "", "南宁市") == ("南宁", False)   # 没写城市用默认
 assert query.detect_city("火星 1 路有车吗", "火星", "南宁市") == (None, False)  # 认不出就别瞎答
 
+# 引用别人的消息追问（「那 39 路往哪开」）：城市在被引用的那句里，只拿来认城市，不拿来找站名/线路号
+assert query.detect_city("那39路的那一辆是去往哪个方向呢？ 南宁市这会儿有 7 条线在跑",
+                         "那", "玉林市") == ("南宁", True)
+_ps, query.pick_stop = query.pick_stop, lambda *a: None
+_hq, query.query = query.query, lambda ck, wants: (
+    {"line": "39路", "groups": [("A", [("桂A1", "x", 0)])]} if (ck, wants) == ("南宁", ["39"]) else None)
+assert query.answer("那39路的那一辆是去往哪个方向呢？", "玉林市",
+                    "南宁市这会儿有 7 条线在跑") == "有，39路 现在 1 辆在路上\n往A：桂A1 x"
+query.pick_stop, query.query = _ps, _hq
+
 # 站点与换乘：只认「从X到Y」
 assert query.hop("从十字街到火车站坐什么车") == ("十字街", "火车站")
 assert query.hop("从金城商厦到玉林北站有直达吗") == ("金城商厦", "玉林北站")

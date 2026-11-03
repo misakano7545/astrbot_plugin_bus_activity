@@ -589,10 +589,11 @@ def render_sweep(city_name):
             + "".join(f"\n{n} {c} 辆（{ends[n]}）" for n, c in live))
 
 
-def answer(msg, default_city):
+def answer(msg, default_city, ctx=""):
+    """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     line = parse(msg)
     prefix = line[1] if line else ""
-    city_key, explicit = detect_city(msg, prefix, default_city)
+    city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
     base = norm_city(default_city)
     if not city_key:
         # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次

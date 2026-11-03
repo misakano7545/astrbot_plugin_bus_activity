@@ -35,7 +35,10 @@ class BusActivity(Star):
     @filter.regex(BUS_RE)
     async def bus_fast(self, event: AstrMessageEvent):
         """问公交就直接查直接答，不经过模型判断——模型会漏答、会编「只接了玉林」。"""
-        text = await asyncio.to_thread(answer, event.message_str, self.default_city)
+        # 引用别人的消息追问（「那 39 路往哪开」）时，城市只在被引用的那句里
+        ctx = " ".join(m.message_str for m in event.get_messages()
+                       if getattr(m, "message_str", None))
+        text = await asyncio.to_thread(answer, event.message_str, self.default_city, ctx)
         if not text:
             return  # 没认出城市/站名/线路，交给 LLM 那一路
         logger.info(f"公交直答: {event.message_str[:30]} -> {text[:60]}")
