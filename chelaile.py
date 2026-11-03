@@ -73,7 +73,7 @@ def live(city_id, line_id):
         # 车来了的 order 是 1 基站序，超出站表时就不报站名，只给距离
         station = stops[order - 1]["sn"] if isinstance(order, int) and 0 < order <= len(stops) else "途中"
         # 香港这类车队没有车牌，busId 形如 9_20261103203011，取前段当车号
-        plate = b.get("licence") or str(b.get("busId") or "?").split("_")[0]
+        plate = (b.get("licence") or "").split("_")[0] or str(b.get("busId") or "?").split("_")[0]
         buses.append((plate, station,
                       b.get("distanceToWaitStn")))
     return {"state": d["line"].get("state"), "buses": buses}

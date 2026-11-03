@@ -44,12 +44,22 @@ assert query.detect_city("玉林 G02 路有没有车", "", "南宁市") == ("玉
 assert query.detect_city("2 路有车吗", "", "南宁市") == ("南宁", False)   # 没写城市用默认
 assert query.detect_city("火星 1 路有车吗", "火星", "南宁市") == (None, False)  # 认不出就别瞎答
 
+# 站点与换乘：只认「从X到Y」
+assert query.hop("从十字街到火车站坐什么车") == ("十字街", "火车站")
+assert query.hop("从金城商厦到玉林北站有直达吗") == ("金城商厦", "玉林北站")
+assert query.hop("十字街到火车站") is None          # 没有「从」就不猜方向
+assert query._left(8, 4) == 3                        # 站序 1 基、车 index 0 基
+assert query._left(3, 2) == 0                        # 车就在这一站
+assert query._left(3, 5) == -3                       # 已过站
+
 print("selftest ok")
 
 if "--live" in sys.argv:
     import importlib
 
     importlib.reload(query)  # 拿掉上面被替换掉的假城市表
-    for msg in ["玉林 G02 路有没有车", "香港 1 路还有几站", "大连 2 路到哪了"]:
+    for msg in ["玉林 G02 路有没有车", "香港 1 路还有几站", "大连 2 路到哪了",
+                "玉林 从十字街到火车站坐什么车", "南宁 我在金湖广场，16路还有几站",
+                "南宁 金湖广场有几路车"]:
         print("\n问:", msg)
         print(query.answer(msg, "玉林市"))

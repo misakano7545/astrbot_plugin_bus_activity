@@ -1,4 +1,4 @@
-"""bus activity：群里问「玉林 G02 路有没有车」就回实时车辆。"""
+"""bus activity：群里问「玉林 G02 路有没有车」就回实时车辆，也管「A 站到 B 站怎么坐」。"""
 
 import asyncio
 import sys
@@ -19,9 +19,10 @@ class BusActivity(Star):
         super().__init__(context)
         self.default_city = (config or {}).get("default_city") or "玉林市"
 
-    @filter.regex(r"\d{1,3}\s*路|[A-Za-z]{1,2}\d{1,3}")
+    # 线路号 / 「从A到B」/「几路车」都算进公交话题
+    @filter.regex(r"\d{1,3}\s*路|[A-Za-z]{1,2}\d{1,3}|从.{1,10}?到.{1,10}|几路")
     async def bus(self, event: AstrMessageEvent):
-        """查公交实时车辆，例：玉林 G02 路有没有车"""
+        """查公交实时车辆，例：玉林 G02 路有没有车 / 从十字街到火车站坐什么车"""
         msg = event.message_str
         if not any(k in msg for k in INTENT):
             return
@@ -31,4 +32,5 @@ class BusActivity(Star):
             logger.warning(f"公交查询失败: {e}")
             text = "公交数据源暂时没响应，稍后再问一次"
         if text:
+            logger.info(f"公交作答: {msg[:30]} -> {text.splitlines()[0][:60]}")
             yield event.plain_result(text)

@@ -33,7 +33,8 @@ _cache = {}
 # 「玉林 G02 路」「B1 有车吗」「105路」都认；裸数字必须带「路」，防「8点」误判
 LINE_RE = re.compile(r"(?P<alpha>[A-Za-z]{1,2}\d{1,3})(?:\s*路)?|(?P<num>\d{1,3})\s*路")
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
-INTENT = ("车", "到哪", "几站", "还有", "来了", "多久", "快吗", "有没有")
+INTENT = ("车", "到哪", "几站", "还有", "来了", "多久", "快吗", "有没有",
+          "坐什么", "怎么坐", "怎么去", "换乘", "几路")
 SUFFIX = re.compile(r"(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|自治州|自治县|地区|盟|市|城区|区|县)$")
 
 
@@ -194,19 +195,161 @@ def render(city_key, want, res):
     return "\n".join(rows)
 
 
-def answer(msg, default_city):
-    got = parse(msg)
-    if not got:
+HOP_RE = re.compile(r"从\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
+# 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
+TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|还有|吗|呢|啊).*$")
+LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
+
+
+def stops(city_name, keyword):
+    """CMD=102 站点搜索：带 lat/lng 和经停线路，是唯一能按站名反查线路的命令。"""
+    return _cached("stop", (city_name, keyword), CATALOG_TTL,
+                   lambda: _post({"CMD": "102", "CITYNAME": city_name,
+                                  "KEYWORD": keyword}).get("busstations") or [])
+
+
+def find_stop(city_name, raw):
+    """站名从长到短试，命中即止——用户嘴里不会带括号后缀，得让平台的站名去对。"""
+    for n in (8, 6, 5, 4, 3, 2):
+        if len(raw) >= n:
+            rows = stops(city_name, raw[:n])
+            if rows:
+                return rows[0], raw[:n]
+    return None, raw
+
+
+def hop(msg):
+    """→ (出发站, 到达站)。只认「从X到Y」，别的句式不猜。"""
+    m = HOP_RE.search(msg)
+    return (m.group(1), TAIL.sub("", m.group(2))) if m else None
+
+
+def pick_stop(city_name, msg):
+    """从整句里抠站名：按标点切片，逐片砍掉「我在/坐什么」再拿去搜。"""
+    city = norm_city(city_name)
+    for part in re.split(r"[，,。.？?！!、\s]+", msg):
+        cand = LEAD.sub("", TAIL.sub("", part))
+        if len(cand) < 2 or norm_city(cand) == city or LINE_RE.search(cand):
+            continue                        # 城市名和线路号不是站名
+        got, _ = find_stop(city_name, cand)
+        if got:
+            return got["stationName"]
+    return None
+
+
+def _station_seq(city_name, line, direction):
+    return _cached("stations", (city_name, line, direction), CATALOG_TTL,
+                   lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
+                                  "DIRECTION": direction}).get("data") or [])
+
+
+def _goes(city_name, line, a, b):
+    """A 站是否在 B 站之前。返回 (方向, 站数)；两个方向都不顺路就 None。"""
+    for d in ("1", "2"):
+        names = [r.get("stationName") or "" for r in _station_seq(city_name, line, d)]
+        ia = next((i for i, n in enumerate(names) if a in n), None)
+        ib = next((i for i, n in enumerate(names) if b in n), None)
+        if ia is not None and ib is not None and ia < ib:
+            return d, ib - ia
+    return None
+
+
+def render_hop(city_key, city_name, raw):
+    """A 站到 B 站：拿两站的经停线路求交，再按站序验方向，验不过的不算直达。"""
+    a, a_name = find_stop(city_name, raw[0])
+    b, b_name = find_stop(city_name, raw[1])
+    if not a or not b:
         return None
-    num, prefix = got
+    ra = set(a.get("relatedRoutes") or [])
+    rb = set(b.get("relatedRoutes") or [])
+    head = f"{city_key} {a['stationName']} → {b['stationName']}："
+    if not ra & rb:
+        short = lambda s: "、".join(sorted(s)[:6]) + ("…" if len(s) > 6 else "")
+        return f"{head}没有直达车\n{a['stationName']} 有 {short(ra)}\n{b['stationName']} 有 {short(rb)}"
+    direct = []
+    for line in sorted(ra & rb)[:4]:            # shortcut: 只验前 4 条，交叉线多的城可能漏
+        got = _goes(city_name, line, a_name, b_name)
+        if got:
+            direct.append(f"{line}（{got[1]} 站）")
+    if not direct:
+        return f"{head}两站有同名线路但方向不对，换乘得自己看"
+    return head + "直达 " + "、".join(direct)
+
+
+def _left(seq_index, car_index):
+    """站序是 1 基、车辆 index 是 0 基，差几站 = 站序 - (index+1)。"""
+    return seq_index - (int(car_index or 0) + 1)
+
+
+def render_at(city_key, city_name, want, msg):
+    """「我在 X 站，N 路还有几站」：站序是 1 基，车辆 index 是 0 基，差几个站就出来了。"""
+    station_name = pick_stop(city_name, msg)
+    if not station_name:
+        return None
+    rows = _cached("catalog-my", city_name, CATALOG_TTL,
+                   lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
+    hit = _pick([(r["lineName"], r) for r in rows], want)
+    best = []
+    for line_name, row in hit:
+        d = row["upperOrDown"]
+        names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, d)]
+        idx = next((i + 1 for i, n in enumerate(names) if station_name in n), None)
+        if not idx:
+            continue
+        cars = _cached("live-my", (city_name, line_name, d), LIVE_TTL,
+                       lambda line_name=line_name, d=d: _post(
+                           {"CMD": "104", "CITYNAME": city_name, "LINENAME": line_name,
+                            "DIRECTION": d, "STATIONORDER": "1"}).get("list") or [])
+        for c in cars:
+            left = _left(idx, c.get("index"))
+            if left >= 0:
+                eta = "马上到" if left == 0 else f"还有 {left} 站"
+                best.append((left, f"{c.get('busNumber')} {eta}（往{row.get('to') or '?'}）"))
+    if not best:
+        return None
+    best.sort()
+    return f"{city_key} {hit[0][1]['lineName']} 到「{station_name}」：\n" + "\n".join(
+        row for _, row in best[:3])
+
+
+def render_stop(city_key, city_name, msg):
+    """「X 站有哪几路」：站点经停线路。"""
+    name = pick_stop(city_name, msg)
+    if not name:
+        return None
+    routes = (stops(city_name, name) or [{}])[0].get("relatedRoutes") or []
+    if not routes:
+        return None
+    return f"{city_key} {name} 有 {len(routes)} 条：{'、'.join(routes)}"
+
+
+def answer(msg, default_city):
+    line = parse(msg)
+    prefix = line[1] if line else ""
     city_key, explicit = detect_city(msg, prefix, default_city)
     base = norm_city(default_city)
     if not city_key:
         # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次
-        if prefix and base in cities():
-            res = query(base, [prefix + num])
+        if line and prefix and base in cities():
+            res = query(base, [prefix + line[0]])
             if "error" not in res:
-                return render(base, prefix + num, res)
-        return f"没认出「{prefix or '这个城市'}」的公交，试试写成「{prefix} {num} 路」或者直接说城市名"
-    wants = [prefix + num, num] if prefix and not explicit else [num]
-    return render(city_key, wants[0], query(city_key, wants))
+                return render(base, prefix + line[0], res)
+        if hop(msg) or not prefix:      # 「从A到B」「X站有哪几路」不许城市名也能答
+            city_key = base if base in cities() else None
+    if not city_key:
+        return f"没认出「{prefix or '这个城市'}」的公交，试试写成「{prefix} {line[0] if line else 'X'} 路」或者直接说城市名"
+    name = (cities().get(city_key) or {}).get("mygolbs")
+    got = hop(msg)
+    if got and name:
+        out = render_hop(city_key, name, got)
+        return out or f"{city_key}没有「{got[0]}」或「{got[1]}」这个站，站点名得跟站牌一致"
+    if line:
+        if name:
+            out = render_at(city_key, name, prefix + line[0] if prefix and not explicit else line[0], msg)
+            if out:
+                return out
+        wants = [prefix + line[0], line[0]] if prefix and not explicit else [line[0]]
+        return render(city_key, wants[0], query(city_key, wants))
+    if name:
+        return render_stop(city_key, name, msg) or f"没认出 {city_key} 的站名，说得跟站牌一样再试"
+    return "这条要掌上公交有目录的城市才查得到，换个说法或者补上城市名"
