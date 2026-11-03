@@ -443,15 +443,19 @@ def _left(seq_index, car_index):
     return seq_index - (int(car_index or 0) + 1)
 
 
+def _clock(mins):
+    return time.strftime("%H:%M", time.localtime(time.time() + mins * 60))
+
+
 def render_at(city_key, city_name, want, msg):
-    """「我在 X 站，N 路还有几站」：站序是 1 基，车辆 index 是 0 基，差几个站就出来了。"""
+    """「我在 X 站，N 路还有几站」：按方向给最近一辆的到站时刻和分钟。"""
     station_name = pick_stop(city_name, msg)
     if not station_name:
         return None
     rows = _cached("catalog-my", city_name, CATALOG_TTL,
                    lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
     hit = _pick([(r["lineName"], r) for r in rows], want)
-    best = []
+    out = []
     for line_name, row in hit:
         d = row["upperOrDown"]
         names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, d)]
@@ -459,30 +463,41 @@ def render_at(city_key, city_name, want, msg):
         if not idx:
             continue
         payload = _live_my(city_name, line_name, d)
+        cars = []
         for c in payload.get("list") or []:
             left = _left(idx, c.get("index"))
             if left < 0:
                 continue
             mins = _eta(payload, idx - 1, c)
-            span = "马上到" if left == 0 else f"还有 {left} 站"
-            if mins is not None:
-                span = f"约 {max(1, round(mins))} 分钟，" + span
-            best.append((left, f"{c.get('busNumber')} {span}（往{row.get('to') or '?'}）"))
-    if not best:
+            cars.append((mins if mins is not None else 999, left, c.get("busNumber")))
+        if not cars:
+            continue
+        mins, left, plate = min(cars)
+        span = "马上到" if left == 0 else f"还有 {left} 站"
+        if mins < 999:
+            span = f"约 {_clock(mins)} 到（{max(1, round(mins))} 分钟），" + span
+        out.append(f"往{row.get('to') or '?'}：{plate} {span}")
+    if not out:
         return None
-    best.sort()
-    return f"{hit[0][1]['lineName']}到{station_name}：" + "，".join(row for _, row in best[:3])
+    return f"{hit[0][1]['lineName']} 到{station_name}：" + "；".join(out)
 
 
 def render_stop(city_key, city_name, msg):
-    """「X 站有哪几路」：站点经停线路。"""
+    """「X 站有哪几路」：站点经停线路，每条带首末站。"""
     name = pick_stop(city_name, msg)
     if not name:
         return None
     routes = (stops(city_name, name) or [{}])[0].get("relatedRoutes") or []
     if not routes:
         return None
-    return f"{name}有：{'、'.join(routes)}"
+    rows = _cached("catalog-my", city_name, CATALOG_TTL,
+                   lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
+    ends = {}
+    for r in rows:
+        ends.setdefault(r["lineName"], []).append(f"{r.get('from')} ↔ {r.get('to')}")
+    items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes if ends.get(n)] or list(routes)
+    head = f"{name}有 {len(items)} 条线路："
+    return head + "".join("\n" + i for i in items[:12]) + ("\n…还有 " + str(len(items) - 12) + " 条" if len(items) > 12 else "")
 
 
 def answer(msg, default_city):
@@ -513,5 +528,5 @@ def answer(msg, default_city):
         wants = [prefix + line[0], line[0]] if prefix and not explicit else [line[0]]
         return render(city_key, wants[0], query(city_key, wants))
     if name:
-        return render_stop(city_key, name, msg) or f"{city_key}的站名没认出来，跟站牌上写的一样试试"
-    return "这条要掌上公交有目录的城市才查得到，换个说法或者补上城市名"
+        return render_stop(city_key, name, msg) or ""
+    return ""
