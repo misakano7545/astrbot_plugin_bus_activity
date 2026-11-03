@@ -60,6 +60,10 @@ assert "末班" in query.render(
 assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])]}) == \
     "南宁 1 现在没车在路上（车来了）"
 
+# Origin 头是掌上公交的唯一命门：带上多余的斜杠或换 http，上游回 200 + 58 字节占位串
+assert query.HEADERS["Origin"] == "https://h5.mygolbs.com"
+assert not query.HEADERS["Origin"].endswith("/")
+
 # 城市识别：给假城市表，不联网
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "南宁": {"mygolbs": "南宁市"}}
 assert query.detect_city("玉林 G02 路有没有车", "", "南宁市") == ("玉林", True)
