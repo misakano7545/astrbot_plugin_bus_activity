@@ -517,6 +517,39 @@ SWEEP_RE = re.compile(r"哪条|哪些|哪几|哪路|还有|在跑|运营")
 SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让用户点名，别硬扫
 
 
+def _sweep_chelaile(city_name):
+    """掌上没目录时的兜底扫：车来了逐条问 state。"""
+    cid = next((c.get("chelaile") for c in cities().values()
+                if (c or {}).get("mygolbs") == city_name), None)
+    if not cid:
+        return ""
+    rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))[:120]
+
+    def one(row):
+        name, lid = row
+        try:
+            d = _cached("live-cl", (cid, lid), LIVE_TTL, lambda: chelaile.live(cid, lid))
+        except Exception:
+            return name, "", 0, ""
+        return name, d.get("to") or "", len(d.get("buses") or []), d.get("desc") or ""
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        got = list(pool.map(one, rows))
+    per = {}
+    for name, to, n, _ in got:
+        cnt, ends = per.setdefault(name, [0, set()])
+        if n:
+            per[name][0] = cnt + n
+            ends.add(to)
+    live = sorted(((k, v[0], "、".join(f"往{e}" for e in sorted(v[1])))
+                   for k, v in per.items() if v[0]), key=lambda x: -x[1])
+    if not live:
+        desc = next((g[3] for g in got if g[3]), "")
+        return f"{city_name}这会儿全线都没车报位置" + (f"，{desc}" if desc else "，可能都收班了")
+    return (f"{city_name}这会儿有 {len(live)} 条线在跑："
+            + "".join(f"\n{k} {c} 辆（{e}）" for k, c, e in live))
+
+
 def render_sweep(city_name):
     """全城扫一遍：这会儿哪些线路真有车在路上。"""
     rows = _cached("catalog-my", city_name, CATALOG_TTL,
@@ -529,8 +562,8 @@ def render_sweep(city_name):
         if d in ("1", "2"):
             dirs.setdefault(name, []).append(d)
     names = [n for n in ends if dirs.get(n)]
-    if not names:
-        return ""
+    if not names:      # 掌上这座城没有线路目录（北海就是），换车来了扫
+        return _sweep_chelaile(city_name)
     # 先花一次请求问城市有没有实时：北京 1776 条线全是 hasReal=0，扫完也是白扫
     if str(_live_my(city_name, names[0], dirs[names[0]][0]).get("hasReal")) == "0":
         return f"{city_name}上游不提供实时车辆位置，线路目录能查到，车在哪查不到"

@@ -1,10 +1,13 @@
-"""bus activity：群里问公交的事，插件查真实数据，LLM 按语境说话。
+"""bus activity：群里问公交的事，插件查真实数据。
 
-只留一个 LLM 工具入口——问什么、怎么答都交给 LLM，
-插件不抢着发消息，也不预设句子格式。
+两条入口：
+1. 正则快路——句子里有公交相关词就先查，查到了直接发。模型爱偷懒、爱说
+   「只接了玉林的数据」「查不了」，还会被 429 卡住，指望它每次老实调工具不现实。
+2. LLM 工具 bus_query——话说得含糊、快路没查到时兜底。
 """
 
 import asyncio
+import re
 import sys
 
 from astrbot.api import AstrBotConfig, logger
@@ -17,21 +20,36 @@ except ImportError:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
     from query import answer
 
+# 像在问公交才去查：查不到自然返回空串，不耽误别的聊天
+BUS_RE = re.compile(
+    r"公交|巴士|公共汽车|公车|线路|几路|哪路|路车|末班|首班|到站|几站|"
+    r"怎么坐|直达|换乘|\d{1,3}\s*路|[A-Za-z]{1,2}\d{1,3}"
+)
+
 
 class BusActivity(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
         self.default_city = (config or {}).get("default_city") or "玉林市"
 
+    @filter.regex(BUS_RE)
+    async def bus_fast(self, event: AstrMessageEvent):
+        """问公交就直接查直接答，不经过模型判断——模型会漏答、会编「只接了玉林」。"""
+        text = await asyncio.to_thread(answer, event.message_str, self.default_city)
+        if not text:
+            return  # 没认出城市/站名/线路，交给 LLM 那一路
+        logger.info(f"公交直答: {event.message_str[:30]} -> {text[:60]}")
+        yield event.plain_result(text)
+        event.stop_event()
+
     @filter.llm_tool(name="bus_query")
     async def bus_query(self, event: AstrMessageEvent, question: str) -> str:
         """查公交实时信息。用户问到公交、几路车、某站有哪几路、从某站到某站怎么坐、
         某路车到哪了、还有几站、几分钟到、这里还有哪条线路有车的时候调用。
 
-        这是唯一的公交数据来源，覆盖 598 个城市（含北京、上海、广州、深圳、成都、
-        各省会与大部分县市），不要用别的办法查公交（也别自己去请求公交网站），
+        覆盖 598 个城市（含北京、上海、哈尔滨、南宁、各省会与大部分县市），
+        不要用别的办法查公交（也别自己去请求公交网站），
         也不要在没调用这个工具的情况下回答「查不了」「只支持某某城市」——先查再说。
-        查不到就照实说查不到。
 
         返回的是查询结果原文，请按用户这一句的问法用人话转述：他关心什么就先说什么，
         车牌、站名、分钟和站数必须用返回里的原值，不要自己换算，也不要补充没查到的信息。
