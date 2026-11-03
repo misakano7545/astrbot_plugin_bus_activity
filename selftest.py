@@ -70,6 +70,21 @@ assert query.render("玉林", "999", {"error": "没这条线路"}) == "没查到
 assert query.render("沛县", "1", {"error": "是 11路 / 17路 吗"}) == "没「1」这条，是 11路 / 17路 吗"
 assert query.render("玉林", "1", {"error": "上游这会儿没响应，过会儿再问"}) == "上游这会儿没响应，过会儿再问"
 
+# @ 标记里的 QQ 号看着像「E8 路」，不能当线路号
+assert query.AT_RE.sub(" ", "<@E8CBB6F8BD5822CA314B63B94976> 玉林 1 路").split() == ["玉林", "1", "路"]
+assert query.parse(query.AT_RE.sub(" ", "[At:E279593D8E44520BC3824B9CC89E0859] 1 路有车吗")) == ("1", "")
+assert query.hop("从广州公园前到玉林北站的话，坐什么车") == ("广州公园前", "玉林北站")
+
+# 目录缓存一种形状：_mygolbs 存 dict、render_at 用 buslines，之前谁先跑谁写坏对方
+_rows = [{"lineName": "1路", "upperOrDown": "1", "from": "A", "to": "B"}]
+_cat, query._post = query._post, lambda *a, **k: {"buslines": _rows, "status": 1}
+query._cache.clear()
+query._mygolbs("x市", "1")                     # 先让 dict 进缓存
+assert query._catalog("x市").get("buslines") == _rows
+assert query._catalog("x市")["buslines"][0]["lineName"] == "1路"
+query._post = _cat
+query._cache.clear()
+
 # Origin 头是掌上公交的唯一命门：带上多余的斜杠或换 http，上游回 200 + 58 字节占位串
 assert query.HEADERS["Origin"] == "https://h5.mygolbs.com"
 assert not query.HEADERS["Origin"].endswith("/")

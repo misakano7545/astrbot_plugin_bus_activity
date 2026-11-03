@@ -221,9 +221,15 @@ def _run(payload, ia, ib):
 
 
 
+def _catalog(city_name):
+    """CMD=119 的原始响应。同一个缓存 key 只能有一种形状——之前这里存 dict、
+    别处存 buslines 列表，谁先跑谁把对方写坏（render_at 就是这样崩的）。"""
+    return _cached("catalog-my", city_name, CATALOG_TTL,
+                   lambda: _post({"CMD": "119", "CITYNAME": city_name}))
+
+
 def _mygolbs(city_name, want):
-    cat = _cached("catalog-my", city_name, CATALOG_TTL,
-                  lambda: _post({"CMD": "119", "CITYNAME": city_name}))
+    cat = _catalog(city_name)
     if cat.get("error"):
         return {"error": cat.get("msg") or "上游这会儿没响应"}     # 例如「当前城市暂无法提供公交查询」
     rows = cat.get("buslines") or []
@@ -366,7 +372,9 @@ def render(city_key, want, res):
 
 HOP_RE = re.compile(r"从\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|还有|吗|呢|啊).*$")
+TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|的话|还有|吗|呢|啊).*$")
+# @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
+AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
 
 
@@ -472,8 +480,7 @@ def render_at(city_key, city_name, want, msg):
     station_name = pick_stop(city_name, msg)
     if not station_name:
         return None
-    rows = _cached("catalog-my", city_name, CATALOG_TTL,
-                   lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
+    rows = _catalog(city_name).get("buslines") or []
     hit = _pick([(r["lineName"], r) for r in rows], want)
     out = []
     for line_name, row in hit:
@@ -501,8 +508,7 @@ def render_stop(city_key, city_name, msg):
     routes = (stops(city_name, name) or [{}])[0].get("relatedRoutes") or []
     if not routes:
         return None
-    rows = _cached("catalog-my", city_name, CATALOG_TTL,
-                   lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
+    rows = _catalog(city_name).get("buslines") or []
     ends = {}
     for r in rows:
         ends.setdefault(r["lineName"], []).append(f"{r.get('from')} ↔ {r.get('to')}")
@@ -552,8 +558,7 @@ def _sweep_chelaile(city_name):
 
 def render_sweep(city_name):
     """全城扫一遍：这会儿哪些线路真有车在路上。"""
-    rows = _cached("catalog-my", city_name, CATALOG_TTL,
-                   lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
+    rows = _catalog(city_name).get("buslines") or []
     ends, dirs = {}, {}
     for r in rows:
         name = r["lineName"]
@@ -591,6 +596,7 @@ def render_sweep(city_name):
 
 def answer(msg, default_city, ctx=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
+    msg = AT_RE.sub(" ", msg)
     line = parse(msg)
     prefix = line[1] if line else ""
     city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
@@ -607,6 +613,11 @@ def answer(msg, default_city, ctx=""):
         return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
     name = (cities().get(city_key) or {}).get("mygolbs")
     got = hop(msg)
+    if got:
+        ca = detect_city(got[0], "", "")[0]
+        cb = detect_city(got[1], "", "")[0]
+        if ca and cb and ca != cb:
+            return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
         out = render_hop(city_key, name, got)
         return out or f"没查到「{got[0]}」或「{got[1]}」这站，站名跟站牌上写的一样吗"
