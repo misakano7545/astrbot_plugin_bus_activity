@@ -534,8 +534,13 @@ def render_sweep(city_name):
     # 先花一次请求问城市有没有实时：北京 1776 条线全是 hasReal=0，扫完也是白扫
     if str(_live_my(city_name, names[0], dirs[names[0]][0]).get("hasReal")) == "0":
         return f"{city_name}上游不提供实时车辆位置，线路目录能查到，车在哪查不到"
+    note = ""
     if len(names) > SWEEP_MAX:
-        return f"{city_name}一共 {len(names)} 条线路，扫不过来，说具体哪一路我给你查"
+        # 上千条线的城市扫不完：按号取前 60 条纯数字主线，够看出这会儿还有没有车在跑
+        trunk = sorted((n for n in names if n.endswith("路") and n[:-1].isdigit()),
+                       key=lambda n: int(n[:-1]))
+        names = (trunk or names)[:SWEEP_MAX]
+        note = f"（抽查了 {len(names)} 条主线）"
     jobs = [(n, d) for n in names for d in dirs[n]]
     with ThreadPoolExecutor(max_workers=8) as pool:
         counts = pool.map(lambda j: len(_live_my(city_name, j[0], j[1]).get("list") or []), jobs)
@@ -544,8 +549,10 @@ def render_sweep(city_name):
         per[n] += c
     live = sorted(((n, c) for n, c in per.items() if c), key=lambda x: -x[1])
     if not live:
+        if note:
+            return f"{city_name}这会儿抽查了 {len(names)} 条主线，都没车报位置，可能都收班了"
         return f"{city_name}这会儿全线都没车报位置，可能都收班了"
-    return (f"{city_name}这会儿有车在跑的有 {len(live)} 条："
+    return (f"{city_name}这会儿有 {len(live)} 条线在跑{note}："
             + "".join(f"\n{n} {c} 辆（{ends[n]}）" for n, c in live))
 
 
@@ -577,10 +584,11 @@ def answer(msg, default_city):
         wants = [prefix + line[0], line[0]] if prefix and not explicit else [line[0]]
         return render(city_key, wants[0], query(city_key, wants))
     if name:
+        # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
+        if SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg):
+            return render_sweep(name)
         out = render_stop(city_key, name, msg)
         if out:
             return out
-        if SWEEP_RE.search(msg):
-            return render_sweep(name)
         return ""
     return ""
