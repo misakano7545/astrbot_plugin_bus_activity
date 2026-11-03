@@ -44,10 +44,10 @@ PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
 INTENT = ("车", "到哪", "几站", "还有", "来了", "多久", "快吗", "有没有",
           "坐什么", "怎么坐", "怎么去", "换乘", "几路",
           "在哪", "实时", "几辆", "几点", "末班", "首班", "怎么样", "到站")
-SUFFIX = re.compile(r"(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|自治州|自治县|地区|盟|市|城区|区)$")
-# 「县」「城区」不当缀剥：容县/威县/沙县/沛县/丰县 这类两字县名剥完只剩一个字，
-# 会在城市索引里变成 威/沙/沛/容/丰 五个单字键，既不精确又会被 detect_city 的
-# len(k) >= 2 滤掉，等于县级单位整体消失（见 issue #1）。
+SUFFIX = re.compile(r"(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|自治州|自治县|地区|盟|市|城区|区|县)$")
+# 剥完不足两字就原样保留：容县/威县/沙县/沛县/丰县 削成单字会在索引里变成
+# 威/沙/沛/容/丰 这些键，既不精确又被 detect_city 的 len(k) >= 2 滤掉（见 issue #1）；
+# 「长宁县」照样能收成「长宁」，用户写简称也查得到。
 MIN_CITY_KEY = 2
 
 
@@ -177,13 +177,24 @@ def _pick_city_line(catalog, want, city_name):
     return []
 
 
+def _last_bus(city_name, line, direction):
+    """末班时刻 HH:MM，取不到返回空。只在整车数为 0 时调用，回答「是不是收班了」。"""
+    r = _cached("firstlast", (city_name, line, direction), CATALOG_TTL,
+                lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
+                               "DIRECTION": direction}))
+    return max((x.get("last") or "" for x in r.get("firstLast") or []), default="")
+
+
 def _mygolbs(city_name, want):
     rows = _cached("catalog-my", city_name, CATALOG_TTL,
                    lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
     hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
     if not hit:
-        return None
-    groups, live_known = [], False
+        # 没有就报候选，别让「沛县 1 路」这种（只有 11/17/18 路）答成「没这条线」
+        near = sorted({r["lineName"] for r in rows
+                       if norm_line(r["lineName"]).startswith(want)})[:4]
+        return {"error": "是 " + " / ".join(near) + " 吗"} if near else None
+    groups, live_known, last = [], False, ""
     for name, row in hit:
         d = str(row.get("upperOrDown") or "")
         # 传 0/3/空串时服务端会静默退化成方向 1，回一列错方向的车，宁可不报
@@ -197,10 +208,17 @@ def _mygolbs(city_name, want):
         # hasReal=1 且回的就是「获取实时数据成功」说明上游认为线路在运营，只是这一趟没有车报 GPS
         if payload.get("hasReal") in ("1", 1) or "成功" in str(payload.get("msg") or ""):
             live_known = True
+        if not cars:
+            last = _last_bus(city_name, name, d) or last
         groups.append((row.get("to") or "", [(c.get("busNumber"), c.get("stationName"),
                                               c.get("busToStationNiheDistance")) for c in cars]))
-    return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
-            "live_known": live_known}
+    note = ""
+    if not any(g for _, g in groups):
+        if last and time.strftime("%H:%M") > last:
+            note = f"末班 {last} 已过"
+        elif live_known:
+            note = "线路在运营，此刻没有车报位置"
+    return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups, "note": note}
 
 
 def _chelaile(city_id, want):
@@ -239,6 +257,9 @@ def query(city_key, wants):
             except Exception as e:
                 tried.append(f"{LABEL[source]}异常 {e}")
                 continue
+            if got and "error" in got:
+                tried.append(got["error"])
+                continue
             if got and any(group for _, group in got["groups"]):
                 return got
             if got:
@@ -266,14 +287,14 @@ def render(city_key, want, res):
         return f"查不到「{want}」：{res['error']}"
     total = sum(len(b) for _, b in res["groups"])
     if not total:
-        # 「没车」和「上游没给车辆 GPS」是两件事，前者会被乘客读成停运（见 issue #2）
-        if res.get("live_known"):
-            tail = f"，上游暂未返回车辆位置（{res['source']}）"
+        # 「没车」和「上游没给车辆 GPS」是两件事，后者会被乘客读成停运（见 issue #2）
+        if res.get("note"):
+            tail = f"，{res['note']}（{res['source']}）"
         elif res.get("desc"):
             tail = f"，{res['desc']}（{res['source']}）"
         else:
             tail = f"（{res['source']}）"
-        return f"{city_key} {res['line']} 现在查不到在跑的车{tail}"
+        return f"{city_key} {res['line']} 现在没车在路上{tail}"
     rows = [f"{city_key} {res['line']} 现在 {total} 辆车在路上（{res['source']}）"]
     for label, buses in res["groups"]:
         head = f"往{label}：" if label else ""

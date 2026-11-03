@@ -23,6 +23,7 @@ assert query.norm_city("丰县") == "丰县"
 assert query.norm_city("玉林市") == "玉林"      # 三字以上照旧剥
 assert query.norm_city("北流市") == "北流"
 assert query.norm_city("城区") == "城区"        # 剥完不足两字就原样留
+assert query.norm_city("长宁县") == "长宁"      # 三字县名照旧剥，简称能查到
 
 # 从消息里取线路号 + 紧贴着的汉字段（县内线路用）
 assert query.parse("玉林 G02 路有没有车") == ("G02", "玉林")   # 前缀也可能是城市，由 detect_city 分辨
@@ -52,12 +53,12 @@ assert out.splitlines() == ["南宁 1路 现在 1 辆车在路上（掌上公交
                             "往A站：桂A1 某路口 326m",
                             "往B站：暂无车"], out
 # 没车时不能直说「没车」，要区分「上游缺 GPS」和「已收班」（issue #2）
-assert "上游暂未返回车辆位置" in query.render(
-    "南宁", "1", {"source": "掌上公交", "line": "1", "groups": [("", [])], "live_known": True})
+assert "线路在运营" in query.render(
+    "南宁", "1", {"source": "掌上公交", "line": "1", "groups": [("", [])], "note": "线路在运营，此刻没有车报位置"})
 assert "末班" in query.render(
     "南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])], "desc": "本线路末班时间已过"})
-assert "查不到在跑的车" in query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])]})
-assert "现在没车" not in query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])]})
+assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])]}) == \
+    "南宁 1 现在没车在路上（车来了）"
 
 # 城市识别：给假城市表，不联网
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "南宁": {"mygolbs": "南宁市"}}
