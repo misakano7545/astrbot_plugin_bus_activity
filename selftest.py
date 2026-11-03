@@ -97,6 +97,14 @@ assert query._eta(p, 2, bus) == 3                    # + 第 1 段 200m
 assert query._eta(p, 3, bus) == 6
 assert query._eta(p, 0, {"index": 2, "busToStationNiheDistance": 50}) is None   # 已过站
 
+# 全城扫：认不出站名时才走 sweep，「十字街有几路车」不能被它抢走
+assert query.SWEEP_RE.search("还有哪条线路有公交车")
+_sweep, query.render_sweep = query.render_sweep, lambda city: f"SWEEP:{city}"
+_stop, query.render_stop = query.render_stop, lambda *a: None
+assert query.answer("玉林 还有哪条线路有公交车", "玉林市") == "SWEEP:玉林市"
+assert query.answer("玉林 今天天气怎么样", "玉林市") == ""      # 不像公交问题就交给 LLM
+query.render_sweep, query.render_stop = _sweep, _stop
+
 print("selftest ok")
 
 if "--live" in sys.argv:

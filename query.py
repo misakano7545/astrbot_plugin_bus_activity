@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:  # AstrBot 按包加载时走相对导入，单文件调试时退回顶层模块
@@ -500,6 +501,41 @@ def render_stop(city_key, city_name, msg):
     return head + "".join("\n" + i for i in items[:12]) + ("\n…还有 " + str(len(items) - 12) + " 条" if len(items) > 12 else "")
 
 
+# 「玉林还有哪条线路有车」这类全城问题没法靠线路号答，得把目录扫一遍。
+# 放在站点判断之后：能认出站名就以站点为准，「十字街有几路车」不会被抢走。
+SWEEP_RE = re.compile(r"哪条|哪些|哪几|哪路|还有|在跑|运营")
+SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让用户点名，别硬扫
+
+
+def render_sweep(city_name):
+    """全城扫一遍：这会儿哪些线路真有车在路上。"""
+    rows = _cached("catalog-my", city_name, CATALOG_TTL,
+                   lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
+    ends, dirs = {}, {}
+    for r in rows:
+        name = r["lineName"]
+        ends.setdefault(name, f"{r.get('from')} ↔ {r.get('to')}")
+        d = str(r.get("upperOrDown") or "")
+        if d in ("1", "2"):
+            dirs.setdefault(name, []).append(d)
+    names = [n for n in ends if dirs.get(n)]
+    if not names:
+        return ""
+    if len(names) > SWEEP_MAX:
+        return f"{city_name}一共 {len(names)} 条线路，扫不过来，说具体哪一路我给你查"
+    jobs = [(n, d) for n in names for d in dirs[n]]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        counts = pool.map(lambda j: len(_live_my(city_name, j[0], j[1]).get("list") or []), jobs)
+    per = {n: 0 for n in names}
+    for (n, _), c in zip(jobs, counts):
+        per[n] += c
+    live = sorted(((n, c) for n, c in per.items() if c), key=lambda x: -x[1])
+    if not live:
+        return f"{city_name}这会儿全线都没车报位置，可能都收班了"
+    return (f"{city_name}这会儿有车在跑的有 {len(live)} 条："
+            + "".join(f"\n{n} {c} 辆（{ends[n]}）" for n, c in live))
+
+
 def answer(msg, default_city):
     line = parse(msg)
     prefix = line[1] if line else ""
@@ -528,5 +564,10 @@ def answer(msg, default_city):
         wants = [prefix + line[0], line[0]] if prefix and not explicit else [line[0]]
         return render(city_key, wants[0], query(city_key, wants))
     if name:
-        return render_stop(city_key, name, msg) or ""
+        out = render_stop(city_key, name, msg)
+        if out:
+            return out
+        if SWEEP_RE.search(msg):
+            return render_sweep(name)
+        return ""
     return ""
