@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+
+# 本地逆向记录与临时脚本，不进仓库
+_re/
+_re_cl/
+_re_src/
+_re_src_src/
+_tool/

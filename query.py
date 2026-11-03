@@ -7,6 +7,7 @@
 import json
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -20,6 +21,8 @@ HERE = Path(__file__).parent
 CHELAILE_CITIES = json.loads((HERE / "cities.json").read_text("utf-8"))
 
 API = "https://h5.mygolbs.com/ApiData.do"
+# Origin 是唯一命门：末尾多一个斜杠、换成 http、或干脆不带，上游都回 HTTP 200 +
+# 恒定 58 字节串 0vx0czK73ykwCHaLBTiKh0iCXQINzRvSZw4+b/H8FgE52U=，症状是「永远查不到」。
 HEADERS = {
     "Origin": "https://h5.mygolbs.com",
     "Referer": "https://h5.mygolbs.com/",
@@ -27,15 +30,25 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 12) Mobile Safari/537.36",
 }
 CITY_TTL, CATALOG_TTL, LIVE_TTL = 6 * 3600, 3600, 20
+CACHE_MAX = 2048
 LABEL = {"mygolbs": "掌上公交", "chelaile": "车来了"}
 _cache = {}
 
 # 「玉林 G02 路」「B1 有车吗」「105路」都认；裸数字必须带「路」，防「8点」误判
-LINE_RE = re.compile(r"(?P<alpha>[A-Za-z]{1,2}\d{1,3})(?:\s*路)?|(?P<num>\d{1,3})\s*路")
+# 「路」后面紧跟的定性词（夜班/专线）得一起吃掉，否则「6路夜班」会被截成「6」
+LINE_RE = re.compile(
+    r"(?P<alpha>[A-Za-z]{1,2}\d{1,3})(?:\s*路)?"
+    r"|(?P<num>\d{1,3})\s*路(?P<qual>夜班)?"
+)
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
 INTENT = ("车", "到哪", "几站", "还有", "来了", "多久", "快吗", "有没有",
-          "坐什么", "怎么坐", "怎么去", "换乘", "几路")
-SUFFIX = re.compile(r"(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|自治州|自治县|地区|盟|市|城区|区|县)$")
+          "坐什么", "怎么坐", "怎么去", "换乘", "几路",
+          "在哪", "实时", "几辆", "几点", "末班", "首班", "怎么样", "到站")
+SUFFIX = re.compile(r"(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|自治州|自治县|地区|盟|市|城区|区)$")
+# 「县」「城区」不当缀剥：容县/威县/沙县/沛县/丰县 这类两字县名剥完只剩一个字，
+# 会在城市索引里变成 威/沙/沛/容/丰 五个单字键，既不精确又会被 detect_city 的
+# len(k) >= 2 滤掉，等于县级单位整体消失（见 issue #1）。
+MIN_CITY_KEY = 2
 
 
 def norm_line(name):
@@ -45,7 +58,10 @@ def norm_line(name):
 
 
 def norm_city(name):
-    return SUFFIX.sub("", (name or "").strip())
+    s = (name or "").strip()
+    short = SUFFIX.sub("", s)
+    # 剥完不足两个字说明这个缀本来就是名字的一部分，原样保留
+    return short if len(short) >= MIN_CITY_KEY else s
 
 
 def parse(msg):
@@ -54,7 +70,8 @@ def parse(msg):
     if not m:
         return None
     pre = PREFIX_RE.search(msg[: m.start()])
-    return norm_line(m.group("alpha") or m.group("num")), (pre.group(1) if pre else "")
+    num = (m.group("alpha") or m.group("num")) + (m.group("qual") or "")
+    return norm_line(num), (pre.group(1) if pre else "")
 
 
 def _cached(kind, key, ttl, fn):
@@ -62,6 +79,11 @@ def _cached(kind, key, ttl, fn):
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
     val = fn()
+    # 过期键长期占位会让 _cache 一直涨，顺手清掉同一个 kind 下的过期项，超上限再整体淘汰
+    if len(_cache) >= CACHE_MAX:
+        now = time.time()
+        for k in [k for k, (t, _) in _cache.items() if now - t >= CITY_TTL]:
+            _cache.pop(k, None)
     _cache[(kind, key)] = (time.time(), val)
     return val
 
@@ -69,8 +91,21 @@ def _cached(kind, key, ttl, fn):
 def _post(params, timeout=8):
     body = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(API, data=body, headers=HEADERS, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", "replace"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        # 缺 CITYNAME 或线路名不存在时上游回的是 HTML 错误页，不是 JSON
+        return {"status": e.code, "msg": f"HTTP {e.code}"}
+    text = raw.lstrip()
+    if not text.startswith("{"):
+        # 58 字节令牌 = Origin 头不对，前置分流层直出的占位串
+        return {"status": -9, "msg": "非 JSON 响应，检查 Origin 头"}
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        return {"status": -9, "msg": f"JSON 解析失败 {e}"}
+    return data if isinstance(data, dict) else {"status": -9, "msg": "响应不是对象"}
 
 
 def cities():
@@ -109,30 +144,63 @@ def detect_city(msg, prefix, default_city):
 
 
 def _pick(catalog, want):
-    """目录里挑线路：先全等，再唯一前缀。catalog 元素是 (显示名, 原样对象)。"""
+    """目录里挑线路：先全等，再唯一前缀，最后按短优先消歧。
+
+    前缀候选 ≥ 3 个时不再直接放弃：11/12/13 路同时在的城市问「1」确实没法唯一定，
+    但 B12/B13/B14 之外问「B1」应该命中「B1」本身，短的那个优先（见 issue #3）。
+    catalog 元素是 (显示名, 原样对象)。
+    """
     exact = [c for c in catalog if norm_line(c[0]) == want]
     if exact:
         return exact
     near = [c for c in catalog if norm_line(c[0]).startswith(want)]
-    return near if len(near) < 3 else []
+    if not near:
+        return []
+    if len(near) < 3:
+        return near
+    # 候选太多：先看有没有名字长度刚好比 want 长一位的（1 → 11路），否则给用户看候选
+    near.sort(key=lambda c: len(norm_line(c[0])))
+    shortest = len(norm_line(near[0][0]))
+    tied = [c for c in near if len(norm_line(c[0])) == shortest]
+    return tied if len(tied) < 3 else []
+
+
+def _pick_city_line(catalog, want, city_name):
+    """县内线路在目录里带县名前缀（容县11路），裸号「11」也要能命中。"""
+    hit = _pick(catalog, want)
+    if hit:
+        return hit
+    pre = norm_city(city_name).upper()
+    if pre and pre != want:
+        return _pick([(n[len(pre):] if norm_line(n).startswith(pre) else n, o)
+                      for n, o in catalog if norm_line(n).startswith(pre)], want)
+    return []
 
 
 def _mygolbs(city_name, want):
     rows = _cached("catalog-my", city_name, CATALOG_TTL,
                    lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
-    hit = _pick([(r["lineName"], r) for r in rows], want)
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
     if not hit:
         return None
-    groups = []
+    groups, live_known = [], False
     for name, row in hit:
-        d = row["upperOrDown"]
-        cars = _cached("live-my", (city_name, name, d), LIVE_TTL,
-                       lambda name=name, d=d: _post({"CMD": "104", "CITYNAME": city_name,
-                                                     "LINENAME": name, "DIRECTION": d,
-                                                     "STATIONORDER": "1"}).get("list") or [])
+        d = str(row.get("upperOrDown") or "")
+        # 传 0/3/空串时服务端会静默退化成方向 1，回一列错方向的车，宁可不报
+        if d not in ("1", "2"):
+            continue
+        payload = _cached("live-my", (city_name, name, d), LIVE_TTL,
+                          lambda name=name, d=d: _post({"CMD": "104", "CITYNAME": city_name,
+                                                        "LINENAME": name, "DIRECTION": d,
+                                                        "STATIONORDER": "1"}))
+        cars = payload.get("list") or []
+        # hasReal=1 且回的就是「获取实时数据成功」说明上游认为线路在运营，只是这一趟没有车报 GPS
+        if payload.get("hasReal") in ("1", 1) or "成功" in str(payload.get("msg") or ""):
+            live_known = True
         groups.append((row.get("to") or "", [(c.get("busNumber"), c.get("stationName"),
                                               c.get("busToStationNiheDistance")) for c in cars]))
-    return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups}
+    return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
+            "live_known": live_known}
 
 
 def _chelaile(city_id, want):
@@ -140,10 +208,18 @@ def _chelaile(city_id, want):
     hit = _pick(rows, want)
     if not hit:
         return None
-    name, line_id = hit[0]
-    d = _cached("live-cl", (city_id, line_id), LIVE_TTL, lambda: chelaile.live(city_id, line_id))
-    # state=-1「等待发车」、-3「已收班」都可能是该线当时没车，照实报
-    return {"source": "车来了", "line": name, "groups": [("", d["buses"])]}
+    name = hit[0][0]
+    # 目录是方向级的，同一条线上下行是两个 lineId，全都查一遍再合并（见 issue #6）。
+    # 但香港这种一个名字对应多家公司（九巴/城巴/屿巴 都叫「1」），别把别人的车算进来，
+    # 所以只取排在前面的那一条线路的方向对。
+    ids = [lid for n, lid in hit if n == name][:2]
+    groups, desc = [], ""
+    for line_id in ids:
+        d = _cached("live-cl", (city_id, line_id), LIVE_TTL, lambda i=line_id: chelaile.live(city_id, i))
+        # state=-1 等待发车、-2 临时停运、-3 末班已过，desc 是现成中文文案
+        desc = desc or d.get("desc") or ""
+        groups.append((d.get("to") or "", d["buses"]))
+    return {"source": "车来了", "line": name, "groups": groups, "desc": desc}
 
 
 def query(city_key, wants):
@@ -169,7 +245,10 @@ def query(city_key, wants):
                 blank = blank or got
         if blank:
             return blank           # 有这条线，只是当下两端都没车
-    return {"error": "；".join(tried) or "两家都没有这个城市"}
+    if not ent:
+        # 城市表里没这个键：要么名字写错，要么两家都不覆盖，别把话说成「两家都没有」
+        return {"error": "没认出这个城市，两家数据源里都没有对得上的名字"}
+    return {"error": "；".join(tried) or "该城市两家数据源都没这条线路"}
 
 
 def _car(plate, stn, dist):
@@ -187,7 +266,14 @@ def render(city_key, want, res):
         return f"查不到「{want}」：{res['error']}"
     total = sum(len(b) for _, b in res["groups"])
     if not total:
-        return f"{city_key} {res['line']} 现在没车在路上（{res['source']}）"
+        # 「没车」和「上游没给车辆 GPS」是两件事，前者会被乘客读成停运（见 issue #2）
+        if res.get("live_known"):
+            tail = f"，上游暂未返回车辆位置（{res['source']}）"
+        elif res.get("desc"):
+            tail = f"，{res['desc']}（{res['source']}）"
+        else:
+            tail = f"（{res['source']}）"
+        return f"{city_key} {res['line']} 现在查不到在跑的车{tail}"
     rows = [f"{city_key} {res['line']} 现在 {total} 辆车在路上（{res['source']}）"]
     for label, buses in res["groups"]:
         head = f"往{label}：" if label else ""

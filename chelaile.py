@@ -44,12 +44,16 @@ def _params(city_id, **extra):
 
 
 def lines(city_id):
-    """[(lineName, lineId)]，一条线一次（目录里是方向级记录，这里去重）。"""
+    """[(lineName, lineId)]，同一条线的上下行各占一项。
+
+    目录是方向级记录，同名会有多个 lineId；以前用 setdefault 只留第一条，
+    结果只查得到一个方向的车（见 issue #6）。
+    """
     data = _unwrap(_get("bus/cityLineList", _params(city_id)))
     seen = {}
     for row in data["allLines"]["all"]:
-        seen.setdefault(row["lineName"], row["lineId"])
-    return list(seen.items())
+        seen.setdefault(row["lineName"], []).append(row["lineId"])
+    return [(name, lid) for name, lids in seen.items() for lid in lids]
 
 
 def _decrypt(blob):
@@ -59,13 +63,14 @@ def _decrypt(blob):
 
 
 def live(city_id, line_id):
-    """实时车辆 → {"state": int, "buses": [(车号, 下一站, 距离米)]}"""
+    """实时车辆 → {"state": int, "desc": str, "to": str, "buses": [(车号, 下一站, 距离米)]}"""
     payload = {"lineId": line_id}
     t = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     sign = hashlib.md5((t[1:-1].replace(":", "=").replace(",", "&") + SALT).encode()).hexdigest()
     body = _unwrap(_get("bus/line!encryptedLineDetail.action",
                         _params(city_id, lineId=line_id, cryptoSign=sign)))
     d = _decrypt(body["encryptResult"])
+    line = d.get("line") or {}
     stops = d.get("stations") or []
     buses = []
     for b in d.get("buses") or []:
@@ -76,4 +81,5 @@ def live(city_id, line_id):
         plate = (b.get("licence") or "").split("_")[0] or str(b.get("busId") or "?").split("_")[0]
         buses.append((plate, station,
                       b.get("distanceToWaitStn")))
-    return {"state": d["line"].get("state"), "buses": buses}
+    return {"state": line.get("state"), "desc": line.get("desc") or "",
+            "to": line.get("endSn") or "", "buses": buses}
