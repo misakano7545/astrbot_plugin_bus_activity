@@ -45,20 +45,30 @@ assert query._pick([("G01", 1), ("G02", 2), ("G03", 3)], "G0") == []        # �
 assert query._pick([("G01", 1), ("G02", 2), ("G0", 3)], "G0")[0][0] == "G0"
 assert query._pick([("11路", 1), ("12路", 2), ("13路", 3)], "1") == []   # 真歧义，仍不瞎猜
 
-# 排版
+# 排版：说话像群友，不报城市名、不标数据源
 res = {"source": "掌上公交", "line": "1路",
        "groups": [("A站", [("桂A1", "某路口", 326)]), ("B站", [])]}
 out = query.render("南宁", "1", res)
-assert out.splitlines() == ["南宁 1路 现在 1 辆车在路上（掌上公交）",
-                            "往A站：桂A1 某路口 326m",
-                            "往B站：暂无车"], out
+assert out.splitlines() == ["有，1路 现在 1 辆在路上",
+                            "往A站：桂A1 某路口 326m"], out
+# 两个方向都有车才念方向，空方向只在此时才提
+out = query.render("南宁", "1", {"source": "掌上公交", "line": "1路",
+                                 "groups": [("A站", [("桂A1", "某路口", 0)]), ("B站", [])]})
+assert "往B站" not in out, out
 # 没车时不能直说「没车」，要区分「上游缺 GPS」和「已收班」（issue #2）
-assert "线路在运营" in query.render(
-    "南宁", "1", {"source": "掌上公交", "line": "1", "groups": [("", [])], "note": "线路在运营，此刻没有车报位置"})
+assert "线路还在跑" in query.render(
+    "南宁", "1", {"source": "掌上公交", "line": "1", "groups": [("", [])], "note": "线路还在跑，这会儿没车开车机"})
 assert "末班" in query.render(
     "南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])], "desc": "本线路末班时间已过"})
 assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])]}) == \
-    "南宁 1 现在没车在路上（车来了）"
+    "1 这会儿没车"
+assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])],
+                                  "note": "末班 19:50 已经开走了"}) == \
+    "1 这会儿没车，末班 19:50 已经开走了"
+# 线路不存在 / 有近似线名 / 上游异常：别把机器串甩进群里
+assert query.render("玉林", "999", {"error": "没这条线路"}) == "没查到「999」这条线"
+assert query.render("沛县", "1", {"error": "是 11路 / 17路 吗"}) == "没「1」这条，是 11路 / 17路 吗"
+assert query.render("玉林", "1", {"error": "上游这会儿没响应，过会儿再问"}) == "上游这会儿没响应，过会儿再问"
 
 # Origin 头是掌上公交的唯一命门：带上多余的斜杠或换 http，上游回 200 + 58 字节占位串
 assert query.HEADERS["Origin"] == "https://h5.mygolbs.com"
@@ -77,6 +87,15 @@ assert query.hop("十字街到火车站") is None          # 没有「从」就�
 assert query._left(8, 4) == 3                        # 站序 1 基、车 index 0 基
 assert query._left(3, 2) == 0                        # 车就在这一站
 assert query._left(3, 5) == -3                       # 已过站
+
+# 分钟：车在第 i 站前 d0 米，车速表按段给 m/min
+p = {"dislist": [{"d": 100}, {"d": 200}, {"d": 300}, {"d": 0}],
+     "speedlist": [{"speed": 100}, {"speed": 100}, {"speed": 100}]}
+bus = {"index": 0, "busToStationNiheDistance": 0}     # 车就停在第 0 站
+assert query._eta(p, 1, bus) == 1                    # 第 0 段 100m，100m·min⁻¹
+assert query._eta(p, 2, bus) == 3                    # + 第 1 段 200m
+assert query._eta(p, 3, bus) == 6
+assert query._eta(p, 0, {"index": 2, "busToStationNiheDistance": 50}) is None   # 已过站
 
 print("selftest ok")
 

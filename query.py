@@ -185,6 +185,26 @@ def _last_bus(city_name, line, direction):
     return max((x.get("last") or "" for x in r.get("firstLast") or []), default="")
 
 
+def _live_my(city_name, name, d):
+    """CMD=104 整包：list 是车，dislist/speedlist 是每段里程与均速（m/min），算分钟要用。"""
+    return _cached("live-my", (city_name, name, d), LIVE_TTL,
+                   lambda: _post({"CMD": "104", "CITYNAME": city_name, "LINENAME": name,
+                                  "DIRECTION": d, "STATIONORDER": "1"}))
+
+
+def _eta(payload, j, bus):
+    """车还有几分钟到第 j 站（0 基）。车速表单位是 m/min（实测与 GPS 位移吻合）。"""
+    i = int(bus.get("index") or 0)
+    if i > j:
+        return None                      # 已经过站了
+    dis = [x.get("d") or 0 for x in payload.get("dislist") or []]
+    sp = [x.get("speed") or 0 for x in payload.get("speedlist") or []]
+    leg = lambda k: dis[k] / sp[k] if k < len(dis) and k < len(sp) and sp[k] else 0
+    v0 = sp[i - 1] if 0 < i <= len(sp) else (sp[0] if sp else 0)
+    t = float(bus.get("busToStationNiheDistance") or 0) / v0 if v0 else 0
+    return t + sum(leg(k) for k in range(i, j))
+
+
 def _mygolbs(city_name, want):
     rows = _cached("catalog-my", city_name, CATALOG_TTL,
                    lambda: _post({"CMD": "119", "CITYNAME": city_name}).get("buslines") or [])
@@ -200,10 +220,7 @@ def _mygolbs(city_name, want):
         # 传 0/3/空串时服务端会静默退化成方向 1，回一列错方向的车，宁可不报
         if d not in ("1", "2"):
             continue
-        payload = _cached("live-my", (city_name, name, d), LIVE_TTL,
-                          lambda name=name, d=d: _post({"CMD": "104", "CITYNAME": city_name,
-                                                        "LINENAME": name, "DIRECTION": d,
-                                                        "STATIONORDER": "1"}))
+        payload = _live_my(city_name, name, d)
         cars = payload.get("list") or []
         # hasReal=1 且回的就是「获取实时数据成功」说明上游认为线路在运营，只是这一趟没有车报 GPS
         if payload.get("hasReal") in ("1", 1) or "成功" in str(payload.get("msg") or ""):
@@ -215,9 +232,9 @@ def _mygolbs(city_name, want):
     note = ""
     if not any(g for _, g in groups):
         if last and time.strftime("%H:%M") > last:
-            note = f"末班 {last} 已过"
+            note = f"末班 {last} 已经开走了"
         elif live_known:
-            note = "线路在运营，此刻没有车报位置"
+            note = "线路还在跑，这会儿没车开车机"
     return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups, "note": note}
 
 
@@ -246,7 +263,7 @@ def query(city_key, wants):
     wants 是候选线路名，先试带前缀的「陆川1」，再试裸号「1」。
     """
     ent = cities().get(city_key) or {}
-    tried, blank = [], None
+    tried, blank, near = [], None, None
     for want in wants:
         for source, fetch in (("mygolbs", _mygolbs), ("chelaile", _chelaile)):
             target = ent.get(source)
@@ -258,7 +275,10 @@ def query(city_key, wants):
                 tried.append(f"{LABEL[source]}异常 {e}")
                 continue
             if got and "error" in got:
-                tried.append(got["error"])
+                if got["error"].startswith("是 "):
+                    near = near or got      # 目录里有近似线名，另一家也许真有这条，先记着
+                else:
+                    tried.append(got["error"])
                 continue
             if got and any(group for _, group in got["groups"]):
                 return got
@@ -268,8 +288,12 @@ def query(city_key, wants):
             return blank           # 有这条线，只是当下两端都没车
     if not ent:
         # 城市表里没这个键：要么名字写错，要么两家都不覆盖，别把话说成「两家都没有」
-        return {"error": "没认出这个城市，两家数据源里都没有对得上的名字"}
-    return {"error": "；".join(tried) or "该城市两家数据源都没这条线路"}
+        return {"error": "这个城市名没认出来，写全称或把城市补在路线前面试试"}
+    if near:
+        return near
+    if tried and all("异常" in t for t in tried):
+        return {"error": "上游这会儿没响应，过会儿再问"}
+    return {"error": "没这条线路"}
 
 
 def _car(plate, stn, dist):
@@ -284,21 +308,26 @@ def _car(plate, stn, dist):
 
 def render(city_key, want, res):
     if "error" in res:
-        return f"查不到「{want}」：{res['error']}"
+        e = res["error"]
+        if e.startswith("是 "):                       # 目录里有近似线名，报候选
+            return f"没「{want}」这条，是 {e[2:]}"
+        if e.startswith("没这条"):
+            return f"没查到「{want}」这条线"
+        return e                                      # 其余文案本身已经是人话
     total = sum(len(b) for _, b in res["groups"])
+    line = res["line"]
     if not total:
         # 「没车」和「上游没给车辆 GPS」是两件事，后者会被乘客读成停运（见 issue #2）
-        if res.get("note"):
-            tail = f"，{res['note']}（{res['source']}）"
-        elif res.get("desc"):
-            tail = f"，{res['desc']}（{res['source']}）"
-        else:
-            tail = f"（{res['source']}）"
-        return f"{city_key} {res['line']} 现在没车在路上{tail}"
-    rows = [f"{city_key} {res['line']} 现在 {total} 辆车在路上（{res['source']}）"]
+        tail = res.get("note") or res.get("desc") or ""
+        return f"{line} 这会儿没车" + ("，" + tail if tail else "")
+    multi = sum(1 for _, b in res["groups"] if b) > 1      # 只有一个方向有车时不念空方向
+    rows = [f"有，{line} 现在 {total} 辆在路上"]
     for label, buses in res["groups"]:
-        head = f"往{label}：" if label else ""
-        rows.append(head + ("｜".join(_car(*b) for b in buses) if buses else "暂无车"))
+        if not buses:
+            if multi and label:
+                rows.append(f"往{label}还没车")
+            continue
+        rows.append((f"往{label}：" if label else "") + "，".join(_car(*b) for b in buses))
     return "\n".join(rows)
 
 
@@ -351,14 +380,34 @@ def _station_seq(city_name, line, direction):
 
 
 def _goes(city_name, line, a, b):
-    """A 站是否在 B 站之前。返回 (方向, 站数)；两个方向都不顺路就 None。"""
+    """A 站是否在 B 站之前。返回 (方向, A 站序, B 站序)，都是 0 基；不顺路就 None。"""
     for d in ("1", "2"):
         names = [r.get("stationName") or "" for r in _station_seq(city_name, line, d)]
         ia = next((i for i, n in enumerate(names) if a in n), None)
         ib = next((i for i, n in enumerate(names) if b in n), None)
         if ia is not None and ib is not None and ia < ib:
-            return d, ib - ia
+            return d, ia, ib
     return None
+
+
+def _hop_line(city_name, line, d, ia, ib):
+    """这一路下一辆车几分钟到 A、从 A 坐到 B 要几分钟。"""
+    payload = _live_my(city_name, line, d)
+    best = None
+    for car in payload.get("list") or []:
+        t = _eta(payload, ia, car)
+        if t is None:
+            continue
+        if best is None or t < best[0]:
+            best = (t, _eta(payload, ib, car))
+    if not best:
+        last = _last_bus(city_name, line, d)
+        if last and time.strftime("%H:%M") > last:
+            return f"，末班 {last} 已经开走了"
+        return "，这会儿没车报位置"
+    wait = max(1, round(best[0]))
+    ride = max(1, round(best[1] - best[0]))
+    return f"，下一辆约 {wait} 分钟后到，坐过去 {ride} 分钟"
 
 
 def render_hop(city_key, city_name, raw):
@@ -369,18 +418,24 @@ def render_hop(city_key, city_name, raw):
         return None
     ra = set(a.get("relatedRoutes") or [])
     rb = set(b.get("relatedRoutes") or [])
-    head = f"{city_key} {a['stationName']} → {b['stationName']}："
+    head = f"从{a['stationName']}到{b['stationName']}"
     if not ra & rb:
         short = lambda s: "、".join(sorted(s)[:6]) + ("…" if len(s) > 6 else "")
-        return f"{head}没有直达车\n{a['stationName']} 有 {short(ra)}\n{b['stationName']} 有 {short(rb)}"
+        return f"{head}没直达车，{a['stationName']} 有 {short(ra)}，{b['stationName']} 有 {short(rb)}"
     direct = []
     for line in sorted(ra & rb)[:4]:            # shortcut: 只验前 4 条，交叉线多的城可能漏
         got = _goes(city_name, line, a_name, b_name)
         if got:
-            direct.append(f"{line}（{got[1]} 站）")
+            direct.append((line, got))
     if not direct:
-        return f"{head}两站有同名线路但方向不对，换乘得自己看"
-    return head + "直达 " + "、".join(direct)
+        return f"{head}有同名线路但方向反了，得换乘"
+    if len(direct) == 1:
+        line, got = direct[0]
+        return f"{head}坐 {line} 直达（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got)
+    rows = [f"{head}能直达："]
+    for line, got in direct:
+        rows.append(f"{line}（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got))
+    return "\n".join(rows)
 
 
 def _left(seq_index, car_index):
@@ -403,20 +458,20 @@ def render_at(city_key, city_name, want, msg):
         idx = next((i + 1 for i, n in enumerate(names) if station_name in n), None)
         if not idx:
             continue
-        cars = _cached("live-my", (city_name, line_name, d), LIVE_TTL,
-                       lambda line_name=line_name, d=d: _post(
-                           {"CMD": "104", "CITYNAME": city_name, "LINENAME": line_name,
-                            "DIRECTION": d, "STATIONORDER": "1"}).get("list") or [])
-        for c in cars:
+        payload = _live_my(city_name, line_name, d)
+        for c in payload.get("list") or []:
             left = _left(idx, c.get("index"))
-            if left >= 0:
-                eta = "马上到" if left == 0 else f"还有 {left} 站"
-                best.append((left, f"{c.get('busNumber')} {eta}（往{row.get('to') or '?'}）"))
+            if left < 0:
+                continue
+            mins = _eta(payload, idx - 1, c)
+            span = "马上到" if left == 0 else f"还有 {left} 站"
+            if mins is not None:
+                span = f"约 {max(1, round(mins))} 分钟，" + span
+            best.append((left, f"{c.get('busNumber')} {span}（往{row.get('to') or '?'}）"))
     if not best:
         return None
     best.sort()
-    return f"{city_key} {hit[0][1]['lineName']} 到「{station_name}」：\n" + "\n".join(
-        row for _, row in best[:3])
+    return f"{hit[0][1]['lineName']}到{station_name}：" + "，".join(row for _, row in best[:3])
 
 
 def render_stop(city_key, city_name, msg):
@@ -427,7 +482,7 @@ def render_stop(city_key, city_name, msg):
     routes = (stops(city_name, name) or [{}])[0].get("relatedRoutes") or []
     if not routes:
         return None
-    return f"{city_key} {name} 有 {len(routes)} 条：{'、'.join(routes)}"
+    return f"{name}有：{'、'.join(routes)}"
 
 
 def answer(msg, default_city):
@@ -444,12 +499,12 @@ def answer(msg, default_city):
         if hop(msg) or not prefix:      # 「从A到B」「X站有哪几路」不许城市名也能答
             city_key = base if base in cities() else None
     if not city_key:
-        return f"没认出「{prefix or '这个城市'}」的公交，试试写成「{prefix} {line[0] if line else 'X'} 路」或者直接说城市名"
+        return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
     name = (cities().get(city_key) or {}).get("mygolbs")
     got = hop(msg)
     if got and name:
         out = render_hop(city_key, name, got)
-        return out or f"{city_key}没有「{got[0]}」或「{got[1]}」这个站，站点名得跟站牌一致"
+        return out or f"没查到「{got[0]}」或「{got[1]}」这站，站名跟站牌上写的一样吗"
     if line:
         if name:
             out = render_at(city_key, name, prefix + line[0] if prefix and not explicit else line[0], msg)
@@ -458,5 +513,5 @@ def answer(msg, default_city):
         wants = [prefix + line[0], line[0]] if prefix and not explicit else [line[0]]
         return render(city_key, wants[0], query(city_key, wants))
     if name:
-        return render_stop(city_key, name, msg) or f"没认出 {city_key} 的站名，说得跟站牌一样再试"
+        return render_stop(city_key, name, msg) or f"{city_key}的站名没认出来，跟站牌上写的一样试试"
     return "这条要掌上公交有目录的城市才查得到，换个说法或者补上城市名"

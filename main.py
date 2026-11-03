@@ -30,7 +30,7 @@ class BusActivity(Star):
             text = await asyncio.to_thread(answer, msg, self.default_city)
         except Exception as e:
             logger.warning(f"公交查询失败: {e}")
-            text = "公交数据源暂时没响应，稍后再问一次"
+            text = "公交这会儿查不动，过一会儿再问我一次"
         if text:
             logger.info(f"公交作答: {msg[:30]} -> {text.splitlines()[0][:60]}")
             yield event.plain_result(text)
