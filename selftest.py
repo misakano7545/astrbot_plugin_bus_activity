@@ -109,6 +109,22 @@ assert query.answer("那39路的那一辆是去往哪个方向呢？", "玉林�
                     "南宁市这会儿有 7 条线在跑") == "有，39路 现在 1 辆在路上\n往A：桂A1 x"
 query.pick_stop, query.query = _ps, _hq
 
+# 逐站换乘：上下行同一个站只算一次，列表里要剔掉本线
+_sq, _st, _cat = query._station_seq, query.stops, query._catalog
+
+def _fake_seq(city, line, d):
+    return [{"stationName": n} for n in (["甲", "乙"] if d == "1" else ["乙", "丙"])]
+
+query._station_seq = _fake_seq
+query.stops = lambda city, kw: [{"relatedRoutes": ["9路", "1路"]}]
+query._catalog = lambda city: {"buslines": [{"lineName": "9路", "upperOrDown": "1", "to": "丙"},
+                                            {"lineName": "9路", "upperOrDown": "2", "to": "甲"}]}
+t = query.render_transfer("玉林市", "9")      # want 传归一化后的线路号，跟 answer 一致
+assert t.count("只有这条线") == 0 and t.count("1路") == 3, t
+assert t.count("逐站能换") == 1, t              # 上下行两条目录记录只念一遍
+assert [l.split("：")[0].split(". ")[1] for l in t.split("\n")[1:]] == ["甲", "乙", "丙"]
+query._station_seq, query.stops, query._catalog = _sq, _st, _cat
+
 # 站点与换乘：「从」可有可无（群里就有人写「玉林北站到旅游客运站的路线」）
 assert query.hop("从十字街到火车站坐什么车") == ("十字街", "火车站")
 assert query.hop("从金城商厦到玉林北站有直达吗") == ("金城商厦", "玉林北站")

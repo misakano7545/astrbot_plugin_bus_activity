@@ -530,7 +530,41 @@ def render_stops(city_name, want):
         names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, row["upperOrDown"])]
         if names:
             body = "\n".join(f"{i}. {n}" for i, n in enumerate(names, 1))
-            out.append(f"{line_name}（往{row.get('to') or '?'}，{len(names)} 站）：\n{body}\n反向同站，顺序倒过来")
+            out.append(f"{line_name}（往{row.get('to') or '?'}，{len(names)} 站）：\n{body}")
+    return "\n\n".join(out) or None
+
+
+TRANSFER_RE = re.compile(r"换乘|能换|可以换|转哪|转到")
+
+
+def render_transfer(city_name, want):
+    """逐站能换哪几路：上下行站几乎一样，按站名去重只算一份。"""
+    rows = _catalog(city_name).get("buslines") or []
+    hit = _pick([(r["lineName"], r) for r in rows], want)
+    out, done = [], set()
+    for line_name, row in hit:
+        if line_name in done:                    # 目录里同一路有上下行两条，别念两遍
+            continue
+        done.add(line_name)
+        names, seen = [], set()
+        for d in ("1", "2"):
+            for s in _station_seq(city_name, line_name, d):
+                n = s.get("stationName") or ""
+                if n and n not in seen:
+                    seen.add(n)
+                    names.append(n)
+        if not names:
+            continue
+
+        def others(n):
+            hits = (stops(city_name, n) or [{}])[0].get("relatedRoutes") or []
+            return "、".join(r for r in hits if r != line_name)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            body = list(pool.map(others, names))
+        out.append(f"{line_name} 逐站能换的车（上下行合并 {len(names)} 站）：" +
+                   "\n" + "\n".join(f"{i}. {n}：{t or '只有这条线'}"
+                                     for i, (n, t) in enumerate(zip(names, body), 1)))
     return "\n\n".join(out) or None
 
 
@@ -661,8 +695,16 @@ def answer(msg, default_city, ctx=""):
             return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
         return render_hop(city_key, name, got) or ""
+    if name and TRANSFER_RE.search(msg):
+        # 「这条线路每站能换什么」没有线路号，用上一条答过的线路
+        want = (prefix + line[0] if prefix and not explicit else line[0]) if line else LAST.get("line") or ""
+        out = render_transfer(name, want) if want else None
+        if out:
+            LAST["line"] = want
+            return out
     if line:
         want = prefix + line[0] if prefix and not explicit else line[0]
+        LAST["line"] = want
         if name and STOPS_RE.search(msg):        # 要的是站表，别回实时车
             out = render_stops(name, want)
             if out:
