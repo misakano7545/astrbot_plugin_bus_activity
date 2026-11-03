@@ -32,6 +32,7 @@ _cache = {}
 
 # 「玉林 G02 路」「B1 有车吗」「105路」都认；裸数字必须带「路」，防「8点」误判
 LINE_RE = re.compile(r"(?P<alpha>[A-Za-z]{1,2}\d{1,3})(?:\s*路)?|(?P<num>\d{1,3})\s*路")
+PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
 INTENT = ("车", "到哪", "几站", "还有", "来了", "多久", "快吗", "有没有")
 SUFFIX = re.compile(r"(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|自治州|自治县|地区|盟|市|城区|区|县)$")
 
@@ -47,11 +48,12 @@ def norm_city(name):
 
 
 def parse(msg):
-    """→ (线路名归一化 or None)"""
+    """→ (线路号, 紧贴着的汉字段)。县内线路「陆川1路」靠这个前缀区分。"""
     m = LINE_RE.search(msg)
     if not m:
         return None
-    return norm_line(m.group("alpha") or m.group("num"))
+    pre = PREFIX_RE.search(msg[: m.start()])
+    return norm_line(m.group("alpha") or m.group("num")), (pre.group(1) if pre else "")
 
 
 def _cached(kind, key, ttl, fn):
@@ -87,13 +89,22 @@ def cities():
     return _cached("cities", "", CITY_TTL, build)
 
 
-def detect_city(msg, default_city):
-    """消息里出现的最长城市名；没写就用默认城市。"""
-    hits = [k for k in cities() if len(k) >= 2 and k in msg]
+def detect_city(msg, prefix, default_city):
+    """→ (城市键, 是否明写)。明写了才算数，防止「火星 1 路」被当成本地线路瞎答。"""
+    idx = cities()
+    hits = [k for k in idx if k in msg]          # 含 1 字城名，够长才用
+    hits = [k for k in hits if len(k) >= 2 or prefix.startswith(k)]
     if hits:
-        return max(hits, key=len)
+        return max(hits, key=len), True
+    if prefix and prefix in idx:
+        return prefix, True
     key = norm_city(default_city)
-    return key if key in cities() else None
+    if key not in idx:
+        return None, False
+    # 线路号前面还有串认不出的汉语（「火星」「陆川」），别默默当成本地线路
+    if prefix and prefix != key and not key.startswith(prefix):
+        return None, False
+    return key, False
 
 
 def _pick(catalog, want):
@@ -134,27 +145,29 @@ def _chelaile(city_id, want):
     return {"source": "车来了", "line": name, "groups": [("", d["buses"])]}
 
 
-def query(city_key, want):
-    """两家依次试。有车就立刻用，两家都空车才算没车——否则会漏掉另一家有车的城。"""
+def query(city_key, wants):
+    """两家依次试。有车就立刻用，两家都空车才算没车——否则会漏掉另一家有车的城。
+
+    wants 是候选线路名，先试带前缀的「陆川1」，再试裸号「1」。
+    """
     ent = cities().get(city_key) or {}
     tried, blank = [], None
-    for source, fetch in (("mygolbs", _mygolbs), ("chelaile", _chelaile)):
-        target = ent.get(source)
-        if not target:
-            continue
-        try:
-            got = fetch(target, want)
-        except Exception as e:
-            tried.append(f"{LABEL[source]}异常 {e}")
-            continue
-        if got and any(group for _, group in got["groups"]):
-            return got
-        if got:
-            blank = blank or got
-        else:
-            tried.append(f"{LABEL[source]}没这条线")
-    if blank:
-        return blank
+    for want in wants:
+        for source, fetch in (("mygolbs", _mygolbs), ("chelaile", _chelaile)):
+            target = ent.get(source)
+            if not target:
+                continue
+            try:
+                got = fetch(target, want)
+            except Exception as e:
+                tried.append(f"{LABEL[source]}异常 {e}")
+                continue
+            if got and any(group for _, group in got["groups"]):
+                return got
+            if got:
+                blank = blank or got
+        if blank:
+            return blank           # 有这条线，只是当下两端都没车
     return {"error": "；".join(tried) or "两家都没有这个城市"}
 
 
@@ -182,10 +195,18 @@ def render(city_key, want, res):
 
 
 def answer(msg, default_city):
-    want = parse(msg)
-    if not want:
+    got = parse(msg)
+    if not got:
         return None
-    city_key = detect_city(msg, default_city)
+    num, prefix = got
+    city_key, explicit = detect_city(msg, prefix, default_city)
+    base = norm_city(default_city)
     if not city_key:
-        return f"没认出城市，说清楚一点，比如「{default_city} {want} 路有没有车」"
-    return render(city_key, want, query(city_key, want))
+        # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次
+        if prefix and base in cities():
+            res = query(base, [prefix + num])
+            if "error" not in res:
+                return render(base, prefix + num, res)
+        return f"没认出「{prefix or '这个城市'}」的公交，试试写成「{prefix} {num} 路」或者直接说城市名"
+    wants = [prefix + num, num] if prefix and not explicit else [num]
+    return render(city_key, wants[0], query(city_key, wants))

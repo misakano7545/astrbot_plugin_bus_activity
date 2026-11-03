@@ -16,10 +16,11 @@ assert query.norm_city("重庆城区") == query.norm_city("重庆市") == "重�
 assert query.norm_city("香港特别行政区") == "香港"
 assert query.norm_city("玉林市") == "玉林"
 
-# 从消息里取线路号
-assert query.parse("玉林 G02 路有没有车") == "G02"
-assert query.parse("B1 有车吗") == "B1"
-assert query.parse("105路还有几站") == "105"
+# 从消息里取线路号 + 紧贴着的汉字段（县内线路用）
+assert query.parse("玉林 G02 路有没有车") == ("G02", "玉林")   # 前缀也可能是城市，由 detect_city 分辨
+assert query.parse("B1 有车吗") == ("B1", "")
+assert query.parse("105路还有几站") == ("105", "")
+assert query.parse("陆川 1 路有车吗") == ("1", "陆川")
 assert query.parse("早上8点有车吗") is None  # 裸数字不带「路」不算线路
 
 # 目录匹配：全等优先，前缀只在候选少时接受
@@ -39,8 +40,9 @@ assert "现在没车" in query.render("南宁", "1", {"source": "车来了", "li
 
 # 城市识别：给假城市表，不联网
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "南宁": {"mygolbs": "南宁市"}}
-assert query.detect_city("玉林 G02 路有没有车", "南宁市") == "玉林"
-assert query.detect_city("2 路有车吗", "南宁市") == "南宁"  # 没写城市用默认
+assert query.detect_city("玉林 G02 路有没有车", "", "南宁市") == ("玉林", True)
+assert query.detect_city("2 路有车吗", "", "南宁市") == ("南宁", False)   # 没写城市用默认
+assert query.detect_city("火星 1 路有车吗", "火星", "南宁市") == (None, False)  # 认不出就别瞎答
 
 print("selftest ok")
 
