@@ -471,12 +471,25 @@ def pick_stop(city_name, msg):
     city = norm_city(city_name)
     for part in re.split(r"[，,。.？?！!、\s]+", msg):
         cand = LEAD.sub("", TAIL.sub("", part))
+        if LINE_RE.search(cand):
+            # 「G02到高新产业园」：线路号后面那个才是上车站，别整片跳过
+            cand = re.split(r"到|去|往|在|经停", cand)[-1]
         if len(cand) < 2 or norm_city(cand) == city or LINE_RE.search(cand):
             continue                        # 城市名和线路号不是站名
         got, _ = find_stop(city_name, cand)
         if got:
             return got["stationName"]
     return None
+
+
+def _dest_after(city_name, msg, stop):
+    """「G02到高新产业园，去玉林北站」：站名后面那个「去/往X」是方向，不是上车站。"""
+    m = re.search(r"(?:去|往|到)\s*([^，,。.？?！!\s]{2,12})", msg.split(stop)[-1])
+    if not m:
+        return None
+    # 「去玉林北站要等多久」：站名后面跟的是「要/等多久」，砍掉再搜，别指望模糊匹配
+    got, _ = find_stop(city_name, TAIL.sub("", re.split(r"要|等", m.group(1))[0]))
+    return (got or {}).get("stationName")
 
 
 def _station_seq(city_name, line, direction):
@@ -549,11 +562,17 @@ def render_at(city_key, city_name, want, msg):
     station_name = pick_stop(city_name, msg)
     if not station_name:
         return None
+    # 「G02 到高新产业园，去玉林北站」问的是在产业园上车、往玉林北站那个方向，别把终点当上车站
+    dest = _dest_after(city_name, msg, station_name)
     rows = _catalog(city_name).get("buslines") or []
     hit = _pick([(r["lineName"], r) for r in rows], want)
     out = []
     for line_name, row in hit:
         d = row["upperOrDown"]
+        if dest and dest != station_name:
+            got = _goes(city_name, line_name, station_name, dest)   # 只留能开到 dest 的方向
+            if not got or got[0] != d:
+                continue
         names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, d)]
         idx = next((i + 1 for i, n in enumerate(names) if station_name in n), None)
         if not idx:

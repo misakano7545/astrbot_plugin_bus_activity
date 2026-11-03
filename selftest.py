@@ -268,6 +268,15 @@ assert len(query._clock(0)) == 5 and query._clock(0) == \
 assert query._clock(1500) == _tm.strftime("%H:%M", _tm.gmtime(1745000000.0 + 8 * 3600 + 1500 * 60))
 query.time.time = _utc
 
+# 「G02到高新产业园，去玉林北站」：上车站是产业园，玉林北站只是方向，不是上车站
+_fs = query.find_stop
+query.find_stop = lambda c, raw: ({"stationName": raw} if raw in ("高新产业园", "玉林北站") else None, raw)
+assert query.pick_stop("玉林市", "你看一下G02到高新产业园，去玉林北站要等多久？") == "高新产业园"
+assert query._dest_after("玉林市", "你看一下G02到高新产业园，去玉林北站要等多久？",
+                         "高新产业园") == "玉林北站"
+assert query._dest_after("玉林市", "我在玉林北站，G02现在到那里我要多少分钟", "玉林北站") is None
+query.find_stop = _fs
+
 # issue #10：末班比较不跨零点（字符串比较时 '00:02' < '22:40'）
 import types as _t
 _lt, _real = query.time, sys.modules["time"]
