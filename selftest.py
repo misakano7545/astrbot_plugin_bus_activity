@@ -109,6 +109,18 @@ assert query.answer("那39路的那一辆是去往哪个方向呢？", "玉林�
                     "南宁市这会儿有 7 条线在跑") == "有，39路 现在 1 辆在路上\n往A：桂A1 x"
 query.pick_stop, query.query = _ps, _hq
 
+# 「上一条问的线路」必须按会话记：A 群问 G02，B 群问 9 路，A 群的追问不能串成 9 路
+_sq2, _cat2 = query._station_seq, query._catalog
+query._catalog = lambda city: {"buslines": [{"lineName": n, "upperOrDown": "1", "to": "x"}
+                                            for n in ("G02路", "9路")]}
+query._station_seq = lambda city, line, d: [{"stationName": f"{line}站1"}, {"stationName": f"{line}站2"}]
+query.stops = lambda city, kw: [{"relatedRoutes": ["G02路", "1路"] if kw.startswith("G02") else ["9路", "2路"]}]
+assert query.answer("G02路的站点列表", "玉林市", key="群A").startswith("G02路")
+assert query.answer("9路的所有站点列表", "玉林市", key="群B").startswith("9路")
+assert query.answer("每一站能换乘啥线路", "玉林市", key="群A").startswith("G02路")
+assert query.answer("每一站能换乘啥线路", "玉林市", key="群B").startswith("9路")
+query._station_seq, query._catalog = _sq2, _cat2
+
 # 运营公司/咨询电话来自 114.routeBean：company 几乎全城都有，companyMobile 只有部分城市有
 _p114, query._post = query._post, lambda p, timeout=8: {"buslines": [
     {"routeBean": {"routeName": "9路", "company": "玉林公交", "companyMobile": ""}},

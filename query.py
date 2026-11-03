@@ -691,11 +691,23 @@ def render_sweep(city_name):
             + "".join(f"\n{n} {c} 辆（{ends[n]}）" for n, c in live))
 
 
-LAST = {}          # 上一条答过的城市，群里追问「b19 所有站点」时用
+LAST = {}          # 会话 → 上一条答过的城市/线路；追问「每站能换乘啥」不带车次，靠它
 
 
-def answer(msg, default_city, ctx=""):
+def _last(key):
+    """按会话记：进程级的单槽会让 A 群的追问串到 B 群（问 G02 的换乘回了 9 路）。"""
+    d = LAST.setdefault(key or "", {})
+    while len(LAST) > 64:                        # shortcut: 超 64 个会话丢最早的，不做 LRU
+        FIRST = next(iter(LAST))
+        if FIRST == (key or ""):
+            break
+        LAST.pop(FIRST)
+    return d
+
+
+def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
+    last = _last(key)
     msg = AT_RE.sub(" ", msg)
     line = parse(msg)
     prefix = line[1] if line else ""
@@ -706,7 +718,7 @@ def answer(msg, default_city, ctx=""):
         # 再不行试上一条问过的城市——群里追问「b19 所有站点」不会重报城市名
         # shortcut: 进程级共用一个城市，多群同时问不同城会串，够用就升级成按会话记
         if line:
-            for ck in [base] + ([LAST["city"]] if LAST.get("city") in cities() else []):
+            for ck in [base] + ([last["city"]] if last.get("city") in cities() else []):
                 if ck in cities() and "error" not in query(ck, [prefix + line[0]]):
                     city_key = ck
                     break
@@ -715,7 +727,7 @@ def answer(msg, default_city, ctx=""):
     if not city_key:
         return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
     name = (cities().get(city_key) or {}).get("mygolbs")
-    LAST["city"] = city_key
+    last["city"] = city_key
     got = hop(msg)
     if got:
         ca = detect_city(got[0], "", "")[0]
@@ -726,14 +738,14 @@ def answer(msg, default_city, ctx=""):
         return render_hop(city_key, name, got) or ""
     if name and TRANSFER_RE.search(msg):
         # 「这条线路每站能换什么」没有线路号，用上一条答过的线路
-        want = (prefix + line[0] if prefix and not explicit else line[0]) if line else LAST.get("line") or ""
+        want = (prefix + line[0] if prefix and not explicit else line[0]) if line else last.get("line") or ""
         out = render_transfer(name, want) if want else None
         if out:
-            LAST["line"] = want
+            last["line"] = want
             return out
     if line:
         want = prefix + line[0] if prefix and not explicit else line[0]
-        LAST["line"] = want
+        last["line"] = want
         if name and COMPANY_RE.search(msg):      # 问公司/找失物/投诉
             out = render_company(name, want)
             if out:
