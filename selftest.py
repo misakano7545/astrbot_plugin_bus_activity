@@ -259,13 +259,23 @@ assert _t.count("首班") == 2 and "07:45" in _t and "乙站 → 甲站" in _t, 
 assert query.render_times("玉林市", "999") is None
 query._catalog, query._first_last = _cat, _fl
 
+# 实例是 UTC：时钟要按北京时间报（23:37 那种是 UTC，实际 07:37）
+import time as _tm
+_utc = _tm.time
+query.time.time = lambda: 1745000000.0          # 某个 UTC 时刻
+assert len(query._clock(0)) == 5 and query._clock(0) == \
+    _tm.strftime("%H:%M", _tm.gmtime(1745000000.0 + 8 * 3600)), query._clock(0)
+assert query._clock(1500) == _tm.strftime("%H:%M", _tm.gmtime(1745000000.0 + 8 * 3600 + 1500 * 60))
+query.time.time = _utc
+
 # issue #10：末班比较不跨零点（字符串比较时 '00:02' < '22:40'）
 import types as _t
 _lt, _real = query.time, sys.modules["time"]
 def _at(hh, mm):
     s = _real.localtime()
-    query.time = _t.SimpleNamespace(localtime=lambda: s.__replace__(tm_hour=hh, tm_min=mm),
-                                    strftime=_real.strftime)
+    query.time = _t.SimpleNamespace(localtime=lambda *a: s.__replace__(tm_hour=hh, tm_min=mm),
+                                    gmtime=lambda *a: s.__replace__(tm_hour=hh, tm_min=mm),
+                                    strftime=_real.strftime, time=_real.time)
 for _now, _last, _want in [((0, 2), "22:40", True), ((0, 10), "00:30", False),
                            ((23, 50), "24:10", False), ((0, 20), "24:10", True),
                            ((23, 0), "00:10", False), ((12, 0), "12:30", False)]:

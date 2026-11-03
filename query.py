@@ -186,6 +186,15 @@ def _pick_city_line(catalog, want, city_name):
     return []
 
 
+# 实例跑在 UTC（/etc/timezone = Etc/UTC），报时间、判末班都得自己挪到北京时间
+TZ_OFF = 8 * 3600
+
+
+def _now():
+    # 从 UTC 起算，不吃宿主机时区——本机是 CST、实例是 UTC，用 localtime 会差 8 小时
+    return time.gmtime(time.time() + TZ_OFF)
+
+
 def _past_last(last):
     """末班过了没。字符串比较跨不了零点（'00:20' < '22:40'），按分钟算。"""
     try:
@@ -193,7 +202,7 @@ def _past_last(last):
         last_m = int(h) * 60 + int(m)
     except ValueError:
         return False
-    t = time.localtime()
+    t = _now()
     now_m = t.tm_hour * 60 + t.tm_min
     # 按「末班离现在多久」算，跨零点自然成立：00:02 问 22:40 → 1358 分钟前，已开走；
     # 23:00 问 00:10 → 70 分钟后，还没到。
@@ -530,7 +539,9 @@ def render_hop(city_key, city_name, raw):
 
 
 def _clock(mins):
-    return time.strftime("%H:%M", time.localtime(time.time() + mins * 60))
+    t = _now()
+    m = t.tm_hour * 60 + t.tm_min + round(mins)
+    return f"{(m // 60) % 24:02d}:{m % 60:02d}"
 
 
 def render_at(city_key, city_name, want, msg):
