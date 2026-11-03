@@ -219,6 +219,18 @@ assert _cap[-1] == ("玉林", ["陆川1", "1"]), _cap[-1]  # 玉林目录里有�
 query.query, query.cities = _q, _cit
 query.render_company, query.render_stops, query.render_at = _rc, _rs, _ra
 
+# 问首末班时刻 → 回答时间，别拿「末班已开走」糊过去
+_cat = query._catalog
+query._catalog = lambda c: {"buslines": [
+    {"lineName": "G02路", "upperOrDown": "1", "from": "甲站", "to": "乙站"},
+    {"lineName": "G02路", "upperOrDown": "2", "from": "乙站", "to": "甲站"}]}
+_fl = query._first_last
+query._first_last = lambda c, n, d: ("06:40", "18:40") if d == "1" else ("07:45", "19:50")
+_t = query.render_times("玉林市", "G02")
+assert _t.count("首班") == 2 and "07:45" in _t and "乙站 → 甲站" in _t, _t
+assert query.render_times("玉林市", "999") is None
+query._catalog, query._first_last = _cat, _fl
+
 # issue #10：末班比较不跨零点（字符串比较时 '00:02' < '22:40'）
 import types as _t
 _lt, _real = query.time, sys.modules["time"]

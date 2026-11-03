@@ -565,7 +565,25 @@ def render_stops(city_name, want):
     return "\n\n".join(out) or None
 
 
+def render_times(city_name, want):
+    """「G02 首班几点」问的是时刻表，不是实时车——有车没车都得回答时间。"""
+    rows = _catalog(city_name).get("buslines") or []
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
+    out = []
+    for name, row in hit:
+        d = str(row.get("upperOrDown") or "")
+        if d not in ("1", "2"):
+            continue
+        f, l = _first_last(city_name, name, d)
+        if f or l:                                   # 两个方向时刻不同就各念一行
+            out.append(f"{name} 首班 {f or '?'}，末班 {l or '?'}"
+                       f"（{row.get('from') or '?'} → {row.get('to') or '?'}）")
+    return "\n".join(dict.fromkeys(out)) or None
+
+
 TRANSFER_RE = re.compile(r"换乘|能换|可以换|转哪|转到")
+# 「G02 首班几点发车」只问时刻，别拿实时车回（会答成末班已开走）
+TIMES_RE = re.compile(r"首班|首车|头班|第一班|末班|末车|最后一班|收班|发车时间")
 # 「9路是哪家公司的」「丢东西了找谁」——只有 114 的 routeBean 带运营公司
 COMPANY_RE = re.compile(r"哪家公司|哪个公司|哪家公交|所属公司|运营公司|归谁|谁开的|投诉|客服|电话|遗失|丢了|落下|忘在")
 
@@ -794,7 +812,9 @@ def answer(msg, default_city, ctx="", key=""):
         last["line"] = wants[0]
         if name:
             for w in wants:
-                if COMPANY_RE.search(msg):       # 问公司/找失物/投诉
+                if TIMES_RE.search(msg):          # 问首末班时刻表
+                    out = render_times(name, w)
+                elif COMPANY_RE.search(msg):      # 问公司/找失物/投诉
                     out = render_company(name, w)
                 elif STOPS_RE.search(msg):       # 要的是站表，别回实时车
                     out = render_stops(name, w)
