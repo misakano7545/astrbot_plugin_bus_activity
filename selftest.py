@@ -103,7 +103,7 @@ assert query.detect_city("火星 1 路有车吗", "火星", "南宁市") == (Non
 assert query.detect_city("那39路的那一辆是去往哪个方向呢？ 南宁市这会儿有 7 条线在跑",
                          "那", "玉林市") == ("南宁", True)
 _ps, query.pick_stop = query.pick_stop, lambda *a: None
-_hq, query.query = query.query, lambda ck, wants: (
+_hq, query.query = query.query, lambda ck, wants, src=None: (
     {"line": "39路", "groups": [("A", [("桂A1", "x", 0)])]} if (ck, wants) == ("南宁", ["39"]) else None)
 assert query.answer("那39路的那一辆是去往哪个方向呢？", "玉林市",
                     "南宁市这会儿有 7 条线在跑") == "有，39路 现在 1 辆在路上\n往A：桂A1 x"
@@ -206,7 +206,7 @@ assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
 
 # issue #8：前缀是线路名的一部分，明写城市也不丢；前缀自己就是城市时以它为准
 _cap, _q = [], query.query
-query.query = lambda ck, wants: (_cap.append((ck, wants)), {"error": "没这条线路"})[1]
+query.query = lambda ck, wants, src=None: (_cap.append((ck, wants)), {"error": "没这条线路"})[1]
 _cit = query.cities
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "容县": {"mygolbs": "容县市"}}
 _rc, query.render_company = query.render_company, lambda *a: None
@@ -220,7 +220,7 @@ query.query, query.cities = _q, _cit
 query.render_company, query.render_stops, query.render_at = _rc, _rs, _ra
 
 # 没写城市、默认城市又查不到：要说明「按谁查的」，别让用户以为这条线不存在
-_q, query.query = query.query, lambda ck, wants: {"error": "没这条线路"}
+_q, query.query = query.query, lambda ck, wants, src=None: {"error": "没这条线路"}
 _c, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}}
 _a, query.render_at = query.render_at, lambda *a: None          # 别真去打网络
 _txt = query.answer("999 路有车吗", "玉林市")
@@ -246,6 +246,17 @@ _rq("测试", ["1"])
 assert not _seq, "第二问该直接先问车来了"
 query.cities, query._mygolbs, query._chelaile = _cit, _mg, _cl
 query.PREFER_CL.pop("测试", None)
+
+# 「从车来了的那个看一下数据」：没写线路号就续上一条问的车，且点名车来了要排前面
+_cap2 = []
+_q2, query.query = query.query, lambda ck, w, src=None: (
+    _cap2.append((ck, list(w), src)), {"error": "没这条线路"})[1]
+_ct2, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+_ra2, query.render_at = query.render_at, lambda *a: None
+query.answer("9 路有车吗", "玉林市", key="t9")
+query.answer("你从车来了的这个看一下数据怎么样？", "玉林市", key="t9")
+assert _cap2[-1] == ("玉林", ["9"], "chelaile"), _cap2[-1]
+query.query, query.cities, query.render_at = _q2, _ct2, _ra2
 
 # 问首末班时刻 → 回答时间，别拿「末班已开走」糊过去
 _cat = query._catalog

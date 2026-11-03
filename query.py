@@ -332,14 +332,18 @@ def _chelaile(city_id, want):
 PREFER_CL = {}
 
 
-def query(city_key, wants):
+def query(city_key, wants, src=None):
     """两家依次试。有车就立刻用，两家都空车才算没车——否则会漏掉另一家有车的城。
 
     wants 是候选线路名，先试带前缀的「陆川1」，再试裸号「1」。
+    src 是用户点名要的数据源（「从车来了看一下」），排它前面而已，不是只用它——
+    点名的那家没有这条线时仍要能答上来。
     """
     ent = cities().get(city_key) or {}
     tried, blank, near = [], None, None
     order = ("chelaile", "mygolbs") if PREFER_CL.get(city_key) else ("mygolbs", "chelaile")
+    if src:
+        order = (src,) + tuple(s for s in order if s != src)
     for want in wants:
         for source in order:
             fetch = {"mygolbs": _mygolbs, "chelaile": _chelaile}[source]
@@ -623,6 +627,8 @@ def render_times(city_name, want):
 TRANSFER_RE = re.compile(r"换乘|能换|可以换|转哪|转到")
 # 「G02 首班几点发车」只问时刻，别拿实时车回（会答成末班已开走）
 TIMES_RE = re.compile(r"首班|首车|头班|第一班|末班|末车|最后一班|收班|发车时间")
+# 用户点名数据源：「从车来了的那个看一下数据」
+SRC_RE = re.compile(r"(?P<cl>车来了)|(?P<my>掌上(?:公交)?)")
 # 「9路是哪家公司的」「丢东西了找谁」——只有 114 的 routeBean 带运营公司
 COMPANY_RE = re.compile(r"哪家公司|哪个公司|哪家公交|所属公司|运营公司|归谁|谁开的|投诉|客服|电话|遗失|丢了|落下|忘在")
 
@@ -806,6 +812,11 @@ def answer(msg, default_city, ctx="", key=""):
     last = _last(key)
     msg = AT_RE.sub(" ", msg)
     line = parse(msg)
+    # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
+    sm = SRC_RE.search(msg)
+    src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
+    if src and not line and last.get("line") and re.search(r"看|查|数据|接口", msg):
+        line = (last["line"], "")
     prefix = line[1] if line else ""
     if prefix in ("那", "这", "该", "此", "本"):      # 指示词不是县名，别拼进线路名
         prefix = ""
@@ -861,7 +872,7 @@ def answer(msg, default_city, ctx="", key=""):
                     out = render_at(city_key, name, w, msg)
                 if out:
                     return out
-        txt = render(city_key, wants[0], query(city_key, wants))
+        txt = render(city_key, wants[0], query(city_key, wants, src))
         # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
         if not explicit and txt.startswith("没查到"):
             txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
