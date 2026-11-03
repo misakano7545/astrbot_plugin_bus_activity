@@ -562,9 +562,13 @@ def render_transfer(city_name, want):
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             body = list(pool.map(others, names))
-        out.append(f"{line_name} 逐站能换的车（上下行合并 {len(names)} 站）：" +
-                   "\n" + "\n".join(f"{i}. {n}：{t or '只有这条线'}"
-                                     for i, (n, t) in enumerate(zip(names, body), 1)))
+        have = [(n, t) for n, t in zip(names, body) if t]   # 没得换的站不占行
+        if not have:
+            out.append(f"{line_name} 沿线 {len(names)} 站都没有别的线路经过")
+            continue
+        out.append(f"{line_name} 沿线 {len(names)} 站，{len(have)} 站能换乘：" + "\n" +
+                   "\n".join(f"{i}. {n}（{t.count('、') + 1} 条）：{t}"
+                              for i, (n, t) in enumerate(have, 1)))
     return "\n\n".join(out) or None
 
 
