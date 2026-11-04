@@ -36,6 +36,10 @@ assert query.parse("玉林 6 路夜班还有几站") == ("6夜班", "玉林")   
 # 「查询 G02 路」的「查询」是动词，不是县名前缀——否则 detect_city 会拿它当城市去查
 assert query.parse("查询 G02 路现在 512 车到哪个地方了？") == ("G02", "")
 assert query.parse("查询一下 G02 路") == ("G02", "")
+# 「环山二号线」不带「地铁」，号码夹在中间；前缀不能再把线名里的汉字当县名重复拼
+assert query.parse("查一下西安环山二号线路线上几辆车") == ("西安环山二号", "")
+assert query._lines("西安环山二号线有几辆车") == [("西安环山二号", "")]
+assert query.BUS_RE.search("查一下西安环山二号线路线上几辆车")     # 否则 bus_query 返回 None，群里一个字都不回
 # 「512 车」「513 号车」是车号；「11 路车」中间隔着「路」，不是车号
 assert [g for g in query.VEH_RE.findall("现在 512 车到哪")[0]] == ["", "512"]
 assert query.VEH_RE.findall("11 路车") == [] and query.VEH_RE.findall("513 号车")[0][1] == "513"
