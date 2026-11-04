@@ -726,9 +726,10 @@ def find_stop(city_name, raw):
             if norm_city(raw[:n]) == norm_city(city_name):
                 continue
             rows = [r for r in stops(city_name, raw[:n]) or [] if r.get("stationName")]
-            # 2 字兜底只认同名的：「石家」会搜出石家庄东站/石家庄站（地铁站），跟问的站没关系
+            # 2 字兜底只认同名的：「石家」会搜出石家庄东站/石家庄站（地铁站），跟问的站没关系。
+            # 但平台会给站牌补一个后缀（「谈固」→「谈固站」），补一个后缀以内的也认
             if n == 2:
-                rows = [r for r in rows if r["stationName"] == raw[:n]]
+                rows = [r for r in rows if r["stationName"] in (raw[:n], raw[:n] + "站", raw[:n] + "口")]
             if rows:
                 return _merge_same(rows, rows[0]), raw[:n]
     # 「陆川汽车总站」平台写作「汽车总站（陆川）」：县名被挪到括号里，顺序反过来了，
@@ -762,7 +763,14 @@ def hop(msg):
     m = HOP_RE.search(msg)
     if not m or LINE_RE.search(m.group(1)):     # 「坐1路到火车站」左边是线路号，不是站
         return None
-    return m.group(1).lstrip("从"), TAIL.sub("", m.group(2)).rstrip("的了")
+    a = m.group(1).lstrip("从")
+    # 「石家庄从谈固到…」：城名和「从」一起粘在出发站前面，剥掉；只认这个形状，
+    # 「广州公园前」里的城名是站名的一部分（要不要跨城，交给后面认城市）
+    for ck in cities():
+        if a.startswith(ck + "从"):
+            a = a[len(ck) + 1:]
+            break
+    return a, TAIL.sub("", m.group(2)).rstrip("的了")
 
 
 def _cands(city_name, msg):
@@ -948,6 +956,12 @@ def _place_stop(city_name, raw, other):
     return _merge_same(rows, hit) if hit else None
 
 
+def _same_station(x, y):
+    """「元氏客运站」和线路站序里的「元氏车站」是同一个站：把通用字去掉再比。"""
+    strip = lambda s: re.sub(r"(客运站|汽车站|公交站|车站|站台|站)$", "", s or "")
+    return strip(x) == strip(y)
+
+
 def _hop_plan(city_name, a, a_name, b, b_name, ra, rb):
     """没直达车时算一次换乘：先坐 A 线到某站，再换 B 线到终点。
 
@@ -964,10 +978,22 @@ def _hop_plan(city_name, a, a_name, b, b_name, ra, rb):
     for line in sorted(rb)[:4]:
         for d in ("1", "2"):
             pts = _seq_pts(city_name, line, d)
-            ib = next((p["i"] for p in pts if b_name in p["name"]), None)
+            ib = next((p["i"] for p in pts if _same_station(b_name, p["name"])), None)
             if ib is not None:
                 legs += [(line, d, p) for p in pts[:ib]]
     best = _plan_from(city_name, a_name, ra, legs)
+    if not best:
+        # 起点站线路多时（谈固站 23 条）按字母序只试前 3 条会漏掉真正接得上的那条：
+        # 直接问换乘站都有哪几路车，跟起点的线路求交，只验这一条
+        # shortcut: 只看前 10 个换乘候选站（长线单方向就 30 站，看全了每次都要多等好几秒）
+        for l2, d2, p in legs[:10]:
+            rows = [r for r in stops(city_name, p["name"]) or []
+                    if r.get("stationName") == p["name"]]
+            mine = set().union(*[set(r.get("relatedRoutes") or []) for r in rows]) if rows else set()
+            if mine & ra:
+                best = _plan_from(city_name, a_name, mine & ra, [(l2, d2, p)])
+                if best:
+                    break
     board = ()
     if not best:
         # 起点这一站的车接不上（机场 T1 只有 142/156，机场专线只停 T2）：到附近 1.5 公里内
@@ -1506,10 +1532,10 @@ def answer(msg, default_city, ctx="", key=""):
             return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
         # 有一边不是这座城的站（render_hop 的空串）：问一句，别返空让模型干等着没话说
-        if not explicit and out == "":
-            return (f"「{got[0]}」到「{got[1]}」在{norm_city(name)}的站表里没找全，"
+        if explicit:
+            return f"没查到从「{got[0]}」到「{got[1]}」的换乘方案：{norm_city(name)}站表里没有这两个站"
+        return (f"「{got[0]}」到「{got[1]}」在{norm_city(name)}的站表里没找全，"
                     f"是哪座城的？说个城市名我再查")
-        return out or ""
     # 「那玉林北站定制夜班车呢？」线名不是数字+路，parse 认不出；目录里有就当场认
     if not line and name:
         hit = _msg_line(name, msg)

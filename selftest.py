@@ -731,6 +731,15 @@ assert query._district_city("玉林北站") is None          # 撞名的裸名�
 _rh8, query.render_hop = query.render_hop, lambda ck, nm, got: f"HOP:{ck}" if ck == "石家庄" else None
 assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-d8") == "HOP:石家庄"
 query.cities, query.render_hop = _c8, _rh8
+_c9, query.cities = query.cities, lambda: {"玉林": {}, "石家庄": {}, "北流": {}}
+# 「石家庄从谈固到元氏客运站」：城名和「从」连在一起时才剥；「北流汽车总站」的城名是站名本身
+assert query.hop("石家庄从谈固到元氏客运站怎么走") == ("谈固", "元氏客运站")
+assert query.hop("从北流到玉林汽车总站") == ("北流", "玉林汽车总站")
+assert query.hop("从广州公园前到玉林北站的话，坐什么车") == ("广州公园前", "玉林北站")
+query.cities = _c9
+# 站序里写「元氏车站」、站表里叫「元氏客运站」，是同一个站；谈固站≠谈固东站
+assert query._same_station("元氏客运站", "元氏车站")
+assert not query._same_station("谈固站", "谈固东站")
 
 print("selftest ok")
 
