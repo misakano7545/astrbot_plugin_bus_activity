@@ -67,7 +67,9 @@ assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups"
                                   "note": "末班 19:50 已经开走了"}) == \
     "1 这会儿没车，末班 19:50 已经开走了"
 # 线路不存在 / 有近似线名 / 上游异常：别把机器串甩进群里
-assert query.render("玉林", "999", {"error": "没这条线路"}) == "没查到「999」这条线"
+assert query.render("玉林", "999", {"error": "没这条线路"}).startswith("没查到「999」这条线")
+# 没查到要给同城近邻，否则模型自己解释成「这数据源没有这个城市」
+assert "这边有的是" in query.render("玉林", "9", {"error": "没这条线路"})
 assert query.render("沛县", "1", {"error": "是 11路 / 17路 吗"}) == "没「1」这条，是 11路 / 17路 吗"
 assert query.render("玉林", "1", {"error": "上游这会儿没响应，过会儿再问"}) == "上游这会儿没响应，过会儿再问"
 
@@ -303,6 +305,8 @@ assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41",
 # 「车来了，看一下 G02…」：数据源后面跟逗号再跟动作词，一样得剥干净
 assert query.parse(query.SRCPRE.sub("", "车来了，看一下 G02 现在上线的有几台车")) == ("G02", "")
 assert query.parse(query.SRCPRE.sub("", "车来了查询玉林职业技术学院有没有公交车")) is None
+# 「11路还有多久到双溪口」：TAIL 的「还有」会把目的地一起吃到行尾，得先按「到」切
+assert "双溪口" in list(query._cands("泉州市", "泉州公交11路还有多久到双溪口"))
 # 上游刚挂过也不能让闲聊收到「上游没响应」——那句是「彻底变成问公交工具」的由来
 _uf = query._up_fail[0]
 query._up_fail[0] = query.time.time()

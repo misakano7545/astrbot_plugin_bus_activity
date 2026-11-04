@@ -483,7 +483,9 @@ def render(city_key, want, res, veh=""):
         if e.startswith("是 "):                       # 目录里有近似线名，报候选
             return f"没「{want}」这条，是 {e[2:]}"
         if e.startswith("没这条"):
-            return f"没查到「{want}」这条线"
+            # 光说「没查到」，模型就会自己解释成「这个数据源没有这城市的线路」（泉州 K502 就是这样）
+            near = _near(city_key, want)
+            return f"没查到「{want}」这条线" + (f"，{city_key}这边有的是 {near}" if near else "")
         return e                                      # 其余文案本身已经是人话
     line = res["line"]
     groups = res["groups"]
@@ -511,6 +513,16 @@ def render(city_key, want, res, veh=""):
             continue
         rows.append((f"往{label}：" if label else "") + "，".join(_car(*b) for b in buses))
     return "\n".join(rows)
+
+
+def _near(city_key, want, n=4):
+    """同城里跟它最像的几条线：K502 不存在就报 K501、K503，别让人以为这城根本没数据。"""
+    name = (cities().get(city_key) or {}).get("mygolbs")
+    rows = (_catalog(name).get("buslines") or []) if name else []
+    w = norm_line(want)
+    hit = sorted({r["lineName"] for r in rows},
+                 key=lambda x: -difflib.SequenceMatcher(None, norm_line(x), w).ratio())[:n]
+    return "、".join(hit) if hit and difflib.SequenceMatcher(None, norm_line(hit[0]), w).ratio() >= 0.5 else ""
 
 
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
@@ -574,13 +586,13 @@ def _cands(city_name, msg):
     city = norm_city(city_name)
     for part in re.split(r"[，,。.？?！!、\s]+", msg):
         cand = SRCPRE.sub("", part)      # 「车来了查X」里的数据源和动词
+        if LINE_RE.search(cand):
+            # 「G02到高新产业园」「11路还有多久到双溪口」：线路号后面那个才是站，先切再砍
+            cand = re.split(r"到|去|往|在|经停", cand)[-1]
         cand = LEAD.sub("", TAIL.sub("", cand))
         whole = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
         # 「广州地铁芳村站附近」：城市名和「地铁」都不是站名的一部分
         cand = re.sub(r"^(地铁|轨道交通|公交)", "", re.sub(rf"^{re.escape(city)}", "", cand))
-        if LINE_RE.search(cand):
-            # 「G02到高新产业园」：线路号后面那个才是上车站，别整片跳过
-            cand = re.split(r"到|去|往|在|经停", cand)[-1]
         # 先试剥掉城市名的「芳村站」，不行再试原样的「玉林北站」（北站是站名的一部分）
         for c in dict.fromkeys([cand, whole]):
             if len(c) >= 2 and norm_city(c) != city and not LINE_RE.search(c):
@@ -597,6 +609,8 @@ def pick_stop(city_name, msg):
 
 def _dest_after(city_name, msg, stop):
     """「G02到高新产业园，去玉林北站」：站名后面那个「去/往X」是方向，不是上车站。"""
+    if not stop:
+        return None
     m = re.search(r"(?:去|往|到)\s*([^，,。.？?！!\s]{2,12})", msg.split(stop)[-1])
     if not m:
         return None
@@ -1002,6 +1016,9 @@ def answer(msg, default_city, ctx="", key=""):
         line = (last["line"], "")
         inherited = True
     prefix = line[1] if line else ""
+    # 「泉州公交11路」「泉州公交K502」：前缀截到的是「泉州公交」，去掉「公交」才是城市名，
+    # 留着就会拼成「泉州公交K502」这种不存在的线
+    prefix = re.sub(r"公交$", "", prefix)
     if prefix in ("那", "这", "该", "此", "本"):      # 指示词不是县名，别拼进线路名
         prefix = ""
     city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
@@ -1010,6 +1027,9 @@ def answer(msg, default_city, ctx="", key=""):
     # 拿玉林的目录查裸号会静默答成玉林 11 路
     if prefix and norm_city(prefix) in cities():
         city_key, explicit = norm_city(prefix), True
+    # 同群接着问（「那 K502 呢」）：没明写城市就沿用上一条问过的城市，别落回默认城
+    if line and not explicit and last.get("city") in cities() and last["city"] != city_key:
+        city_key, explicit = last["city"], True
     if not city_key:
         # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次；
         # 再不行试上一条问过的城市——群里追问「b19 所有站点」不会重报城市名
