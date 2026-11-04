@@ -50,7 +50,7 @@ LINE_RE = re.compile(
     r"|(?<![A-Za-z0-9])(?![\u4e00-\u9fa5]{0,4}(?:地铁|轨道交通))"
     r"(?P<numline>[\u4e00-\u9fa5]{0,4}?[一二三四五六七八九十\d]{1,3}\s*号线)"
     r"|(?P<alpha>(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9]))(?:\s*路)?"
-    r"|(?P<num>\d{1,3})\s*路(?P<qual>夜班|区间|支线|快线|专线)?"
+    r"|(?P<num>\d{1,3})\s*[路线](?P<qual>夜班|区间|支线|快线|专线)?"
     # 「131区间」不带「路」也算线路——石家庄目录里就叫「131路区间」
     r"|(?P<inum>\d{1,3})\s*(?P<iqual>区间|支线|快线|专线)"
     r"|(?P<cnnum>[一二三四五六七八九十]{1,3})\s*路"
@@ -80,7 +80,7 @@ JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|
 # 不单独算信号；实词、线号、数据源名才是。
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|\d{1,3}\s*路|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])")
+    r"怎么坐|直达|换乘|车来了|掌上公交|\d{1,3}\s*[路线]|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])")
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
 ASK = re.compile(r"多久|几站|几分钟|几辆|几台|几点|有车|有没有|有吗|还有|在哪|到哪|到吗|怎么坐|怎么去|"
@@ -567,7 +567,13 @@ def _car(plate, stn, dist, status=""):
     return f"{plate} {stn} {dist / 1000:.1f}km" if dist >= 1000 else f"{plate} {stn} {round(dist)}m"
 
 
-def render(city_key, want, res, veh=""):
+def _dir(msg):
+    """「往呈贡广场方向」问的是单向：只留这个方向的车/时刻。"""
+    m = re.search(r"(?:往|去|到)\s*([^，,。.？?！!\s]{2,12}?)\s*方向", msg or "")
+    return m.group(1) if m else ""
+
+
+def render(city_key, want, res, veh="", dir=""):
     if "error" in res:
         e = res["error"]
         if e.startswith("是 "):                       # 目录里有近似线名，报候选
@@ -586,6 +592,13 @@ def render(city_key, want, res, veh=""):
                     or "、".join(str(b[0]) for _, bs in groups for b in bs))
             return f"{line} 这会儿没跑 {veh} 这辆" + (f"。在路上的：{here}" if here else "")
         groups = [(lab, [b for b in bs if _veh(b, veh)]) for lab, bs in groups]
+    if dir:      # 「往X方向」只留这个方向；方向名对不上就别瞎删
+        only = [(lab, bs) for lab, bs in groups if dir in (lab or "")]
+        if only:
+            groups = only
+            if not any(bs for _, bs in groups):
+                # 这个方向没车报位置 ≠ 停运；昆明这类城上游不给到站预测，只能看车在哪
+                return f"{line} 往{dir}方向这会儿没车报位置（这城上游不给到站时间，只能看车在哪）"
     total = sum(len(b) for _, b in groups)
     if not total:
         # 「没车」和「上游没给车辆位置」是两件事，后者会被乘客读成停运（见 issue #2）
@@ -617,7 +630,7 @@ def _near(city_key, want, n=4):
 
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|吗|呢|啊).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|吗|呢|啊).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -772,8 +785,9 @@ def _dest_after(city_name, msg, stop):
     m = re.search(r"(?:去|往|到)\s*([^，,。.？?！!\s]{2,12})", msg.split(stop)[-1])
     if not m:
         return None
-    # 「去玉林北站要等多久」：站名后面跟的是「要/等多久」，砍掉再搜，别指望模糊匹配
-    got, _ = find_stop(city_name, TAIL.sub("", re.split(r"要|等", m.group(1))[0]))
+    # 「往呈贡广场方向什么时候能到」：方向后面跟的是「方向」和问法，砍掉再搜
+    raw = re.sub(r"方向.*$", "", re.split(r"要|等", m.group(1))[0])
+    got, _ = find_stop(city_name, TAIL.sub("", raw))
     return (got or {}).get("stationName")
 
 
@@ -1032,14 +1046,17 @@ def render_stops(city_name, want):
     return "\n\n".join(out) or None
 
 
-def render_times(city_name, want):
+def render_times(city_name, want, msg=""):
     """「G02 首班几点」问的是时刻表，不是实时车——有车没车都得回答时间。"""
     rows = _catalog(city_name).get("buslines") or []
     hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
+    only = _dir(msg)
     out = []
     for name, row in hit:
         d = str(row.get("upperOrDown") or "")
         if d not in ("1", "2"):
+            continue
+        if only and only not in (row.get("to") or ""):     # 「往X方向的首末班」只念这个方向
             continue
         f, l = _first_last(city_name, name, d)
         if f or l:                                   # 两个方向时刻不同就各念一行
@@ -1318,7 +1335,7 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     if name:
         for w in wants:
             if TIMES_RE.search(msg):          # 问首末班时刻表
-                out = render_times(name, w)
+                out = render_times(name, w, msg)
             elif COMPANY_RE.search(msg):      # 问公司/找失物/投诉
                 out = render_company(name, w)
             elif STOPS_RE.search(msg):       # 要的是站表，别回实时车
@@ -1329,7 +1346,7 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
                 return out
     vm = VEH_RE.search(msg)
     veh = next((g for g in vm.groups() if g), "") if vm else ""
-    txt = render(city_key, wants[0], query(city_key, wants, src, veh), veh)
+    txt = render(city_key, wants[0], query(city_key, wants, src, veh), veh, _dir(msg))
     # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
     if not explicit and txt.startswith("没查到"):
         txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"

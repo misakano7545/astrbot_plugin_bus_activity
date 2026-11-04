@@ -669,6 +669,17 @@ _c7, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}, "
 assert query.detect_city("南海区8路", "南海区", "玉林市")[0] == "佛山"  # 区县名在句子里也能猜
 query.cities = _c7
 
+# 用户常写的「XX市XX线」：不带「路」也得认，BUS_RE 也要认，否则 bus_query 返回 None
+assert query.parse("昆明市219线有几趟车") == ("219", "昆明市")
+assert query.BUS_RE.search("昆明市219线有几趟车")
+# 「往呈贡广场方向」只答这个方向
+assert query._dir("我在昆明市的雨花公交枢纽站，219路往呈贡广场方向什么时候能到") == "呈贡广场"
+assert query._dir("219路现在有几辆车") == ""
+_rd = query.render("昆明", "219", {"line": "219路",
+        "groups": [("呈贡广场", [("08820", "回回营", 0, "")]), ("雨花公交枢纽站", [("08825", "和谐路口", 600, "")])]},
+        dir="雨花公交枢纽站")
+assert "08825" in _rd and "08820" not in _rd, _rd
+
 print("selftest ok")
 
 if "--live" in sys.argv:
