@@ -305,6 +305,14 @@ assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41",
 # 「车来了，看一下 G02…」：数据源后面跟逗号再跟动作词，一样得剥干净
 assert query.parse(query.SRCPRE.sub("", "车来了，看一下 G02 现在上线的有几台车")) == ("G02", "")
 assert query.parse(query.SRCPRE.sub("", "车来了查询玉林职业技术学院有没有公交车")) is None
+# 带线路号的闲聊（「11路那车真挤」）不该被快路抢答，纯报号照答
+assert not query.looks_like_ask("今天坐9路回家累死了")
+assert not query.looks_like_ask("11路那车真挤")
+assert not query.looks_like_ask("你觉得G02这名字好听吗")
+assert query.looks_like_ask("11路")
+assert query.looks_like_ask("玉林9路")
+assert query.looks_like_ask("9路有车吗")
+assert query.looks_like_ask("我在市政广场能不能等到G02")
 # 一句问两条线（「樟13 / 12路」「11路和12路」）要都答，别只答第一条
 assert [n for n, _ in query._lines("福州永泰闽运\n樟13\n12路目前运行情况")] == ["12", "樟13"]
 assert [n for n, _ in query._lines("11路和12路")] == ["11", "12"]
