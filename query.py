@@ -778,6 +778,25 @@ def pick_stop(city_name, msg):
     return None
 
 
+def _stop_lines(city_name, text):
+    """这段文字里的站经停哪些线：「这四条线路哪个在跑」拿它把范围收到站上。"""
+    name = pick_stop(city_name, text)
+    rows = stops(city_name, name) if name else None
+    if not rows:
+        return None, []
+    row = next((r for r in rows if r.get("stationName") == name), rows[0])
+    return name, [n for _, rs in _same_rows(rows, row) for n in rs]
+
+
+def _msg_line(city_name, msg):
+    """句子里点名的真线名不是「数字+路」（「玉林北站定制夜班车」）：按目录认。"""
+    for r in _catalog(city_name).get("buslines") or []:
+        n = r.get("lineName") or ""
+        if len(n) >= 4 and n in msg:
+            return n
+    return None
+
+
 def _dest_after(city_name, msg, stop):
     """「G02到高新产业园，去玉林北站」：站名后面那个「去/往X」是方向，不是上车站。"""
     if not stop:
@@ -1259,7 +1278,7 @@ def _sweep_chelaile(city_name):
             + "".join(f"\n{k} {c} 辆（{e}）" for k, c, e in live))
 
 
-def render_sweep(city_name, want_plates=False):
+def render_sweep(city_name, want_plates=False, only=None):
     """全城扫一遍：这会儿哪些线路真有车在路上。"""
     rows = _catalog(city_name).get("buslines") or []
     ends, dirs = {}, {}
@@ -1270,10 +1289,17 @@ def render_sweep(city_name, want_plates=False):
         if d in ("1", "2"):
             dirs.setdefault(name, []).append(d)
     names = [n for n in ends if dirs.get(n)]
+    if only:      # 「这四条线路哪个在跑」：只扫这个站的线路，别拿全城目录答
+        want = {norm_line(x) for x in only}
+        names = [n for n in names if norm_line(n) in want]
+        if not names:
+            return ""
     if not names:      # 掌上这座城没有线路目录（北海就是），换车来了扫
         return _sweep_chelaile(city_name)
     # 抽 3 条线看有没有实时：只问第一条，一条线的 hasReal 就能让整城短路
     if all(str(_live_my(city_name, n, dirs[n][0]).get("hasReal")) == "0" for n in names[:3]):
+        if only:      # 站上的线查不出实时，别拿全城扫替答
+            return ""
         # 掌上不给（北京、成都），车来了也许给，先问车来了再说查不到
         return _sweep_chelaile(city_name) or \
             f"{city_name}上游不提供实时车辆位置，线路目录能查到，车在哪查不到"
@@ -1292,6 +1318,16 @@ def render_sweep(city_name, want_plates=False):
         per[n] += len(cs)
         pl.setdefault(n, []).extend(cs)
     live = sorted(((n, c) for n, c in per.items() if c), key=lambda x: -x[1])
+    if only:      # 问的是这几条线：哪条在跑、哪条没车，都得说，别只报在跑的
+        def row(n):
+            if not per[n]:
+                return f"\n{n} 没车报位置"
+            if want_plates:
+                return f"\n{n}：" + "、".join(
+                    f"{c.get('busNumber')}（{c.get('stationName') or '在途'}）" for c in pl[n][:6]
+                ) + (f" 等 {per[n]} 辆" if per[n] > 6 else "")
+            return f"\n{n} {per[n]} 辆"
+        return f"{city_name}这 {len(names)} 条线这会儿：" + "".join(row(n) for n in names)
     if not live:
         if note:
             return f"{city_name}这会儿抽查了 {len(names)} 条主线，都没车报位置，可能都收班了"
@@ -1442,6 +1478,11 @@ def answer(msg, default_city, ctx="", key=""):
             return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
         return out or ""      # render_hop 返回空串 = 有一边不是公交站，交回给模型
+    # 「那玉林北站定制夜班车呢？」线名不是数字+路，parse 认不出；目录里有就当场认
+    if not line and name:
+        hit = _msg_line(name, msg)
+        if hit:
+            line, prefix = (hit, ""), ""
     if name and TRANSFER_RE.search(msg):
         # 「这条线路每站能换什么」没有线路号，用上一条答过的线路
         want = (prefix + line[0] if prefix and not explicit else line[0]) if line else last.get("line") or ""
@@ -1468,7 +1509,13 @@ def answer(msg, default_city, ctx="", key=""):
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
         pl = re.search(r"车牌|号牌", msg)
         if pl or (SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg)):
-            return render_sweep(name, bool(pl))
+            # 「这四条线路哪条在跑」范围是刚才那个站，不是全城：引用里那句站表也算
+            sname, only = _stop_lines(name, msg + " " + ctx)
+            # 没引用的紧接追问（「那这四条线路哪条在跑」）靠指示词认，别把「全城还有哪些在跑」也收窄
+            if (not only and last.get("stop")
+                    and re.search(r"这四|这几|这些|上面|刚才|四条|几条|哪条|哪个", msg)):
+                only = _stop_lines(name, last["stop"])[1]
+            return render_sweep(name, bool(pl), only or None)
         out = render_stop(city_key, name, msg, src)
         # 「伦教街道办事处公交线路」没写城市：默认城没这个站就沿用上一条问过的城，
         # 佛山 342 路问完接着问伦教，别去玉林的站表里找
@@ -1478,6 +1525,8 @@ def answer(msg, default_city, ctx="", key=""):
             if out:
                 last["city"] = prev
         if out:
+            # 记一句是哪个站，「这四条线路哪条在跑」要靠它收窄，不能拿全城目录答
+            last["stop"] = pick_stop(name, msg) or last.get("stop")
             return out
         # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）
         if not explicit and re.search(r"站|线路|几路", msg):

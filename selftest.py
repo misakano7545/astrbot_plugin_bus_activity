@@ -204,7 +204,7 @@ query._post = _post
 
 # 全城扫：认不出站名时才走 sweep，「十字街有几路车」不能被它抢走
 assert query.SWEEP_RE.search("还有哪条线路有公交车")
-_sweep, query.render_sweep = query.render_sweep, lambda city, plates=False: f"SWEEP:{city}"
+_sweep, query.render_sweep = query.render_sweep, lambda city, plates=False, only=None: f"SWEEP:{city}"
 _stop, query.render_stop = query.render_stop, lambda *a: None
 assert query.answer("玉林 还有哪条线路有公交车", "玉林市") == "SWEEP:玉林市"
 assert query.answer("玉林 今天天气怎么样", "玉林市") == ""      # 不像公交问题就交给 LLM
@@ -221,7 +221,7 @@ _lm, query._live_my = query._live_my, lambda cn, n, d, order=1: {
 assert "桂K1" in query.render_sweep("玉林市", True)
 assert "桂K1" not in query.render_sweep("玉林市")
 query._catalog, query._live_my = _cat, _lm
-_sw2, query.render_sweep = query.render_sweep, lambda city, plates=False: f"SWEEP:{city}:{plates}"
+_sw2, query.render_sweep = query.render_sweep, lambda city, plates=False, only=None: f"SWEEP:{city}:{plates}"
 assert query.answer("那么每辆车的车牌是啥", "玉林市",
                     "有，这会儿还在跑 5 条：6路夜班 3 辆、26路 3 辆") == "SWEEP:玉林市:True"
 query.render_sweep = _sw2
@@ -550,7 +550,7 @@ query.cities, query.chelaile.lines, query.chelaile.live = _cit2, _cl2, _lv2
 query._cache.clear()
 
 # 没直达车要给出换乘方案：「从玉福路口到玉林北站」坐 6路 到汽车总站换 G02
-_seq = [2840, 2841]
+_seq = [query._catalog, query._station_seq]  # 存原函数，别拿数字占位
 query._catalog = lambda cn: {"buslines": [
     {"lineName": "6路", "upperOrDown": "2", "from": "甲", "to": "人民大北路口"},
     {"lineName": "G02路", "upperOrDown": "1", "from": "汽车总站（二医院）", "to": "玉林北站"}]}
@@ -695,6 +695,19 @@ _rd = query.render("昆明", "219", {"line": "219路",
         "groups": [("呈贡广场", [("08820", "回回营", 0, "")]), ("雨花公交枢纽站", [("08825", "和谐路口", 600, "")])]},
         dir="雨花公交枢纽站")
 assert "08825" in _rd and "08820" not in _rd, _rd
+
+# 「这四条线路哪条在跑」范围是那个站，不是全城；「玉林北站定制夜班车」线名不是数字+路
+_cat4, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": n, "upperOrDown": "1", "from": "A", "to": "B"}
+    for n in ("G01路", "玉林北站定制夜班车")]}
+_lm4, query._live_my = query._live_my, lambda cn, n, d, order=1: {
+    "hasReal": "1", "list": [{"busNumber": "桂K1", "stationName": "S"}]
+    if n.startswith("玉林") else []}
+_s4 = query.render_sweep("玉林市", False, ["G01路", "玉林北站定制夜班车"])
+assert "玉林北站定制夜班车 1 辆" in _s4 and "G01路 没车报位置" in _s4, _s4
+assert query._msg_line("玉林市", "那玉林北站定制夜班车呢？") == "玉林北站定制夜班车"
+assert query._msg_line("玉林市", "玉林北站有哪几条公交线？") is None
+query._catalog, query._live_my = _cat4, _lm4
 
 print("selftest ok")
 
