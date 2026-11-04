@@ -909,6 +909,51 @@ def _hop_line(city_name, line, d, ia, ib):
     return f"，下一辆约 {max(1, round(eta[0]))} 分钟后到，坐过去 {max(1, round(_run(payload, ia, ib)))} 分钟"
 
 
+def _ask111(city_name, a, b):
+    d = _cached("plan", f"{city_name}|{a}|{b}", 60, lambda: _post({
+        "CMD": "111", "CITYNAME": city_name, "STARTPOINTNAME": a, "STARTPOINTLNG": "",
+        "STARTPOINTLAT": "", "ENDPOINTNAME": b, "ENDPOINTLNG": "", "ENDPOINTLAT": ""}))
+    info = d.get("info") if isinstance(d, dict) else None
+    return info if isinstance(info, list) else []
+
+
+def render_plan(city_name, a, b):
+    """掌上自己的换乘方案（CMD=111）：两次换乘也排、总时长和步行距离都算好还排了序。
+    我们手算的只换一次、按「换得最早」挑，经常不是最快的那个。
+    shortcut: 只取前 2 个方案，群消息再长没人看；坐标留空，按站名查就够
+    """
+    info = _ask111(city_name, a, b)
+    if not info:
+        # 群里说的是「玉林汽车总站」，平台站牌就写「汽车总站」——名字对不上上游排不出方案
+        ra = (find_stop(city_name, a)[0] or {}).get("stationName")
+        rb = (find_stop(city_name, b)[0] or {}).get("stationName")
+        if ra or rb:
+            info = _ask111(city_name, ra or a, rb or b)
+    rows = []
+    for k, p in enumerate(info[:2]):
+        legs = [lg for key in ("routeUpDownSimple1", "routeUpDownSimple2", "routeUpDownSimple3")
+                for lg in (p.get(key) or []) if lg.get("routeName")]
+        if k == 0 and len(legs) < 2:
+            return ""       # 能直达就让 render_hop 答——它带车在哪、首末班，这里排不出这些
+        ride = ""
+        for leg in legs:
+            nm = leg["routeName"]
+            if nm in ride:
+                continue
+            ride += f"，到{leg.get('upStationName')}换 {nm}" if ride else f"坐 {nm}"
+        if not ride:
+            continue
+        bits = [x for x in (p.get("stationNum"),
+                            p.get("totalTime") and f"约{p['totalTime']}",
+                            p.get("totalWalkDistance") and f"走路{p['totalWalkDistance']}") if x]
+        rows.append(ride + (f"，{'、'.join(bits)}" if bits else ""))
+    if not rows:
+        return ""
+    if len(rows) == 1:
+        return f"从{a}到{b}：{rows[0]}"
+    return f"从{a}到{b}：\n{rows[0]}\n或者{rows[1]}"
+
+
 def render_hop(city_key, city_name, raw):
     """A 站到 B 站：拿两站的经停线路求交，再按站序验方向，验不过的不算直达。"""
     a, a_name = find_stop(city_name, raw[0])
@@ -1534,7 +1579,10 @@ def answer(msg, default_city, ctx="", key=""):
     got = hop(msg)
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
     # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城
-    out = render_hop(city_key, name, got) if (got and name) else None
+    # 掌上自己有换乘方案（CMD=111：两次换乘也排、按总时长排序），先问它——手算的只换一次，
+    # 经常不是最快那条
+    out = ((render_plan(name, got[0], got[1]) or render_hop(city_key, name, got))
+           if (got and name) else None)
     # 站名里带裸县名（「元氏火车站」）：先在那个县所在的城查，别落回默认城交白卷
     if not out and got and not explicit:
         dc = _district_city(got[0] + got[1])

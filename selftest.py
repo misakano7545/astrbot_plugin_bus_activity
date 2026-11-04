@@ -735,8 +735,9 @@ _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
 assert query._district_city("机场一号航站楼元氏火车站") == "石家庄"
 assert query._district_city("玉林北站") is None          # 撞名的裸名不收，别乱猜
 _rh8, query.render_hop = query.render_hop, lambda ck, nm, got: f"HOP:{ck}" if ck == "石家庄" else None
+_rp8, query.render_plan = query.render_plan, lambda nm, a, b: ""
 assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-d8") == "HOP:石家庄"
-query.cities, query.render_hop = _c8, _rh8
+query.cities, query.render_hop, query.render_plan = _c8, _rh8, _rp8
 _c9, query.cities = query.cities, lambda: {"玉林": {}, "石家庄": {}, "北流": {}}
 # 「石家庄从谈固到元氏客运站」：城名和「从」连在一起时才剥；「北流汽车总站」的城名是站名本身
 assert query.hop("石家庄从谈固到元氏客运站怎么走") == ("谈固", "元氏客运站")
@@ -746,6 +747,27 @@ query.cities = _c9
 # 站序里写「元氏车站」、站表里叫「元氏客运站」，是同一个站；谈固站≠谈固东站
 assert query._same_station("元氏客运站", "元氏车站")
 assert not query._same_station("谈固站", "谈固东站")
+
+# 换乘先问掌上自己的方案（CMD=111）：多条、按总时长排序、带步行距离
+_p111, query._post = query._post, lambda p, timeout=8: (
+    {"status": 1, "info": [{
+        "stationNum": "21站", "totalTime": "1小时6分钟", "totalWalkDistance": "371米",
+        "routeUpDownSimple1": [{"routeName": "28路", "upStationName": "玉林火车站"}],
+        "routeUpDownSimple2": [{"routeName": "北流105路", "upStationName": "北流客运中心"}],
+    }, {
+        "stationNum": "31站", "totalTime": "1小时14分钟",
+        "routeUpDownSimple1": [{"routeName": "G01路", "upStationName": "玉林火车站"}],
+        "routeUpDownSimple2": [{"routeName": "玉林至北流城际公交线路", "upStationName": "玉林高中初中部"}],
+    }]} if p.get("ENDPOINTNAME") == "北流汽车总站" else
+    {"status": 1, "info": [{"stationNum": "27站", "totalTime": "49分钟",
+                            "routeUpDownSimple1": [{"routeName": "G02路", "upStationName": "玉林汽车总站"}]}]})
+assert query.render_plan("玉林市", "玉林火车站", "北流汽车总站") == (
+    "从玉林火车站到北流汽车总站：\n"
+    "坐 28路，到北流客运中心换 北流105路，21站、约1小时6分钟、走路371米\n"
+    "或者坐 G01路，到玉林高中初中部换 玉林至北流城际公交线路，31站、约1小时14分钟")
+assert query.render_plan("玉林市", "玉林汽车总站", "玉林北站") == ""   # 直达交回 render_hop，那边带车在哪
+query._post = _p111
+query._cache.clear()
 
 print("selftest ok")
 
