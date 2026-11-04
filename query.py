@@ -403,7 +403,7 @@ def query(city_key, wants, src=None, veh=""):
     点名的那家没有这条线时仍要能答上来。
     """
     ent = cities().get(city_key) or {}
-    tried, blank, near, fallback = [], None, None, None
+    tried, blank, near, fallback, others = [], None, None, None, {}
     order = ("chelaile", "mygolbs") if PREFER_CL.get(city_key) else ("mygolbs", "chelaile")
     if src:
         order = (src,) + tuple(s for s in order if s != src)
@@ -432,7 +432,9 @@ def query(city_key, wants, src=None, veh=""):
                 hit = [(lab, [b for b in grp if _veh(b, veh)]) for lab, grp in got["groups"]]
                 if any(g for _, g in hit):
                     return dict(got, groups=hit)
+                # 这家没这辆车：记下它路上有谁，接着问另一家——一家没有不等于没有
                 fallback = fallback or got
+                others[LABEL[source]] = [str(b[0]) for _, bs in got["groups"] for b in bs]
                 continue
             if got:
                 # 掌上这座城没实时（unknown），记下来，下一问直接先问车来了
@@ -445,7 +447,8 @@ def query(city_key, wants, src=None, veh=""):
         # 城市表里没这个键：要么名字写错，要么两家都不覆盖，别把话说成「两家都没有」
         return {"error": "这个城市名没认出来，写全称或把城市补在路线前面试试"}
     if fallback:
-        return fallback        # 这条线有车，只是没有问的那辆；render 会说明并列出在跑的
+        # 这条线有车，只是没有问的那辆：两家查到的一起报，别让群友以为只查了一家
+        return dict(fallback, veh_others=others)
     if near:
         return near
     if tried and all("异常" in t for t in tried):
@@ -481,8 +484,10 @@ def render(city_key, want, res, veh=""):
     groups = res["groups"]
     if veh:
         if not any(_veh(b, veh) for _, bs in groups for b in bs):
-            here = "、".join(str(b[0]) for _, bs in groups for b in bs)
-            return f"{line} 这会儿没跑 {veh} 这辆" + (f"，在路上的有：{here}" if here else "")
+            per = res.get("veh_others") or {}
+            here = ("；".join(f"{k} {'、'.join(v)}" for k, v in per.items() if v)
+                    or "、".join(str(b[0]) for _, bs in groups for b in bs))
+            return f"{line} 这会儿没跑 {veh} 这辆" + (f"。在路上的：{here}" if here else "")
         groups = [(lab, [b for b in bs if _veh(b, veh)]) for lab, bs in groups]
     total = sum(len(b) for _, b in groups)
     if not total:
