@@ -433,6 +433,8 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？
 TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的话|还有|吗|呢|啊).*$")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
+# 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
+MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
 
 
@@ -814,7 +816,7 @@ def _last(key):
 def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     last = _last(key)
-    msg = AT_RE.sub(" ", msg)
+    msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
     line = parse(msg)
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
     sm = SRC_RE.search(msg)

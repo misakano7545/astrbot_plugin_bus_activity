@@ -258,6 +258,11 @@ query.answer("你从车来了的这个看一下数据怎么样？", "玉林市",
 assert _cap2[-1] == ("玉林", ["9"], "chelaile"), _cap2[-1]
 query.query, query.cities, query.render_at = _q2, _ct2, _ra2
 
+# 图片消息的 base64 里有「yJ0」，别当成线路号（答成「没查到了YJ0这条线」）
+_IMG = '<attachmentType="image/jpeg",attachmentIndex=0,description="eyJ0ZXh0IjoiW+WbvueJh10ifQ==">'
+assert query.answer(_IMG, "玉林市") == "", query.answer(_IMG, "玉林市")
+assert query.answer("[图片]", "玉林市") == ""
+
 # 「用车来了看看有G02」里的「了看看有」不是县名——别把动词当城市前缀，答成「是哪儿的公交」
 assert query.parse("用车来了看看有G02都有哪几台车") == ("G02", "")
 assert query.parse("玉林 用车来了看看G02") == ("G02", "")
