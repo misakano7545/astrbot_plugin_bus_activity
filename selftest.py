@@ -303,6 +303,10 @@ assert query.parse("石家庄131路有没有车") == ("131", "石家庄")
 _st = query.stops
 query.stops = lambda cn, kw: [{"stationName": "芳村", "relatedRoutes": ["19路"]}] if kw == "芳村站" else []
 assert query.pick_stop("广州市", "广州地铁芳村站附近有多少条公交线") == "芳村"
+# 「泉州丰州公交站现在有什么车」：站牌上就叫「丰州」，没有「公交站」这个后缀，而且只有 2 字
+query.stops = lambda cn, kw: [{"stationName": "丰州", "relatedRoutes": ["6路"]}] if kw == "丰州" else []
+assert query.pick_stop("泉州市", "泉州丰州公交站现在有什么车") == "丰州"
+query.stops = _st
 # 站表不许截断：23 条就报 23 条，否则用户再问「剩下的呢」认不出站名
 _cat, _stops = query._catalog, query.stops
 query._catalog = lambda cn: {"buslines": [{"lineName": f"{i}路", "from": "甲", "to": "乙"} for i in range(23)]}
