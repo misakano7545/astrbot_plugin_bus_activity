@@ -80,7 +80,7 @@ JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|
 # 不单独算信号；实词、线号、数据源名才是。
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|\d{1,3}\s*[路线]|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])")
+    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|\d{1,3}\s*[路线]|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])")
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
 ASK = re.compile(r"多久|几站|几分钟|几辆|几台|几点|有车|有没有|有吗|还有|在哪|到哪|到吗|怎么坐|怎么去|"
@@ -1259,7 +1259,7 @@ def _sweep_chelaile(city_name):
             + "".join(f"\n{k} {c} 辆（{e}）" for k, c, e in live))
 
 
-def render_sweep(city_name):
+def render_sweep(city_name, want_plates=False):
     """全城扫一遍：这会儿哪些线路真有车在路上。"""
     rows = _catalog(city_name).get("buslines") or []
     ends, dirs = {}, {}
@@ -1286,15 +1286,23 @@ def render_sweep(city_name):
         note = f"（抽查了 {len(names)} 条主线）"
     jobs = [(n, d) for n in names for d in dirs[n]]
     with ThreadPoolExecutor(max_workers=8) as pool:
-        counts = pool.map(lambda j: len(_live_my(city_name, j[0], j[1]).get("list") or []), jobs)
-    per = {n: 0 for n in names}
-    for (n, _), c in zip(jobs, counts):
-        per[n] += c
+        cars = list(pool.map(lambda j: _live_my(city_name, j[0], j[1]).get("list") or [], jobs))
+    per, pl = {n: 0 for n in names}, {}
+    for (n, _), cs in zip(jobs, cars):
+        per[n] += len(cs)
+        pl.setdefault(n, []).extend(cs)
     live = sorted(((n, c) for n, c in per.items() if c), key=lambda x: -x[1])
     if not live:
         if note:
             return f"{city_name}这会儿抽查了 {len(names)} 条主线，都没车报位置，可能都收班了"
         return f"{city_name}这会儿全线都没车报位置，可能都收班了"
+    if want_plates:      # 「每辆车的车牌」：掌上给 busNumber，车来了那套是内部编号，不冒充车牌
+        # shortcut: 每线只列前 6 辆，线多的城要用户点名查
+        return (f"{city_name}这会儿在跑的车{note}："
+                + "".join("\n" + n + "：" + "、".join(
+                    f"{c.get('busNumber')}（{c.get('stationName') or '在途'}）" for c in pl[n][:6])
+                    + (f" 等 {len(pl[n])} 辆" if len(pl[n]) > 6 else "")
+                    for n, _ in live))
     return (f"{city_name}这会儿有 {len(live)} 条线在跑{note}："
             + "".join(f"\n{n} {c} 辆（{ends[n]}）" for n, c in live))
 
@@ -1364,7 +1372,10 @@ def answer(msg, default_city, ctx="", key=""):
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
     line = parse(msg)
-    if not line and ctx:        # 引用别人那句追问「这路还有几辆」，线路号在被引用的话里
+    if not line and ctx and not re.search(r"在跑|运营|哪条|哪些|全部|车牌|号牌", msg):
+        # 引用别人那句追问「这路还有几辆」，线路号在被引用的话里。
+        # 但本句问的是全城（「还有没有在跑的线路」「每辆车的车牌」）时不能拿引用里那一路顶替——
+        # 引用的是「还有 5 条在跑」，parse(ctx) 会随便挑一条线答成它的实时
         line = parse(ctx)
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
     inherited = False
@@ -1455,8 +1466,9 @@ def answer(msg, default_city, ctx="", key=""):
         return _one(city_key, name, line[0], prefix, msg, src, explicit, last)
     if name:
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
-        if SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg):
-            return render_sweep(name)
+        pl = re.search(r"车牌|号牌", msg)
+        if pl or (SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg)):
+            return render_sweep(name, bool(pl))
         out = render_stop(city_key, name, msg, src)
         # 「伦教街道办事处公交线路」没写城市：默认城没这个站就沿用上一条问过的城，
         # 佛山 342 路问完接着问伦教，别去玉林的站表里找

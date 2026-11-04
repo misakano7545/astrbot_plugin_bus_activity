@@ -204,11 +204,27 @@ query._post = _post
 
 # 全城扫：认不出站名时才走 sweep，「十字街有几路车」不能被它抢走
 assert query.SWEEP_RE.search("还有哪条线路有公交车")
-_sweep, query.render_sweep = query.render_sweep, lambda city: f"SWEEP:{city}"
+_sweep, query.render_sweep = query.render_sweep, lambda city, plates=False: f"SWEEP:{city}"
 _stop, query.render_stop = query.render_stop, lambda *a: None
 assert query.answer("玉林 还有哪条线路有公交车", "玉林市") == "SWEEP:玉林市"
 assert query.answer("玉林 今天天气怎么样", "玉林市") == ""      # 不像公交问题就交给 LLM
 query.render_sweep, query.render_stop = _sweep, _stop
+
+# 「每辆车的车牌是啥」引用「还有 5 条在跑」追问：不能拿引用里那一路顶替，要扫全城带车牌
+assert query.BUS_RE.search("那么每辆车的车牌是啥")
+assert query.looks_like_ask("那么每辆车的车牌是啥")
+_cat, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "9路", "upperOrDown": "1", "from": "A", "to": "B"}]}
+_lm, query._live_my = query._live_my, lambda cn, n, d, order=1: {
+    "hasReal": "1", "list": [{"busNumber": "桂K1", "stationName": "S1"},
+                             {"busNumber": "桂K2", "stationName": "S2"}]}
+assert "桂K1" in query.render_sweep("玉林市", True)
+assert "桂K1" not in query.render_sweep("玉林市")
+query._catalog, query._live_my = _cat, _lm
+_sw2, query.render_sweep = query.render_sweep, lambda city, plates=False: f"SWEEP:{city}:{plates}"
+assert query.answer("那么每辆车的车牌是啥", "玉林市",
+                    "有，这会儿还在跑 5 条：6路夜班 3 辆、26路 3 辆") == "SWEEP:玉林市:True"
+query.render_sweep = _sw2
 
 # hasReal=0 是「上游没给车辆位置」，不是「没车」，不能混成一句谎话
 assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
