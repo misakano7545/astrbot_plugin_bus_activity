@@ -43,8 +43,25 @@ LINE_RE = re.compile(
     r"(?P<metro>(?:地铁|轨道交通)\s*\d+\s*号线|地铁\s*[\u4e00-\u9fa5]{1,3}线)"
     r"|(?P<alpha>[A-Za-z]{1,2}\d{1,3})(?:\s*路)?"
     r"|(?P<num>\d{1,3})\s*路(?P<qual>夜班)?"
+    r"|(?P<cnnum>[一二三四五六七八九十]{1,3})\s*路"
 )
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
+# 「八路」「十路」「二十三路」：口语报线路号不带阿拉伯数字
+CN_DIGIT = {c: i for i, c in enumerate("零一二三四五六七八九", 0)}
+
+
+def _cn_num(s):
+    """中文数字 → 阿拉伯数字；不是中文数字返回 None。"""
+    if not s or any(c not in CN_DIGIT and c not in "十百两" for c in s):
+        return None
+    s = s.replace("两", "二")
+    if "十" in s:
+        a, _, b = s.partition("十")
+        return (CN_DIGIT.get(a, 1) or 1) * 10 + (CN_DIGIT.get(b, 0) if b else 0)
+    n = 0
+    for c in s:
+        n = n * 10 + CN_DIGIT[c]
+    return n
 # 「用车来了看看有G02」里的「了看看有」不是县名，是动词和语气词
 JUNK_HEAD = re.compile(r"^(?:车来了|掌上公交|掌上|帮我|麻烦|你|我|再|还|也|就|那|这)+")
 JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|部|辆|只|几)+$")
@@ -77,7 +94,8 @@ def parse(msg):
     if not m:
         return None
     pre = PREFIX_RE.search(msg[: m.start()])
-    num = (m.group("alpha") or m.group("num") or m.group("metro")) + (m.group("qual") or "")
+    num = (m.group("alpha") or m.group("num") or m.group("metro")
+           or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
     return norm_line(num), pre
 
@@ -154,6 +172,15 @@ def detect_city(msg, prefix, default_city):
     if prefix and prefix != key and not key.startswith(prefix):
         return None, False
     return key, False
+
+
+def _covered(raw):
+    """掌上有没有这座城的数据。表外的县级市（义乌、慈溪、晋江）有，巩义、昆山没有。"""
+    try:
+        r = _cached("probe-city", raw, CITY_TTL, lambda: _post({"CMD": "119", "CITYNAME": raw}))
+    except Exception:
+        return False
+    return r.get("status") == "1" and bool(r.get("buslines"))
 
 
 def _pick(catalog, want):
@@ -843,9 +870,15 @@ def answer(msg, default_city, ctx="", key=""):
                     break
         if not city_key and (hop(msg) or not prefix):      # 「从A到B」「X站有哪几路」不许城市名也能答
             city_key = base if base in cities() else None
+        # 表里只有 320 城，县级市常缺（义乌、慈溪、晋江掌上都有）：拿原名直接问掌上
+        if not city_key and len(prefix) >= 2:
+            if not _covered(prefix):
+                return f"{prefix}上游没有公交数据（掌上、车来了都没覆盖），公交查不了"
+            city_key = norm_city(prefix)
     if not city_key:
         return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
-    name = (cities().get(city_key) or {}).get("mygolbs")
+    # 表外城市直接用用户写的中文名当 CITYNAME（掌上就吃中文名）
+    name = (cities().get(city_key) or {}).get("mygolbs") or (prefix if city_key not in cities() else None)
     last["city"] = city_key
     got = hop(msg)
     if got:

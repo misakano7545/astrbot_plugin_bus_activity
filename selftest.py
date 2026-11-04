@@ -258,6 +258,13 @@ query.answer("你从车来了的这个看一下数据怎么样？", "玉林市",
 assert _cap2[-1] == ("玉林", ["9"], "chelaile"), _cap2[-1]
 query.query, query.cities, query.render_at = _q2, _ct2, _ra2
 
+# 口语报线路号：「八路」「十路」「二十三路」
+assert query.parse("巩义市八路公交车现在有车吗") == ("8", "巩义市")
+assert query.parse("玉林 十路有车吗") == ("10", "玉林")
+assert query.parse("南宁 二十三路") == ("23", "南宁")
+assert query.parse("8点出门") is None
+assert [query._cn_num(x) for x in ("一", "九", "十", "十二", "二十三", "两")] == [1, 9, 10, 12, 23, 2]
+
 # 图片消息的 base64 里有「yJ0」，别当成线路号（答成「没查到了YJ0这条线」）
 _IMG = '<attachmentType="image/jpeg",attachmentIndex=0,description="eyJ0ZXh0IjoiW+WbvueJh10ifQ==">'
 assert query.answer(_IMG, "玉林市") == "", query.answer(_IMG, "玉林市")
