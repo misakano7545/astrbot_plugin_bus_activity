@@ -47,6 +47,10 @@ CACHE_MAX = 2048
 LABEL = {"mygolbs": "掌上公交", "chelaile": "车来了"}
 _cache = {}
 
+# 带字母的线号：B601 / K502 / D01 / 121A / 1001M / C621A（字母在前在后都有，最多五位）
+# 必须至少含一个字母，否则「11路」「2026年」会被当线号
+ALPHA_PAT = (r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]{2,7}(?![A-Za-z0-9]))(?=[A-Za-z0-9]*[A-Za-z])"
+             r"[A-Za-z]{0,2}\d{1,4}[A-Za-z]{0,2}(?![A-Za-z0-9])")
 # 「玉林 G02 路」「B1 有车吗」「105路」都认；裸数字必须带「路」，防「8点」误判
 # 「路」后面紧跟的定性词（夜班/专线）得一起吃掉，否则「6路夜班」会被截成「6」
 LINE_RE = re.compile(
@@ -57,7 +61,7 @@ LINE_RE = re.compile(
     # 前面带「地铁/轨道交通」的归上面那条（最左匹配会先把城市名一起吃进来，得挡掉）
     r"|(?<![A-Za-z0-9])(?![\u4e00-\u9fa5]{0,4}(?:地铁|轨道交通))"
     r"(?P<numline>[\u4e00-\u9fa5]{0,4}?[一二三四五六七八九十\d]{1,3}\s*号线)"
-    r"|(?P<alpha>(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9]))(?:\s*路)?"
+    r"|(?P<alpha>" + ALPHA_PAT + r")(?:\s*路)?"
     # 带前导零的四位线号（重庆「0492」）口语里不加「路」字；裸的 492 不加路字就太宽（可能是数量）
     r"|(?<![0-9])(?P<zero>0\d{2,3})(?![0-9])"
     r"|(?<![0-9])(?P<num>\d{1,4})\s*(?:夜宵|夜班|通宵)?\s*[路线](?P<qual>夜班|区间|支线|快线|专线)?"
@@ -90,7 +94,7 @@ JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|
 # 不单独算信号；实词、线号、数据源名才是。
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])")
+    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|" + ALPHA_PAT)
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
 ASK = re.compile(r"多久|几站|几分钟|几辆|几台|几点|有车|有没有|有吗|还有|在哪|到哪|到吗|怎么坐|怎么去|"
@@ -962,6 +966,31 @@ def _same_station(x, y):
     return strip(x) == strip(y)
 
 
+def _into_city(city_name, a_name, other):
+    """跨城：出发城的站表里有站名带目的城名的站（玉林表里的「北流客运中心」），
+    起点同线能坐到最深那一站就报它——别一句「跨城串不起来」把 28 路打发掉。"""
+    a = find_stop(city_name, a_name)[0]
+    if not a:
+        return ""
+    best = None
+    for r in stops(city_name, other) or []:
+        n = r.get("stationName") or ""
+        if not n.startswith(other):
+            continue
+        for line in sorted(set(a.get("relatedRoutes") or []) & set(r.get("relatedRoutes") or [])):
+            got = _goes(city_name, line, a["stationName"], n)
+            if got and (not best or got[2] > best[2]):
+                best = (line, n, got[2], got[1], got[0])
+    if not best:
+        return ""
+    line, n, j, i, d = best
+    seq = _seq_pts(city_name, line, d)
+    nxt = seq[j + 1]["name"] if j + 1 < len(seq) else ""
+    tail = f"，或再往前一站 {nxt}" if nxt else ""
+    return (f"跨城的，但 {line} 从{a['stationName']}一直开到{n}（{j - i} 站，已经进{other}了）{tail}，"
+            f"坐到那儿再换{other}的市内线路，走两步也行")
+
+
 def _hop_plan(city_name, a, a_name, b, b_name, ra, rb):
     """没直达车时算一次换乘：先坐 A 线到某站，再换 B 线到终点。
 
@@ -1529,7 +1558,10 @@ def answer(msg, default_city, ctx="", key=""):
         # 「玉林汽车站」平台没这个站、名字也没带外地城名，说成跨城等于替用户编地名
         known = lambda x: bool(stops(name or city_key, x) or detect_city(x, "", "")[0] not in ("", city_key))
         if ca and cb and ca != cb and known(got[0]) and known(got[1]):
-            return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
+            # 跨城不等于坐不上：玉林28路一路开进北流（北流客运中心、国际陶瓷贸易城），
+            # 这种线就在出发城的目录里，先看能不能坐到对面城再拒
+            ride = _into_city(name or city_key, got[0], cb)
+            return ride or f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
         # 有一边不是这座城的站（render_hop 的空串）：问一句，别返空让模型干等着没话说
         if explicit:

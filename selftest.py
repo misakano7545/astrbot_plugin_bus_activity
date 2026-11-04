@@ -722,6 +722,12 @@ assert not query.BUS_RE.search("晚上吃夜宵去")
 assert query.parse("石家庄1002路现在有没有车") == ("1002", "石家庄")
 assert query.parse("石家庄1101路现在有没有车") == ("1101", "石家庄")
 assert query.BUS_RE.search("石家庄1101路有没有车")
+# 带字母的线号最高五位（C621A），字母在前在后都有目录在用：B601/121A/1001M
+assert query.parse("佛山C621A路有车吗") == ("C621A", "佛山")
+assert query.parse("广州121A路有车吗") == ("121A", "广州")
+assert query.parse("深圳B601路") == ("B601", "深圳")
+assert query.parse("苏州1001M路") == ("1001M", "苏州")
+assert query.parse("2026年怎么坐车") is None          # 纯数字不带路，不是线号
 
 # 站名里带裸县名（「元氏火车站」→ 元氏县 → 石家庄）：别落回默认城玉林交白卷
 _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
