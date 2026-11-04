@@ -634,6 +634,13 @@ query._station_seq = _sq
 assert query.parse("帮我查一下东胜区8路公交") == ("8", "东胜区")
 assert query.parse("帮我查东胜区8路公交") == ("8", "东胜区")     # 「查」不是动词表里的词，靠往右收到「东胜区」
 assert query.parse("陆川1路有车吗") == ("1", "陆川")            # 真县名不能被收没
+# 刚问过鄂尔多斯再问陆川1路：不能靠「沿用上一条城市」答成鄂尔多斯 1路
+_c5, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}, "鄂尔多斯": {"mygolbs": "鄂尔多斯市"}}
+_last5 = query._last("k-lc")
+_last5["city"] = "鄂尔多斯"
+_ans5 = query.answer("陆川1路有车吗", "玉林市", key="k-lc") or ""
+assert "陆川" in _ans5, _ans5
+query.cities = _c5
 assert query.DISTRICTS.get("东胜区") == "鄂尔多斯市"
 assert query.norm_city(query.DISTRICTS["东胜区"]) == "鄂尔多斯"
 # 目录里这条线叫「东胜8路」，行政后缀得能省掉

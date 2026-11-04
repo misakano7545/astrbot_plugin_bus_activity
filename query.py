@@ -1360,8 +1360,9 @@ def answer(msg, default_city, ctx="", key=""):
     # 拿玉林的目录查裸号会静默答成玉林 11 路
     if prefix and norm_city(prefix) in cities():
         city_key, explicit = norm_city(prefix), True
-    # 同群接着问（「那 K502 呢」）：没明写城市就沿用上一条问过的城市，别落回默认城
-    if line and not explicit and last.get("city") in cities() and last["city"] != city_key:
+    # 同群接着问（「那 K502 呢」）：没明写城市就沿用上一条问过的城市，别落回默认城。
+    # 带地名前缀的（「陆川1路」）不适用——刚问过鄂尔多斯就问陆川1路，会被答成鄂尔多斯 1路
+    if line and not explicit and not prefix and last.get("city") in cities() and last["city"] != city_key:
         city_key, explicit = last["city"], True
     if not city_key:
         # 认不出的前缀多半是县内线路名（陆川1路），在默认城市目录里再找一次；
