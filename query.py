@@ -588,7 +588,7 @@ def _near(city_key, want, n=4):
 
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|吗|呢|啊).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|吗|呢|啊).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -773,8 +773,10 @@ def _goes(city_name, line, a, b):
     """A 站是否在 B 站之前。返回 (方向, A 站序, B 站序)，都是 0 基；不顺路就 None。"""
     for d in ("1", "2"):
         names = [r.get("stationName") or "" for r in _station_seq(city_name, line, d)]
-        ia = next((i for i, n in enumerate(names) if a in n), None)
-        ib = next((i for i, n in enumerate(names) if b in n), None)
+        # 先认同名，「汽车总站」不能被「北流汽车总站」顶掉
+        idx = lambda s: next((i for i, n in enumerate(names) if n == s),
+                             next((i for i, n in enumerate(names) if s in n), None))
+        ia, ib = idx(a), idx(b)
         if ia is not None and ib is not None and ia < ib:
             return d, ia, ib
     return None
@@ -813,6 +815,13 @@ def render_hop(city_key, city_name, raw):
     """A 站到 B 站：拿两站的经停线路求交，再按站序验方向，验不过的不算直达。"""
     a, a_name = find_stop(city_name, raw[0])
     b, b_name = find_stop(city_name, raw[1])
+    # 「从北流到玉林汽车总站」里的「北流」是地名不是站名：挑那一带能坐上车的站
+    if not a and b:
+        a = _place_stop(city_name, raw[0], b)
+        a_name = (a or {}).get("stationName") or a_name
+    elif not b and a:
+        b = _place_stop(city_name, raw[1], a)
+        b_name = (b or {}).get("stationName") or b_name
     if not a and not b:
         return None                              # 两边都不是站名，多半本来就不是问公交
     if not a or not b:
@@ -841,6 +850,16 @@ def render_hop(city_key, city_name, raw):
     for line, got in direct:
         rows.append(f"{line}（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got))
     return "\n".join(rows)
+
+
+def _place_stop(city_name, raw, other):
+    """「从北流到…」：「北流」是地名，站牌上叫「北流汽车总站」「北流客运中心」。
+    挑那一带能跟对面同一条线的站，挑不到就不猜。
+    """
+    rows = [r for r in stops(city_name, raw) or [] if r.get("stationName")]
+    hit = next((r for r in rows
+                if set(r.get("relatedRoutes") or []) & set(other.get("relatedRoutes") or [])), None)
+    return _merge_same(rows, hit) if hit else None
 
 
 def _hop_plan(city_name, a, a_name, b, b_name, ra, rb):

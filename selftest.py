@@ -564,6 +564,24 @@ query.render_hop = lambda ck, nm, got: ""      # 目录里查不到（真跨城�
 assert "跨城" in query.answer("从北流汽车站到玉林北站坐啥公交车", "玉林市")
 query.render_hop, query.cities = _rh, _cit3
 
+# 「从北流到玉林汽车总站」：「北流」是地名不是站名，挑那一带能跟对面同线的站
+assert query.hop("从北流到玉林汽车总站坐哪个公交线路") == ("北流", "玉林汽车总站")
+_st4, query.stops = query.stops, lambda cn, kw: [
+    {"stationName": "北流城南站", "relatedRoutes": ["北流105路"]},
+    {"stationName": "北流客运中心", "relatedRoutes": ["北流105路", "玉林至北流城际公交线路"]},
+] if kw == "北流" else []
+_p = query._place_stop("玉林市", "北流", {"relatedRoutes": ["玉林至北流城际公交线路"]})
+assert _p and _p["stationName"] == "北流客运中心", _p          # 跟对面同线的那个，不是城南站
+assert query._place_stop("玉林市", "北流", {"relatedRoutes": ["2路"]}) is None   # 没有就不猜
+query.stops = _st4
+# 「汽车总站」按同名认，不能被「北流汽车总站」顶掉站序
+_sq, query._station_seq = query._station_seq, lambda cn, line, d: [
+    {"stationName": n} for n in (["北流汽车总站", "中段", "汽车总站", "末站"] if d == "2"
+                                 else ["汽车总站", "中段", "北流汽车总站"])]
+assert query._goes("玉林市", "X", "北流汽车总站", "汽车总站") == ("2", 0, 2)
+assert query._goes("玉林市", "X", "汽车总站", "北流汽车总站") == ("1", 0, 2)
+query._station_seq = _sq
+
 print("selftest ok")
 
 if "--live" in sys.argv:
