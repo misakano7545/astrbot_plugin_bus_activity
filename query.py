@@ -547,6 +547,23 @@ def _dest_after(city_name, msg, stop):
     return (got or {}).get("stationName")
 
 
+def _exact_line(city_name, msg, want):
+    """目录里有更长的真线名整段出现在句子里（「新乐专1路」）就用它，别只拿裸号去匹。"""
+    flat, w = norm_line(msg), norm_line(want)
+    rows = _catalog(city_name).get("buslines") or []
+    hit = []
+    for r in rows:
+        n = norm_line(r["lineName"])
+        if not (w and n.endswith(w)):
+            continue
+        # 「新乐专一路」的「一」也是数字，得和 1 等价地认
+        cns = "零一二三四五六七八九"
+        pat = "".join(f"[{d}{cns[int(d)]}]" if d.isdigit() else re.escape(d) for d in n)
+        if n in flat or re.search(pat, flat):
+            hit.append(r["lineName"])
+    return max(hit, key=lambda n: len(norm_line(n)), default=None)
+
+
 def _station_seq(city_name, line, direction):
     return _cached("stations", (city_name, line, direction), CATALOG_TTL,
                    lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
@@ -866,6 +883,8 @@ def answer(msg, default_city, ctx="", key=""):
     last = _last(key)
     msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
     line = parse(msg)
+    if not line and ctx:        # 引用别人那句追问「这路还有几辆」，线路号在被引用的话里
+        line = parse(ctx)
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
     sm = SRC_RE.search(msg)
     src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
@@ -920,6 +939,11 @@ def answer(msg, default_city, ctx="", key=""):
     if line:
         # 前缀是线路名的一部分（容县11路），明写城市也不该丢——explicit 只管去哪个目录找
         wants = ([prefix + line[0]] if prefix and norm_city(prefix) != city_key else []) + [line[0]]
+        # 前缀被 PREFIX_RE 截短过（「新乐专1路」→「庄新乐专」），目录里有真线名就用真的，
+        # 也别再回退裸号——裸号是另一条线
+        full = _exact_line(name, msg, line[0]) if (name and prefix) else None
+        if full:
+            wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
         last["line"] = wants[0]
         if name:
             for w in wants:

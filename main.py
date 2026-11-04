@@ -79,7 +79,8 @@ class BusActivity(Star):
         返回「没查到」时照实说，别编线路和车辆。
 
         Args:
-            question(string): 用户关于公交的原话，原样传入，不要改写
+            question(string): 用户关于公交的原话，原样传入，不要改写；
+                他点名「从车来了查」「用掌上公交查」时这两个词必须留着
         """
         try:
             text = await asyncio.to_thread(answer, question, self.default_city, "",

@@ -216,7 +216,7 @@ _ra, query.render_at = query.render_at, lambda *a: None
 query.answer("玉林 容县 11 路有车吗", "玉林市")
 assert _cap[-1] == ("容县", ["11"]), _cap[-1]          # 别拿玉林的目录查裸号 11
 query.answer("玉林 陆川 1 路有车吗", "玉林市")
-assert _cap[-1] == ("玉林", ["陆川1", "1"]), _cap[-1]  # 玉林目录里有陆川1路
+assert _cap[-1] == ("玉林", ["陆川1"]), _cap[-1]       # 目录里有陆川1路
 query.query, query.cities = _q, _cit
 query.render_company, query.render_stops, query.render_at = _rc, _rs, _ra
 
@@ -257,6 +257,9 @@ _ra2, query.render_at = query.render_at, lambda *a: None
 query.answer("9 路有车吗", "玉林市", key="t9")
 query.answer("你从车来了的这个看一下数据怎么样？", "玉林市", key="t9")
 assert _cap2[-1] == ("玉林", ["9"], "chelaile"), _cap2[-1]
+# 引用别人的消息问「你用车来了查一下」：线路号在被引用那句里，也要走车来了
+query.answer("你用车来了查一下", "玉林市", "有，G01路 现在 4 辆在路上", "t9")
+assert _cap2[-1] == ("玉林", ["G01"], "chelaile"), _cap2[-1]
 query.query, query.cities, query.render_at = _q2, _ct2, _ra2
 
 # 口语报线路号：「八路」「十路」「二十三路」
