@@ -665,7 +665,9 @@ assert "东胜8" in _seen[0], _seen
 # 站名猜不出是哪座城：问一句，别回空让模型自己圆话
 assert "是哪座城的" in query.answer("伦教街道办事处公交线路", "玉林市", key="k-ask")
 assert query.answer("晚上吃点啥呢", "玉林市", key="k-ask2") == ""      # 闲聊不许反问
+_c7, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}, "佛山": {"mygolbs": "佛山市"}}
 assert query.detect_city("南海区8路", "南海区", "玉林市")[0] == "佛山"  # 区县名在句子里也能猜
+query.cities = _c7
 
 print("selftest ok")
 
