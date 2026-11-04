@@ -212,6 +212,17 @@ assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
                                "unknown": True}).startswith("1路 查不到实时车")
 assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
                                "note": "末班 20:25 已经开走了"}).startswith("1路 这会儿没车")
+# hasReal=0 时只回「不提供」等于没答，把能查到的首末班和站数带上
+_fl, _seq, _cat = query._first_last, query._station_seq, query._catalog
+_lm = query._live_my
+query._live_my = lambda c, n, d, order=1: {"status": "1", "hasReal": "0", "list": []}
+query._first_last = lambda c, l, d: ("05:40", "21:00")
+query._station_seq = lambda c, l, d: [{"stationName": f"s{i}"} for i in range(27)]
+query._catalog = lambda c: {"buslines": [{"lineName": "浦东51路", "upperOrDown": "1",
+                                          "from": "人民东路学海路", "to": "迪士尼地铁站"}]}
+_got = query._mygolbs("上海市", "浦东51")
+assert _got["unknown"] and "05:40 起、末班最晚 21:00" in _got["note"] and "27 站" in _got["note"], _got
+query._live_my, query._first_last, query._station_seq, query._catalog = _lm, _fl, _seq, _cat
 
 # issue #8：前缀是线路名的一部分，明写城市也不丢；前缀自己就是城市时以它为准
 _cap, _q = [], query.query

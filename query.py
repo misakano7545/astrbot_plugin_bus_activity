@@ -404,7 +404,16 @@ def _mygolbs(city_name, want):
         if live_flags and all(live_flags):
             # hasReal=0 = 上游这座城根本不给车辆位置（北京、上海、成都等），
             # 不能当成「没车」报，那是假消息（实测玉林 0 车时 hasReal 仍是 1）
-            unknown, note = True, "上游对这个城市不提供实时车辆位置"
+            # 但只回「不提供」等于什么都没答，把这条线能查到的（首末班、站数）补上
+            unknown = True
+            note = f"上游不给{norm_city(city_name)}的实时车辆位置"
+            lname, ldir = hit[0][1]["lineName"], hit[0][1]["upperOrDown"]
+            n = len(_station_seq(city_name, lname, ldir))
+            bits = [f"{first} 起、末班最晚 {last}"] if first and last else []
+            if n:
+                bits.append(f"{n} 站")
+            if bits:
+                note += "，这条线 " + "、".join(bits)
         elif last and _past_last(last, first):
             # 连带说首班：凌晨问日间线时，用户要知道的是「几点再来」
             note = f"末班 {last} 已经开走了" + (f"，首班 {first}" if first else "")
