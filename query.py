@@ -229,17 +229,26 @@ def _now():
     return time.gmtime(time.time() + TZ_OFF)
 
 
-def _past_last(last):
+def _past_last(last, first=""):
     """末班过了没。字符串比较跨不了零点（'00:20' < '22:40'），按分钟算。"""
-    try:
-        h, m = last.split(":")[:2]
-        last_m = int(h) * 60 + int(m)
-    except ValueError:
+    def mins(s):
+        try:
+            h, m = (s or "").split(":")[:2]
+            return int(h) * 60 + int(m)
+        except ValueError:
+            return None
+
+    last_m = mins(last)
+    if last_m is None:
         return False
     t = _now()
     now_m = t.tm_hour * 60 + t.tm_min
-    # 按「末班离现在多久」算，跨零点自然成立：00:02 问 22:40 → 1358 分钟前，已开走；
-    # 23:00 问 00:10 → 70 分钟后，还没到。
+    first_m = mins(first)
+    if first_m is not None:
+        # 按运营窗口判：末班 23:44 的线路，早上 9 点当然还没开走
+        return (now_m - first_m) % (24 * 60) > (last_m - first_m) % (24 * 60)
+    # 没首班就按「末班离现在多久」算，跨零点自然成立：00:02 问 22:40 → 已开走，
+    # 23:00 问 00:10 → 还没到。
     # shortcut: 以 12 小时为界判过去/将来，早班车式的末班（06:00）在下午会判错
     return (last_m - now_m) % (24 * 60) > 12 * 60
 
@@ -330,11 +339,11 @@ def _mygolbs(city_name, want):
             # hasReal=0 = 上游这座城根本不给车辆位置（北京、上海、成都等），
             # 不能当成「没车」报，那是假消息（实测玉林 0 车时 hasReal 仍是 1）
             unknown, note = True, "上游对这个城市不提供实时车辆位置"
-        elif last and _past_last(last):
+        elif last and _past_last(last, first):
             # 连带说首班：凌晨问日间线时，用户要知道的是「几点再来」
             note = f"末班 {last} 已经开走了" + (f"，首班 {first}" if first else "")
         elif live_known:
-            note = "线路还在跑，这会儿没车开车机"
+            note = "线路还在跑，只是车机没报位置"
     return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
             "note": note, "unknown": unknown}
 
@@ -557,9 +566,9 @@ def _hop_line(city_name, line, d, ia, ib):
     payload = _live_my(city_name, line, d, ia + 1)      # STATIONORDER 1 基
     eta = _etas(payload)
     if not eta:
-        last = _last_bus(city_name, line, d)
-        if last and _past_last(last):
-            return f"，末班 {last} 已经开走了"
+        first, last = _first_last(city_name, line, d)
+        if last and _past_last(last, first):
+            return f"，末班 {last} 已经开走了" + (f"，首班 {first}" if first else "")
         return "，这会儿没车报位置"
     return f"，下一辆约 {max(1, round(eta[0]))} 分钟后到，坐过去 {max(1, round(_run(payload, ia, ib)))} 分钟"
 

@@ -58,7 +58,7 @@ out = query.render("南宁", "1", {"source": "掌上公交", "line": "1路",
 assert "往B站" not in out, out
 # 没车时不能直说「没车」，要区分「上游缺 GPS」和「已收班」（issue #2）
 assert "线路还在跑" in query.render(
-    "南宁", "1", {"source": "掌上公交", "line": "1", "groups": [("", [])], "note": "线路还在跑，这会儿没车开车机"})
+    "南宁", "1", {"source": "掌上公交", "line": "1", "groups": [("", [])], "note": "线路还在跑，只是车机没报位置"})
 assert "末班" in query.render(
     "南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])], "desc": "本线路末班时间已过"})
 assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])]}) == \
@@ -333,6 +333,15 @@ for _now, _last, _want in [((0, 2), "22:40", True), ((0, 10), "00:30", False),
                            ((23, 0), "00:10", False), ((12, 0), "12:30", False)]:
     _at(*_now)
     assert query._past_last(_last) is _want, (_now, _last, query._past_last(_last))
+# 有首班就按运营窗口判：末班 23:44 的线，早上 9 点不能报「末班已开走」
+for _now, _first, _last, _want in [((9, 0), "05:30", "23:44", False),
+                                   ((23, 50), "05:30", "23:44", True),
+                                   ((0, 30), "05:30", "23:44", True),
+                                   ((20, 0), "17:47", "23:10", False),
+                                   ((13, 0), "17:47", "23:10", True),
+                                   ((0, 30), "22:00", "01:00", False)]:
+    _at(*_now)
+    assert query._past_last(_last, _first) is _want, (_now, _first, _last, query._past_last(_last, _first))
 query.time = _lt
 
 # issue #11：香港「1」对应五家公司，按名字分组各查各的，别取前两条
