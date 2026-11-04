@@ -307,6 +307,14 @@ assert query.pick_stop("广州市", "广州地铁芳村站附近有多少条公�
 query.stops = lambda cn, kw: [{"stationName": "丰州", "relatedRoutes": ["6路"]}] if kw == "丰州" else []
 assert query.pick_stop("泉州市", "泉州丰州公交站现在有什么车") == "丰州"
 query.stops = _st
+# 「陆川汽车总站」平台写作「汽车总站（陆川）」：县名挪进括号，前缀认得出是哪一条
+_st2, query.stops = query.stops, lambda cn, kw: [
+    {"stationName": "汽车总站", "relatedRoutes": ["9路"]},
+    {"stationName": "汽车总站（陆川）", "relatedRoutes": ["陆川1路"]},
+] if kw == "汽车总站" else []
+assert query.pick_stop("玉林市", "陆川汽车总站有哪几条公交线路") == "汽车总站（陆川）"
+assert query.pick_stop("玉林市", "汽车总站有哪几路车") == "汽车总站"   # 没写县名还是市区那个
+query.stops = _st2
 # 「汽车总站（陆川）」也长成「汽车总站（…）」，可陆川汽车总站是另一个县的站，差 36.8 公里
 _rows = [
     {"stationName": "汽车总站", "lat": "22.6269", "lng": "110.1439", "relatedRoutes": ["9路"]},

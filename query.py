@@ -659,6 +659,15 @@ def find_stop(city_name, raw):
                 rows = [r for r in rows if r["stationName"] == raw]
             if rows:
                 return _merge_same(rows, rows[0]), raw[:n]
+    # 「陆川汽车总站」平台写作「汽车总站（陆川）」：县名被挪到括号里，顺序反过来了，
+    # 拿尾巴当关键词搜、再用前缀认是哪一条（「北流汽车总站」这种真带前缀的也一起认）
+    for n in (4, 3):
+        if len(raw) > n + 1:
+            head, tail = raw[:-n], raw[-n:]
+            rows = [r for r in stops(city_name, tail) or [] if r.get("stationName")]
+            hit = next((r for r in rows if head in r["stationName"]), None)
+            if hit:
+                return _merge_same(rows, hit), hit["stationName"]
     # 用户写的和站牌上的常常差一两个字（「玉林旅游客运站」vs「旅游汽车客运站」），
     # 拿尾巴当关键词搜一遍，再挑最像的那个，相似度不够宁可不认
     for n in (3, 2):
