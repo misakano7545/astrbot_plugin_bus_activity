@@ -104,7 +104,7 @@ assert query.detect_city("火星 1 路有车吗", "火星", "南宁市") == (Non
 assert query.detect_city("那39路的那一辆是去往哪个方向呢？ 南宁市这会儿有 7 条线在跑",
                          "那", "玉林市") == ("南宁", True)
 _ps, query.pick_stop = query.pick_stop, lambda *a: None
-_hq, query.query = query.query, lambda ck, wants, src=None: (
+_hq, query.query = query.query, lambda ck, wants, src=None, veh="": (
     {"line": "39路", "groups": [("A", [("桂A1", "x", 0)])]} if (ck, wants) == ("南宁", ["39"]) else None)
 assert query.answer("那39路的那一辆是去往哪个方向呢？", "玉林市",
                     "南宁市这会儿有 7 条线在跑") == "有，39路 现在 1 辆在路上\n往A：桂A1 x"
@@ -207,7 +207,7 @@ assert query.render("x", "1", {"line": "1路", "groups": [("A", []), ("B", [])],
 
 # issue #8：前缀是线路名的一部分，明写城市也不丢；前缀自己就是城市时以它为准
 _cap, _q = [], query.query
-query.query = lambda ck, wants, src=None: (_cap.append((ck, wants)), {"error": "没这条线路"})[1]
+query.query = lambda ck, wants, src=None, veh="": (_cap.append((ck, wants)), {"error": "没这条线路"})[1]
 _cit = query.cities
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "容县": {"mygolbs": "容县市"}}
 _rc, query.render_company = query.render_company, lambda *a: None
@@ -223,7 +223,7 @@ query.query, query.cities, query._catalog = _q, _cit, _cg
 query.render_company, query.render_stops, query.render_at = _rc, _rs, _ra
 
 # 没写城市、默认城市又查不到：要说明「按谁查的」，别让用户以为这条线不存在
-_q, query.query = query.query, lambda ck, wants, src=None: {"error": "没这条线路"}
+_q, query.query = query.query, lambda ck, wants, src=None, veh="": {"error": "没这条线路"}
 _c, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}}
 _a, query.render_at = query.render_at, lambda *a: None          # 别真去打网络
 _txt = query.answer("999 路有车吗", "玉林市")
@@ -252,7 +252,7 @@ query.PREFER_CL.pop("测试", None)
 
 # 「从车来了的那个看一下数据」：没写线路号就续上一条问的车，且点名车来了要排前面
 _cap2 = []
-_q2, query.query = query.query, lambda ck, w, src=None: (
+_q2, query.query = query.query, lambda ck, w, src=None, veh="": (
     _cap2.append((ck, list(w), src)), {"error": "没这条线路"})[1]
 _ct2, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
 _ra2, query.render_at = query.render_at, lambda *a: None
@@ -287,6 +287,13 @@ query.stops = lambda cn, kw: [{"stationName": "谈固站", "relatedRoutes": [f"{
 _out = query.render_stop("石家庄市", "石家庄市", "谈固站有哪几路公交车")
 assert _out.count("\n") == 23 and "还有" not in _out, _out
 query._catalog, query.stops = _cat, _stops
+# 「G02-513 现在在哪」问的是一辆车，不是整条线
+assert [g for g in query.VEH_RE.search("G02-513现在在哪里了").groups() if g] == ["513"]
+assert [g for g in query.VEH_RE.search("G02 513号车在哪").groups() if g] == ["513"]
+assert query.VEH_RE.search("玉林 9路有车吗") is None
+_res = {"line": "G02", "groups": [("甲", [("513", "A站", 100)]), ("乙", [("517", "B站", 200)])]}
+assert "513" in query.render("玉林", "G02", _res, "513") and "517" not in query.render("玉林", "G02", _res, "513")
+assert "没跑 999" in query.render("玉林", "G02", _res, "999")
 # 「车来了查X校区的线路」：数据源和动词不能留在站名里；点名车来了就扫车来了的站表
 assert list(query._cands("玉林市", "车来了查广西医科大玉林校区的线路")) == ["广西医科大玉林校区"]
 # 「玉林北站有哪几路车」：城市名剥掉只剩「北站」搜不到，得再拿原样那句试一次
@@ -297,7 +304,7 @@ query.stops = _st2
 # 上一条问过 9 路，再来一句带站点的「车来了查XX校区」：别拿上一条的线路号答
 _ql, _cit2, _rst = query.query, query.cities, query.render_stop
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
-query.query = lambda ck, wants, src=None: (_ for _ in ()).throw(AssertionError("不该走线路"))
+query.query = lambda ck, wants, src=None, veh="": (_ for _ in ()).throw(AssertionError("不该走线路"))
 query.render_stop = lambda ck, cn, m, src=None: "医科大学玉林校区有 3 条线路：G01"
 query._last("k9")["line"] = "9"
 assert query.answer("车来了查广西医科大玉林校区的线路", "玉林市", key="k9").startswith("医科大学玉林校区")

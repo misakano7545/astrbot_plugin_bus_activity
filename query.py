@@ -391,7 +391,11 @@ def _chelaile(city_id, want):
 PREFER_CL = {}
 
 
-def query(city_key, wants, src=None):
+def _veh(bus, veh):
+    return veh in str((bus or ("",))[0])
+
+
+def query(city_key, wants, src=None, veh=""):
     """两家依次试。有车就立刻用，两家都空车才算没车——否则会漏掉另一家有车的城。
 
     wants 是候选线路名，先试带前缀的「陆川1」，再试裸号「1」。
@@ -399,7 +403,7 @@ def query(city_key, wants, src=None):
     点名的那家没有这条线时仍要能答上来。
     """
     ent = cities().get(city_key) or {}
-    tried, blank, near = [], None, None
+    tried, blank, near, fallback = [], None, None, None
     order = ("chelaile", "mygolbs") if PREFER_CL.get(city_key) else ("mygolbs", "chelaile")
     if src:
         order = (src,) + tuple(s for s in order if s != src)
@@ -421,7 +425,14 @@ def query(city_key, wants, src=None):
                     tried.append(got["error"])
                 continue
             if got and any(group for _, group in got["groups"]):
-                return got
+                if not veh:
+                    return got
+                # 点名一辆车：掌上的车牌是「桂K12590D」，车来了是「513」，得两家都翻一遍
+                hit = [(lab, [b for b in grp if _veh(b, veh)]) for lab, grp in got["groups"]]
+                if any(g for _, g in hit):
+                    return dict(got, groups=hit)
+                fallback = fallback or got
+                continue
             if got:
                 # 掌上这座城没实时（unknown），记下来，下一问直接先问车来了
                 if got.get("unknown") and ent.get("chelaile"):
@@ -432,6 +443,8 @@ def query(city_key, wants, src=None):
     if not ent:
         # 城市表里没这个键：要么名字写错，要么两家都不覆盖，别把话说成「两家都没有」
         return {"error": "这个城市名没认出来，写全称或把城市补在路线前面试试"}
+    if fallback:
+        return fallback        # 这条线有车，只是没有问的那辆；render 会说明并列出在跑的
     if near:
         return near
     if tried and all("异常" in t for t in tried):
@@ -455,7 +468,7 @@ def _car(plate, stn, dist, status=""):
     return f"{plate} {stn} {dist / 1000:.1f}km" if dist >= 1000 else f"{plate} {stn} {round(dist)}m"
 
 
-def render(city_key, want, res):
+def render(city_key, want, res, veh=""):
     if "error" in res:
         e = res["error"]
         if e.startswith("是 "):                       # 目录里有近似线名，报候选
@@ -463,8 +476,14 @@ def render(city_key, want, res):
         if e.startswith("没这条"):
             return f"没查到「{want}」这条线"
         return e                                      # 其余文案本身已经是人话
-    total = sum(len(b) for _, b in res["groups"])
     line = res["line"]
+    groups = res["groups"]
+    if veh:
+        if not any(_veh(b, veh) for _, bs in groups for b in bs):
+            here = "、".join(str(b[0]) for _, bs in groups for b in bs)
+            return f"{line} 这会儿没跑 {veh} 这辆" + (f"，在路上的有：{here}" if here else "")
+        groups = [(lab, [b for b in bs if _veh(b, veh)]) for lab, bs in groups]
+    total = sum(len(b) for _, b in groups)
     if not total:
         # 「没车」和「上游没给车辆位置」是两件事，后者会被乘客读成停运（见 issue #2）
         if "地铁" in norm_line(line):           # 地铁进得了目录，但全程 hasReal=0
@@ -472,9 +491,9 @@ def render(city_key, want, res):
         tail = res.get("note") or res.get("desc") or ""
         head = f"{line} 查不到实时车" if res.get("unknown") else f"{line} 这会儿没车"
         return head + ("，" + tail if tail else "")
-    multi = sum(1 for _, b in res["groups"] if b) > 1      # 只有一个方向有车时不念空方向
-    rows = [f"有，{line} 现在 {total} 辆在路上"]
-    for label, buses in res["groups"]:
+    multi = sum(1 for _, b in groups if b) > 1      # 只有一个方向有车时不念空方向
+    rows = [f"有，{line} 现在 {total} 辆在路上" if not veh else f"{veh} 在 {line} 上："]
+    for label, buses in groups:
         if not buses:
             if multi and label:
                 rows.append(f"往{label}还没车")
@@ -485,7 +504,9 @@ def render(city_key, want, res):
 
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|吗|呢|啊).*$")
+TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|在?哪[里儿]|吗|呢|啊).*$")
+# 「G02-513 现在在哪」「513 号车」：问的是一辆具体的车，不是整条线
+VEH_RE = re.compile(r"-\s*(\d{2,5})(?!\d)|(?<!\d)(\d{2,5})\s*号车")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
 # 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
@@ -1044,7 +1065,9 @@ def answer(msg, default_city, ctx="", key=""):
                     out = render_at(city_key, name, w, msg)
                 if out:
                     return out
-        txt = render(city_key, wants[0], query(city_key, wants, src))
+        vm = VEH_RE.search(msg)
+        veh = next((g for g in vm.groups() if g), "") if vm else ""
+        txt = render(city_key, wants[0], query(city_key, wants, src, veh), veh)
         # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
         if not explicit and txt.startswith("没查到"):
             txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
