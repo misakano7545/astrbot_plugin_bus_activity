@@ -1503,7 +1503,11 @@ def answer(msg, default_city, ctx="", key=""):
         if ca and cb and ca != cb and known(got[0]) and known(got[1]):
             return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
-        return out or ""      # render_hop 返回空串 = 有一边不是公交站，交回给模型
+        # 有一边不是这座城的站（render_hop 的空串）：问一句，别返空让模型干等着没话说
+        if not explicit and out == "":
+            return (f"「{got[0]}」到「{got[1]}」在{norm_city(name)}的站表里没找全，"
+                    f"是哪座城的？说个城市名我再查")
+        return out or ""
     # 「那玉林北站定制夜班车呢？」线名不是数字+路，parse 认不出；目录里有就当场认
     if not line and name:
         hit = _msg_line(name, msg)
