@@ -629,6 +629,21 @@ assert query._goes("玉林市", "X", "北流汽车总站", "汽车总站") == ("
 assert query._goes("玉林市", "X", "汽车总站", "北流汽车总站") == ("1", 0, 2)
 query._station_seq = _sq
 
+# 「帮我查一下东胜区8路公交」：PREFIX_RE 只吃 4 个字，动词没剥干净时前缀会剩「下东胜区」，
+# 拿去查就成了一条不存在的线；东胜区是鄂尔多斯的区，掌上不认区名当城市名
+assert query.parse("帮我查一下东胜区8路公交") == ("8", "东胜区")
+assert query.DISTRICTS.get("东胜区") == "鄂尔多斯市"
+assert query.norm_city(query.DISTRICTS["东胜区"]) == "鄂尔多斯"
+# 目录里这条线叫「东胜8路」，行政后缀得能省掉
+_seen = []
+_q, _r, _cat = query.query, query.render_at, query._catalog
+query.query = lambda ck, wants, src=None, veh="": (_seen.append(list(wants)) or {"line": "东胜8路", "groups": []})
+query.render_at = lambda *a, **k: ""
+query._catalog = lambda cn: {"buslines": [{"lineName": "东胜8路"}]}
+query._one("鄂尔多斯", "鄂尔多斯市", "8", "东胜区", "帮我查一下东胜区8路公交", None, True, {})
+query.query, query.render_at, query._catalog = _q, _r, _cat
+assert "东胜8" in _seen[0], _seen
+
 print("selftest ok")
 
 if "--live" in sys.argv:

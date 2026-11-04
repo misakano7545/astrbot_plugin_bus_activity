@@ -21,6 +21,9 @@ except ImportError:
 
 HERE = Path(__file__).parent
 CHELAILE_CITIES = json.loads((HERE / "cities.json").read_text("utf-8"))
+# 区县 → 地级市：「东胜区8路」这种写法得先知道东胜区属鄂尔多斯，掌上不认区县当城市名。
+# 只收全国不重名的区县，重名的（朝阳区、城区）指不准是哪座城，宁可交回模型。
+DISTRICTS = json.loads((HERE / "districts.json").read_text("utf-8"))
 
 API = "https://h5.mygolbs.com/ApiData.do"
 # Origin 是唯一命门：末尾多一个斜杠、换成 http、或干脆不带，上游都回 HTTP 200 +
@@ -114,7 +117,10 @@ def parse(msg):
     if not m:
         return None
     # 「环山二号线」的线名自己就带汉字前缀，别再把它当县名重复拼一次
-    pre = "" if m.group("numline") else PREFIX_RE.search(msg[: m.start()])
+    # 先剥掉整段的动词再取尾巴：PREFIX_RE 只吃 4 个字，「帮我查一下东胜区」窗口里会剩
+    # 「下东胜区」这种半截词，当成站名/线名前缀去查就成了一条不存在的线
+    head = JUNK_HEAD.sub("", msg[: m.start()])
+    pre = "" if m.group("numline") else PREFIX_RE.search(head)
     num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
         (m.group("alpha") or m.group("num") or m.group("metro") or m.group("numline")
          or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
@@ -138,7 +144,7 @@ def _lines(msg):
             (m.group("alpha") or m.group("num") or m.group("metro") or m.group("numline")
              or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
         # 只认紧贴着的汉字前缀：多行里上一行的「樟」不算 12 路的前缀
-        pre = re.search(r"([\u4e00-\u9fa5]{1,4})$", msg[: m.start()])
+        pre = re.search(r"([\u4e00-\u9fa5]{1,4})$", JUNK_HEAD.sub("", msg[: m.start()]))
         pre = "" if m.group("numline") else JUNK_TAIL.sub(
             "", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
         # 「11路和12路」：前缀截到的是「路和」，不是县名
@@ -234,6 +240,11 @@ def detect_city(msg, prefix, default_city):
         return max(hits, key=len), True
     if prefix and prefix in idx:
         return prefix, True
+    # 「东胜区8路」：区县名不是城市，掌上也不认它当城市名，得先翻到属地级市
+    if prefix and DISTRICTS.get(prefix):
+        key = norm_city(DISTRICTS[prefix])
+        if key in idx:
+            return key, True
     key = norm_city(default_city)
     if key not in idx:
         return None, False
@@ -1270,6 +1281,10 @@ def _last(key):
 def _one(city_key, name, num, prefix, msg, src, explicit, last):
     """一条线路的回答：时刻表 / 公司 / 站表 / 到站 / 实时，按问法选。"""
     wants = ([prefix + num] if prefix and norm_city(prefix) != city_key else []) + [num]
+    # 目录里的线名常省掉行政后缀：「东胜区8路」在鄂尔多斯目录里叫「东胜8路」
+    bare = re.sub(r"(区|县|旗|市|镇)$", "", prefix) if prefix else ""
+    if len(bare) >= 2 and bare != prefix:
+        wants.insert(len(wants) - 1, bare + num)
     # 有前缀要纠前缀截短；「环山二号线」这种自带汉字的线名也要纠（前缀是空的）
     if name and (prefix or not num[:1].isdigit()):
         cat = _catalog(name)
