@@ -632,6 +632,8 @@ query._station_seq = _sq
 # 「帮我查一下东胜区8路公交」：PREFIX_RE 只吃 4 个字，动词没剥干净时前缀会剩「下东胜区」，
 # 拿去查就成了一条不存在的线；东胜区是鄂尔多斯的区，掌上不认区名当城市名
 assert query.parse("帮我查一下东胜区8路公交") == ("8", "东胜区")
+assert query.parse("帮我查东胜区8路公交") == ("8", "东胜区")     # 「查」不是动词表里的词，靠往右收到「东胜区」
+assert query.parse("陆川1路有车吗") == ("1", "陆川")            # 真县名不能被收没
 assert query.DISTRICTS.get("东胜区") == "鄂尔多斯市"
 assert query.norm_city(query.DISTRICTS["东胜区"]) == "鄂尔多斯"
 # 目录里这条线叫「东胜8路」，行政后缀得能省掉

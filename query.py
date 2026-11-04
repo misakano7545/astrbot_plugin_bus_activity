@@ -111,6 +111,18 @@ def norm_city(name):
     return short if len(short) >= MIN_CITY_KEY else s
 
 
+def _snap(pre):
+    """前缀窗口截短过（「查东胜区」「下东胜区」）：右边才是地名，往右收到认得为止。"""
+    if not pre:
+        return pre
+    idx = cities()
+    for i in range(1, len(pre) - 1):
+        t = pre[i:]
+        if t in idx or norm_city(t) in idx or t in DISTRICTS:
+            return t
+    return pre
+
+
 def parse(msg):
     """→ (线路号, 紧贴着的汉字段)。县内线路「陆川1路」靠这个前缀区分。"""
     m = LINE_RE.search(msg)
@@ -125,7 +137,7 @@ def parse(msg):
         (m.group("alpha") or m.group("num") or m.group("metro") or m.group("numline")
          or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
-    return norm_line(num), pre
+    return norm_line(num), _snap(pre)
 
 
 def looks_like_ask(msg):
@@ -152,7 +164,7 @@ def _lines(msg):
         pre = re.sub(r"^(?:路|和|与|跟|及|、)+|(?:路|和|与|跟|及)+$", "", pre)
         if pre in ("那", "这", "该", "此", "本"):
             pre = ""
-        out.append((norm_line(num), pre))
+        out.append((norm_line(num), _snap(pre)))
     # 「樟13」这种县内线习惯不带「路」，整段就一个词时也认（福州目录里叫「樟13路」）
     for part in re.split(r"[\n，,。、;；]+", msg):
         part = AT_RE.sub("", part).strip()
