@@ -416,7 +416,8 @@ def query(city_key, wants, src=None, veh=""):
             try:
                 got = fetch(target, want)
             except Exception as e:
-                tried.append(f"{LABEL[source]}异常 {e}")
+                # 异常原文别拼进给群友的句子（以前就是这么把 urlopen 细节发出去的）
+                tried.append(f"{LABEL[source]}异常，上游这会儿连不上")
                 continue
             if got and "error" in got:
                 if got["error"].startswith("是 "):
