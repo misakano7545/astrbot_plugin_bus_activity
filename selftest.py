@@ -303,6 +303,12 @@ assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41",
 # 「车来了，看一下 G02…」：数据源后面跟逗号再跟动作词，一样得剥干净
 assert query.parse(query.SRCPRE.sub("", "车来了，看一下 G02 现在上线的有几台车")) == ("G02", "")
 assert query.parse(query.SRCPRE.sub("", "车来了查询玉林职业技术学院有没有公交车")) is None
+# 上游刚挂过也不能让闲聊收到「上游没响应」——那句是「彻底变成问公交工具」的由来
+_uf = query._up_fail[0]
+query._up_fail[0] = query.time.time()
+assert query.answer("这大肥鱼彻底变成问公交工具了", "玉林市") == ""
+assert query.answer("晚上吃点啥呢", "玉林市") == ""
+query._up_fail[0] = _uf
 # 「车来了查X校区的线路」：数据源和动词不能留在站名里；点名车来了就扫车来了的站表
 assert list(query._cands("玉林市", "车来了查广西医科大玉林校区的线路")) == ["广西医科大玉林校区"]
 # 「玉林北站有哪几路车」：城市名剥掉只剩「北站」搜不到，得再拿原样那句试一次

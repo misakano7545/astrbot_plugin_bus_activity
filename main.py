@@ -15,21 +15,16 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
 try:  # 插件内相对导入；单文件调试时按顶层模块兜底
-    from .query import answer
+    from .query import BUS_RE, answer
 except ImportError:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
-    from query import answer
+    from query import BUS_RE, answer
 
 # 模型嘴里那句「只接了玉林的数据源」是旧插件的谎话，发出去之前整句删掉
 FALSE_CLAIM = re.compile(r"数据源|只接了|只有玉林|玉林的接口|"
                          r"查不了.{0,8}(公交|线路)|(公交|线路).{0,8}查不了")
 SENT = re.compile(r"[^。！？\n]*[。！？\n]?")
 
-# 像在问公交才去查：查不到自然返回空串，不耽误别的聊天
-BUS_RE = re.compile(
-    r"公交|巴士|公共汽车|公车|地铁|轨道交通|线路|几路|哪路|路车|末班|首班|到站|几站|"
-    r"怎么坐|直达|换乘|路线|站点|车来了|掌上公交|\d{1,3}\s*路|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])"
-)
 
 
 class BusActivity(Star):
@@ -93,4 +88,7 @@ class BusActivity(Star):
             logger.warning(f"公交查询失败: {e}")
             return "查询接口这会儿没响应，照实说没查到、过会儿再试。"
         logger.info(f"公交查询: {question[:30]} -> {(text or '没查到')[:60]}")
-        return text or "没查到这条线路或这个站点，照实说没查到。"
+        if text:
+            return text
+        # 闲聊也调这个工具时别塞「没查到」堵住模型——None 表示这条结果不进 prompt
+        return "没查到这条线路或这个站点，照实说没查到。" if BUS_RE.search(question) else None
