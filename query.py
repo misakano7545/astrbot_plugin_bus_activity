@@ -654,6 +654,9 @@ def find_stop(city_name, raw):
             if norm_city(raw[:n]) == norm_city(city_name):
                 continue
             rows = [r for r in stops(city_name, raw[:n]) or [] if r.get("stationName")]
+            # 2 字兜底只认同名的：「石家」会搜出石家庄东站/石家庄站（地铁站），跟问的站没关系
+            if n == 2:
+                rows = [r for r in rows if r["stationName"] == raw]
             if rows:
                 return _merge_same(rows, rows[0]), raw[:n]
     # 用户写的和站牌上的常常差一两个字（「玉林旅游客运站」vs「旅游汽车客运站」），
@@ -663,6 +666,10 @@ def find_stop(city_name, raw):
             rows = [r for r in stops(city_name, raw[-n:]) or [] if r.get("stationName")]
             best = max(rows, key=lambda r: difflib.SequenceMatcher(
                 None, raw, r["stationName"]).ratio(), default=None)
+            # 「石家庄北站」退到「北站」会匹上「石家庄东站」：带方位字的要求方位也对得上
+            dirs = [c for c in "东南西北中" if c in raw]
+            if best and dirs and not any(c in best["stationName"] for c in dirs):
+                best = None
             if best and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
                 return _merge_same(rows, best), best["stationName"]
     return None, raw
@@ -794,6 +801,9 @@ def render_hop(city_key, city_name, raw):
     rb = set(b.get("relatedRoutes") or [])
     head = f"从{a['stationName']}到{b['stationName']}"
     if not ra & rb:
+        plan = _hop_plan(city_name, a, a_name, b, b_name, ra, rb)
+        if plan:
+            return plan
         short = lambda s: "、".join(sorted(s)[:6]) + ("…" if len(s) > 6 else "")
         return f"{head}没直达车，{a['stationName']} 有 {short(ra)}，{b['stationName']} 有 {short(rb)}"
     direct = []
@@ -802,7 +812,8 @@ def render_hop(city_key, city_name, raw):
         if got:
             direct.append((line, got))
     if not direct:
-        return f"{head}有同名线路但方向反了，得换乘"
+        plan = _hop_plan(city_name, a, a_name, b, b_name, ra, rb)
+        return plan or f"{head}有同名线路但方向反了，得换乘"
     if len(direct) == 1:
         line, got = direct[0]
         return f"{head}坐 {line} 直达（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got)
@@ -810,6 +821,65 @@ def render_hop(city_key, city_name, raw):
     for line, got in direct:
         rows.append(f"{line}（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got))
     return "\n".join(rows)
+
+
+def _hop_plan(city_name, a, a_name, b, b_name, ra, rb):
+    """没直达车时算一次换乘：先坐 A 线到某站，再换 B 线到终点。
+
+    「同一个地方」按坐标认——汽车总站（大北路）和汽车总站（二医院）站名不同，
+    实际隔 140 米，走两步就能换上车。
+    shortcut: 只算一次换乘、只取换得最早的那个方案，两次以上换乘交给模型说
+    """
+    ends = {}
+    for r in _catalog(city_name).get("buslines") or []:
+        ends.setdefault(r["lineName"], {})[str(r.get("upperOrDown"))] = r.get("to") or ""
+    if a["stationName"] == b["stationName"]:
+        return ""          # 站名匹到同一个站了，别答「从X到X换一次」
+    legs = []
+    for line in sorted(rb)[:4]:
+        for d in ("1", "2"):
+            pts = _seq_pts(city_name, line, d)
+            ib = next((p["i"] for p in pts if b_name in p["name"]), None)
+            if ib is not None:
+                legs += [(line, d, p) for p in pts[:ib]]
+    best = None
+    for line in sorted(ra)[:3]:
+        for d in ("1", "2"):
+            pts = _seq_pts(city_name, line, d)
+            ia = next((p["i"] for p in pts if a_name in p["name"]), None)
+            if ia is None:
+                continue
+            for p in pts[ia + 1:]:
+                if p["i"] - ia >= (best[0] if best else 99):
+                    continue
+                # 300 米以内算同一个换乘点：站名不同但就在马路两侧
+                hit = next((lb for lb in legs if lb[0] != line and (_dist_m(p, lb[2]) or 9999) <= 300), None)
+                if hit:
+                    best = (p["i"] - ia, line, d, p, hit)
+    if not best:
+        return ""
+    _, l1, d1, p1, (l2, d2, p2) = best
+    walk = "" if p1["name"] == p2["name"] else \
+        f"（跟{p2['name']}隔 {_dist_m(p1, p2)} 米，走两步）"
+    return (f"从{a['stationName']}到{b['stationName']}没直达车，换一次：\n"
+            f"坐 {l1}（往{ends.get(l1, {}).get(d1) or '?'}）到 {p1['name']}{walk}，"
+            f"换 {l2}（往{ends.get(l2, {}).get(d2) or '?'}）到 {b['stationName']}")
+
+
+def _seq_pts(city_name, line, d):
+    return [{"name": s.get("stationName") or "", "i": i,
+             "lat": s.get("station_lat"), "lng": s.get("station_lon")}
+            for i, s in enumerate(_station_seq(city_name, line, d))]
+
+
+def _dist_m(p, q):
+    """两站直线距离，够说「走两步」用的粗算；缺坐标返回 None。"""
+    try:
+        dlat = (float(p["lat"]) - float(q["lat"])) * 111000
+        dlng = (float(p["lng"]) - float(q["lng"])) * 111000 * 0.92   # 北纬 22° 的经度收缩
+    except (KeyError, TypeError, ValueError):
+        return None
+    return int((dlat ** 2 + dlng ** 2) ** 0.5)
 
 
 def _clock(mins):

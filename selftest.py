@@ -511,6 +511,34 @@ assert "本线路" not in query._sweep_chelaile("北海市")   # 说法不一致
 query.cities, query.chelaile.lines, query.chelaile.live = _cit2, _cl2, _lv2
 query._cache.clear()
 
+# 没直达车要给出换乘方案：「从玉福路口到玉林北站」坐 6路 到汽车总站换 G02
+_seq = [2840, 2841]
+query._catalog = lambda cn: {"buslines": [
+    {"lineName": "6路", "upperOrDown": "2", "from": "甲", "to": "人民大北路口"},
+    {"lineName": "G02路", "upperOrDown": "1", "from": "汽车总站（二医院）", "to": "玉林北站"}]}
+query._station_seq = lambda cn, line, d: {
+    ("6路", "2"): [{"stationName": n, "station_lat": la, "station_lon": lo} for n, la, lo in [
+        ("人民大北路口", 22.64, 110.15), ("玉福路口", 22.6069, 110.1267),
+        ("电脑城（新民路）", 22.6200, 110.1400), ("汽车总站（大北路）", 22.6281824, 110.1440855)]],
+    ("G02路", "1"): [{"stationName": n, "station_lat": la, "station_lon": lo} for n, la, lo in [
+        ("汽车总站（二医院）", 22.6279276, 110.1456687), ("玉林北站", 22.70, 110.34)]],
+}.get((line, d), [])
+_a = {"stationName": "玉福路口", "relatedRoutes": ["6路"]}
+_b = {"stationName": "玉林北站", "relatedRoutes": ["G02路"]}
+_plan = query._hop_plan("玉林市", _a, "玉福路口", _b, "玉林北站", {"6路"}, {"G02路"})
+# 电脑城离 G02 那站 900 多米，不算同一个换乘点；只认 300 米以内的
+assert "汽车总站（大北路）" in _plan and "G02路" in _plan and "电脑城" not in _plan, _plan
+# 换乘点必须在起点之后：把玉福路口挪到最后一个，就不该有方案
+query._station_seq = lambda cn, line, d: [{"stationName": n, "station_lat": la, "station_lon": lo}
+                                          for n, la, lo in [("汽车总站（大北路）", 22.6281824, 110.1440855),
+                                                            ("玉福路口", 22.6069, 110.1267)]] \
+    if (line, d) == ("6路", "2") else [
+        {"stationName": n, "station_lat": la, "station_lon": lo} for n, la, lo in [
+            ("汽车总站（二医院）", 22.6279276, 110.1456687), ("玉林北站", 22.70, 110.34)]]
+assert query._hop_plan("玉林市", _a, "玉福路口", _b, "玉林北站", {"6路"}, {"G02路"}) == ""
+query._catalog, query._station_seq = _seq[0], _seq[1]
+query._cache.clear()
+
 print("selftest ok")
 
 if "--live" in sys.argv:
