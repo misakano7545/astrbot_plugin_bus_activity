@@ -529,15 +529,16 @@ def _cands(city_name, msg):
     for part in re.split(r"[，,。.？?！!、\s]+", msg):
         cand = SRCPRE.sub("", part)      # 「车来了查X」里的数据源和动词
         cand = LEAD.sub("", TAIL.sub("", cand))
+        whole = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
         # 「广州地铁芳村站附近」：城市名和「地铁」都不是站名的一部分
-        cand = re.sub(rf"^{re.escape(city)}", "", cand)
-        cand = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
+        cand = re.sub(r"^(地铁|轨道交通|公交)", "", re.sub(rf"^{re.escape(city)}", "", cand))
         if LINE_RE.search(cand):
             # 「G02到高新产业园」：线路号后面那个才是上车站，别整片跳过
             cand = re.split(r"到|去|往|在|经停", cand)[-1]
-        if len(cand) < 2 or norm_city(cand) == city or LINE_RE.search(cand):
-            continue                        # 城市名和线路号不是站名
-        yield cand
+        # 先试剥掉城市名的「芳村站」，不行再试原样的「玉林北站」（北站是站名的一部分）
+        for c in dict.fromkeys([cand, whole]):
+            if len(c) >= 2 and norm_city(c) != city and not LINE_RE.search(c):
+                yield c
 
 
 def pick_stop(city_name, msg):

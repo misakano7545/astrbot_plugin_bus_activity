@@ -287,6 +287,11 @@ assert _out.count("\n") == 23 and "还有" not in _out, _out
 query._catalog, query.stops = _cat, _stops
 # 「车来了查X校区的线路」：数据源和动词不能留在站名里；点名车来了就扫车来了的站表
 assert list(query._cands("玉林市", "车来了查广西医科大玉林校区的线路")) == ["广西医科大玉林校区"]
+# 「玉林北站有哪几路车」：城市名剥掉只剩「北站」搜不到，得再拿原样那句试一次
+_st2 = query.stops
+query.stops = lambda cn, kw: [{"stationName": "玉林北站", "relatedRoutes": ["G01路"]}] if kw == "玉林北站" else []
+assert query.pick_stop("玉林市", "玉林北站有哪几路车") == "玉林北站"
+query.stops = _st2
 _cl, _ct3 = query.chelaile, query.cities
 
 
