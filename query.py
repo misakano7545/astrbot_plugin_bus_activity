@@ -24,6 +24,14 @@ CHELAILE_CITIES = json.loads((HERE / "cities.json").read_text("utf-8"))
 # 区县 → 地级市：「东胜区8路」这种写法得先知道东胜区属鄂尔多斯，掌上不认区县当城市名。
 # 只收全国不重名的区县，重名的（朝阳区、城区）指不准是哪座城，宁可交回模型。
 DISTRICTS = json.loads((HERE / "districts.json").read_text("utf-8"))
+# 站名里带的是裸县名（「元氏火车站」不是「元氏县火车站」）：去掉行政后缀再收一遍，
+# 同样只留唯一指向一座城的裸名
+DIST_BARE = {}
+for _k, _v in DISTRICTS.items():
+    _b = re.sub(r"(特别行政区|自治区|自治县|自治州|地区|盟|市|区|县|旗)$", "", _k)
+    if len(_b) >= 2:
+        _old = DIST_BARE.get(_b)
+        DIST_BARE[_b] = _v if _old in (None, _v) else ""      # 撞了就标空，不用
 
 API = "https://h5.mygolbs.com/ApiData.do"
 # Origin 是唯一命门：末尾多一个斜杠、换成 http、或干脆不带，上游都回 HTTP 200 +
@@ -109,6 +117,15 @@ def norm_city(name):
     short = SUFFIX.sub("", s)
     # 剥完不足两个字说明这个缀本来就是名字的一部分，原样保留
     return short if len(short) >= MIN_CITY_KEY else s
+
+
+def _district_city(text):
+    """「元氏火车站」里带的是裸县名：翻成所在地级市，比落回默认城强。"""
+    hits = [b for b, v in DIST_BARE.items() if v and b in (text or "")]
+    if not hits:
+        return None
+    key = norm_city(DIST_BARE[max(hits, key=len)])
+    return key if key in cities() else None
 
 
 def _snap(pre):
@@ -1461,6 +1478,15 @@ def answer(msg, default_city, ctx="", key=""):
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
     # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城
     out = render_hop(city_key, name, got) if (got and name) else None
+    # 站名里带裸县名（「元氏火车站」）：先在那个县所在的城查，别落回默认城交白卷
+    if not out and got and not explicit:
+        dc = _district_city(got[0] + got[1])
+        dname = (cities().get(dc) or {}).get("mygolbs") if dc and dc != city_key else None
+        if dname:
+            out = render_hop(dc, dname, got)
+            if out:
+                city_key, name = dc, dname
+                last["city"] = dc
     # 「从机场一号航站楼到元氏火车站」没写城市：默认城查不到，沿用上一条问过的城
     if not out and got and not explicit and prev in cities() and prev != city_key:
         city_key, name = prev, (cities().get(prev) or {}).get("mygolbs")

@@ -612,7 +612,8 @@ query.stops = lambda cn, kw: []
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "石家庄": {"mygolbs": "石家庄市"}}
 query._last("k-city")["city"] = "石家庄"
 assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-city") == "石家庄 换乘"
-assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-city2") == ""   # 没上文不硬编
+# 不带上文也能猜：站名里的「元氏」是元氏县，归石家庄
+assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-city2") == "石家庄 换乘"
 query.render_hop, query.stops, query.cities = _rh2, _st7, _cit4
 
 # 「玉林汽车站」平台没这个站：退到「车站」会匹上「玉林火车站」，退到「汽车站」查不到。
@@ -708,6 +709,15 @@ assert "玉林北站定制夜班车 1 辆" in _s4 and "G01路 没车报位置" i
 assert query._msg_line("玉林市", "那玉林北站定制夜班车呢？") == "玉林北站定制夜班车"
 assert query._msg_line("玉林市", "玉林北站有哪几条公交线？") is None
 query._catalog, query._live_my = _cat4, _lm4
+
+# 站名里带裸县名（「元氏火车站」→ 元氏县 → 石家庄）：别落回默认城玉林交白卷
+_c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
+                                           "石家庄": {"mygolbs": "石家庄市"}}
+assert query._district_city("机场一号航站楼元氏火车站") == "石家庄"
+assert query._district_city("玉林北站") is None          # 撞名的裸名不收，别乱猜
+_rh8, query.render_hop = query.render_hop, lambda ck, nm, got: f"HOP:{ck}" if ck == "石家庄" else None
+assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-d8") == "HOP:石家庄"
+query.cities, query.render_hop = _c8, _rh8
 
 print("selftest ok")
 
