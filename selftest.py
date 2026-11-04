@@ -270,6 +270,12 @@ assert query.parse("用的wb客户端多用户切换和wb2api都好几天没更�
 assert query.parse("石家庄131区间有没有车") == ("131区间", "石家庄")
 assert query.parse("石家庄131路区间车现在有没有在跑") == ("131区间", "石家庄")
 assert query.parse("石家庄131路有没有车") == ("131", "石家庄")
+
+# 「广州地铁芳村站附近有多少条公交线」：城市名和「地铁」得剥掉，否则站名永远搜不到
+_st = query.stops
+query.stops = lambda cn, kw: [{"stationName": "芳村", "relatedRoutes": ["19路"]}] if kw == "芳村站" else []
+assert query.pick_stop("广州市", "广州地铁芳村站附近有多少条公交线") == "芳村"
+query.stops = _st
 assert query.norm_line("131路区间") == query.norm_line("131区间")
 assert [query._cn_num(x) for x in ("一", "九", "十", "十二", "二十三", "两")] == [1, 9, 10, 12, 23, 2]
 

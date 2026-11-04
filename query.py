@@ -469,7 +469,7 @@ def render(city_key, want, res):
 
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的话|还有|吗|呢|啊).*$")
+TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的话|附近|周边|周围|还有|吗|呢|啊).*$")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
 # 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
@@ -523,6 +523,9 @@ def pick_stop(city_name, msg):
     city = norm_city(city_name)
     for part in re.split(r"[，,。.？?！!、\s]+", msg):
         cand = LEAD.sub("", TAIL.sub("", part))
+        # 「广州地铁芳村站附近」：城市名和「地铁」都不是站名的一部分
+        cand = re.sub(rf"^{re.escape(city)}", "", cand)
+        cand = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
         if LINE_RE.search(cand):
             # 「G02到高新产业园」：线路号后面那个才是上车站，别整片跳过
             cand = re.split(r"到|去|往|在|经停", cand)[-1]
@@ -744,7 +747,10 @@ def render_stop(city_key, city_name, msg):
     name = pick_stop(city_name, msg)
     if not name:
         return None
-    routes = (stops(city_name, name) or [{}])[0].get("relatedRoutes") or []
+    # 再搜一次站名会撞上同名地铁站（「芳村」和「芳村（地铁站）」），按站名精确挑
+    rows_ = stops(city_name, name) or []
+    row = next((r for r in rows_ if r.get("stationName") == name), rows_[0] if rows_ else {})
+    routes = row.get("relatedRoutes") or []
     if not routes:
         return None
     rows = _catalog(city_name).get("buslines") or []
