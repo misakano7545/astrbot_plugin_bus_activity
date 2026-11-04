@@ -305,6 +305,10 @@ assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41",
 # 「车来了，看一下 G02…」：数据源后面跟逗号再跟动作词，一样得剥干净
 assert query.parse(query.SRCPRE.sub("", "车来了，看一下 G02 现在上线的有几台车")) == ("G02", "")
 assert query.parse(query.SRCPRE.sub("", "车来了查询玉林职业技术学院有没有公交车")) is None
+# 一句问两条线（「樟13 / 12路」「11路和12路」）要都答，别只答第一条
+assert [n for n, _ in query._lines("福州永泰闽运\n樟13\n12路目前运行情况")] == ["12", "樟13"]
+assert [n for n, _ in query._lines("11路和12路")] == ["11", "12"]
+assert [p for _, p in query._lines("11路和12路")] == ["", ""]      # 「路和」不是县名
 # 「11路还有多久到双溪口」：TAIL 的「还有」会把目的地一起吃到行尾，得先按「到」切
 assert "双溪口" in list(query._cands("泉州市", "泉州公交11路还有多久到双溪口"))
 # 上游刚挂过也不能让闲聊收到「上游没响应」——那句是「彻底变成问公交工具」的由来

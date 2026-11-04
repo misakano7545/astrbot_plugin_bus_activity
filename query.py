@@ -108,6 +108,34 @@ def parse(msg):
     return norm_line(num), pre
 
 
+def _lines(msg):
+    """句子里问了哪几条线：「樟13 / 12路」「11路和12路」都要答，别只答第一条。"""
+    out, end = [], -1
+    for m in LINE_RE.finditer(msg):
+        if m.start() < end:            # 「131路区间」先匹到「131路」，别再算一条
+            continue
+        end = m.end()
+        num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
+            (m.group("alpha") or m.group("num") or m.group("metro")
+             or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
+        # 只认紧贴着的汉字前缀：多行里上一行的「樟」不算 12 路的前缀
+        pre = re.search(r"([\u4e00-\u9fa5]{1,4})$", msg[: m.start()])
+        pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
+        # 「11路和12路」：前缀截到的是「路和」，不是县名
+        pre = re.sub(r"公交$", "", pre)
+        pre = re.sub(r"^(?:路|和|与|跟|及|、)+|(?:路|和|与|跟|及)+$", "", pre)
+        if pre in ("那", "这", "该", "此", "本"):
+            pre = ""
+        out.append((norm_line(num), pre))
+    # 「樟13」这种县内线习惯不带「路」，整段就一个词时也认（福州目录里叫「樟13路」）
+    for part in re.split(r"[\n，,。、;；]+", msg):
+        part = AT_RE.sub("", part).strip()
+        m = re.fullmatch(r"([\u4e00-\u9fa5]{1,3})(\d{1,3})", part)
+        if m and m.group(1) not in cities() and (m.group(1) + m.group(2)) not in [n for n, _ in out]:
+            out.append((norm_line(m.group(1) + m.group(2)), ""))
+    return out
+
+
 def _cached(kind, key, ttl, fn):
     hit = _cache.get((kind, key))
     if hit and time.time() - hit[0] < ttl:
@@ -997,6 +1025,41 @@ def _last(key):
     return d
 
 
+def _one(city_key, name, num, prefix, msg, src, explicit, last):
+    """一条线路的回答：时刻表 / 公司 / 站表 / 到站 / 实时，按问法选。"""
+    wants = ([prefix + num] if prefix and norm_city(prefix) != city_key else []) + [num]
+    if name and prefix:
+        cat = _catalog(name)
+        # 网络挂了才不敢兜底：目录取不到时裸号会答成另一条线（「新乐专1路」→ 1 路）；
+        # 业务上的「这城没目录」照旧往下走
+        if cat.get("error") and "detail" in cat:
+            return cat.get("msg") or ""
+        # 前缀被 PREFIX_RE 截短过（「新乐专1路」→「庄新乐专」），目录里有真线名就用真的
+        full = _exact_line(name, msg, num)
+        if full:
+            wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
+    last["line"] = wants[0]
+    if name:
+        for w in wants:
+            if TIMES_RE.search(msg):          # 问首末班时刻表
+                out = render_times(name, w)
+            elif COMPANY_RE.search(msg):      # 问公司/找失物/投诉
+                out = render_company(name, w)
+            elif STOPS_RE.search(msg):       # 要的是站表，别回实时车
+                out = render_stops(name, w)
+            else:
+                out = render_at(city_key, name, w, msg)
+            if out:
+                return out
+    vm = VEH_RE.search(msg)
+    veh = next((g for g in vm.groups() if g), "") if vm else ""
+    txt = render(city_key, wants[0], query(city_key, wants, src, veh), veh)
+    # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
+    if not explicit and txt.startswith("没查到"):
+        txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
+    return txt
+
+
 def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     last = _last(key)
@@ -1073,41 +1136,15 @@ def answer(msg, default_city, ctx="", key=""):
             out = render_stop(city_key, name, msg, src)
             if out:
                 return out
+        # 一句里问了两条线（「樟13 / 12路」）就都答，别只答第一条
+        multi = _lines(msg)
+        if len(multi) > 1:
+            outs = [t for t in (_one(city_key, name, n, pre, msg, src, explicit, last)
+                                for n, pre in multi) if t]
+            if outs:
+                return "\n\n".join(outs)
         # 前缀是线路名的一部分（容县11路），明写城市也不该丢——explicit 只管去哪个目录找
-        wants = ([prefix + line[0]] if prefix and norm_city(prefix) != city_key else []) + [line[0]]
-        # 前缀被 PREFIX_RE 截短过（「新乐专1路」→「庄新乐专」），目录里有真线名就用真的，
-        # 也别再回退裸号——裸号是另一条线
-        if name and prefix:
-            cat = _catalog(name)
-            # 网络挂了才不敢兜底：目录取不到时裸号会答成另一条线（「新乐专1路」→ 1 路）；
-            # 业务上的「这城没目录」照旧往下走
-            if cat.get("error") and "detail" in cat:
-                return cat.get("msg") or ""
-            full = _exact_line(name, msg, line[0])
-        else:
-            full = None
-        if full:
-            wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
-        last["line"] = wants[0]
-        if name:
-            for w in wants:
-                if TIMES_RE.search(msg):          # 问首末班时刻表
-                    out = render_times(name, w)
-                elif COMPANY_RE.search(msg):      # 问公司/找失物/投诉
-                    out = render_company(name, w)
-                elif STOPS_RE.search(msg):       # 要的是站表，别回实时车
-                    out = render_stops(name, w)
-                else:
-                    out = render_at(city_key, name, w, msg)
-                if out:
-                    return out
-        vm = VEH_RE.search(msg)
-        veh = next((g for g in vm.groups() if g), "") if vm else ""
-        txt = render(city_key, wants[0], query(city_key, wants, src, veh), veh)
-        # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
-        if not explicit and txt.startswith("没查到"):
-            txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
-        return txt
+        return _one(city_key, name, line[0], prefix, msg, src, explicit, last)
     if name:
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
         if SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg):
