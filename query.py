@@ -682,7 +682,8 @@ def find_stop(city_name, raw):
     # 用户写的和站牌上的常常差一两个字（「玉林旅游客运站」vs「旅游汽车客运站」），
     # 拿尾巴当关键词搜一遍，再挑最像的那个，相似度不够宁可不认
     for n in (3, 2):
-        if len(raw) > n:
+        # 「玉林汽车站」退到「车站」全是通用字，会匹上「玉林火车站」——那是另一个站
+        if len(raw) > n and not re.fullmatch(r"[公交汽车火车车站台]+", raw[-n:]):
             rows = [r for r in stops(city_name, raw[-n:]) or [] if r.get("stationName")]
             best = max(rows, key=lambda r: difflib.SequenceMatcher(
                 None, raw, r["stationName"]).ratio(), default=None)
@@ -885,28 +886,46 @@ def _hop_plan(city_name, a, a_name, b, b_name, ra, rb):
             ib = next((p["i"] for p in pts if b_name in p["name"]), None)
             if ib is not None:
                 legs += [(line, d, p) for p in pts[:ib]]
-    best = None
-    for line in sorted(ra)[:3]:
-        for d in ("1", "2"):
-            pts = _seq_pts(city_name, line, d)
-            ia = next((p["i"] for p in pts if a_name in p["name"]), None)
-            if ia is None:
+    best = _plan_from(city_name, a_name, ra, legs)
+    board = ()
+    if not best:
+        # 起点这一站的车接不上（机场 T1 只有 142/156，机场专线只停 T2）：到附近 1.5 公里内
+        # 找一条能接上的线，走过去坐
+        for d_m, r in sorted(((_dist_m(a, r) or 9999, r)
+                              for r in stops(city_name, a_name[:2]) or []), key=lambda x: x[0]):
+            if d_m > 1500 or r.get("stationName") == a["stationName"]:
                 continue
-            for p in pts[ia + 1:]:
-                if p["i"] - ia >= (best[0] if best else 99):
-                    continue
-                # 300 米以内算同一个换乘点：站名不同但就在马路两侧
-                hit = next((lb for lb in legs if lb[0] != line and (_dist_m(p, lb[2]) or 9999) <= 300), None)
-                if hit:
-                    best = (p["i"] - ia, line, d, p, hit)
+            best = _plan_from(city_name, r.get("stationName") or "", set(r.get("relatedRoutes") or []), legs)
+            if best:
+                board = (d_m, r["stationName"])
+                break
     if not best:
         return ""
     _, l1, d1, p1, (l2, d2, p2) = best
     walk = "" if p1["name"] == p2["name"] else \
         f"（跟{p2['name']}隔 {_dist_m(p1, p2)} 米，走两步）"
     return (f"从{a['stationName']}到{b['stationName']}没直达车，换一次：\n"
-            f"坐 {l1}（往{ends.get(l1, {}).get(d1) or '?'}）到 {p1['name']}{walk}，"
+            + (f"先走 {board[0]} 米到 {board[1]}，" if board else "")
+            + f"坐 {l1}（往{ends.get(l1, {}).get(d1) or '?'}）到 {p1['name']}{walk}，"
             f"换 {l2}（往{ends.get(l2, {}).get(d2) or '?'}）到 {b['stationName']}")
+
+
+def _plan_from(city_name, at, lines, legs):
+    """从 at 站上车，找第一个能在 legs 里接上的换乘点。"""
+    best = None
+    for line in sorted(lines)[:3]:
+        for d in ("1", "2"):
+            pts = _seq_pts(city_name, line, d)
+            ia = next((p["i"] for p in pts if at in p["name"]), None)
+            if ia is None:
+                continue
+            for p in pts[ia + 1:]:
+                if p["i"] - ia >= (best[0] if best else 99):
+                    continue
+                hit = next((lb for lb in legs if lb[0] != line and _same_spot(p, lb[2])), None)
+                if hit:
+                    best = (p["i"] - ia, line, d, p, hit)
+    return best
 
 
 def _seq_pts(city_name, line, d):
@@ -923,6 +942,12 @@ def _dist_m(p, q):
     except (KeyError, TypeError, ValueError):
         return None
     return int((dlat ** 2 + dlng ** 2) ** 0.5)
+
+
+def _same_spot(p, q, m=300):
+    """同一个换乘点：站名不同但就在马路两侧。距离 0（同一个站）也算——`d or 9999` 会把 0 当没有。"""
+    d = _dist_m(p, q)
+    return d is not None and d <= m
 
 
 def _clock(mins):
@@ -1332,17 +1357,26 @@ def answer(msg, default_city, ctx="", key=""):
         return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
     # 表外城市直接用用户写的中文名当 CITYNAME（掌上就吃中文名）
     name = (cities().get(city_key) or {}).get("mygolbs") or (prefix if city_key not in cities() else None)
+    prev = last.get("city")
     last["city"] = city_key
     got = hop(msg)
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
     # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城
     out = render_hop(city_key, name, got) if (got and name) else None
+    # 「从机场一号航站楼到元氏火车站」没写城市：默认城查不到，沿用上一条问过的城
+    if not out and got and not explicit and prev in cities() and prev != city_key:
+        city_key, name = prev, (cities().get(prev) or {}).get("mygolbs")
+        last["city"] = city_key
+        out = render_hop(city_key, name, got)
     if out:
         return out
     if got:
         ca = detect_city(got[0], "", "")[0]
         cb = detect_city(got[1], "", "")[0]
-        if ca and cb and ca != cb:
+        # 两头都得站得住：要么站表里有这个站，要么名字自己带着别的城名。
+        # 「玉林汽车站」平台没这个站、名字也没带外地城名，说成跨城等于替用户编地名
+        known = lambda x: bool(stops(name or city_key, x) or detect_city(x, "", "")[0] not in ("", city_key))
+        if ca and cb and ca != cb and known(got[0]) and known(got[1]):
             return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
         return out or ""      # render_hop 返回空串 = 有一边不是公交站，交回给模型

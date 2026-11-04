@@ -558,6 +558,25 @@ query._station_seq = lambda cn, line, d: [{"stationName": n, "station_lat": la, 
         {"stationName": n, "station_lat": la, "station_lon": lo} for n, la, lo in [
             ("汽车总站（二医院）", 22.6279276, 110.1456687), ("玉林北站", 22.70, 110.34)]]
 assert query._hop_plan("玉林市", _a, "玉福路口", _b, "玉林北站", {"6路"}, {"G02路"}) == ""
+# 起点这站的车接不上时，到附近 1.5 公里内找能接上的站（机场 T1 只有 142/156，专线只停 T2）
+_st6 = query.stops
+_t1 = {"stationName": "机场一号航站楼站", "lat": "38.2754228233", "lng": "114.69786839",
+       "relatedRoutes": ["142路", "156路"]}
+_t2 = {"stationName": "机场二号航站楼站", "lat": "38.2822972819", "lng": "114.6916457667",
+       "relatedRoutes": ["142路", "156路", "机场公交专线1路"]}
+_yd = {"stationName": "元氏火车站", "lat": "37.76", "lng": "114.53", "relatedRoutes": ["1001路"]}
+query.stops = lambda cn, kw: [_t2] if kw == "机场" else []
+query._station_seq = lambda cn, line, d: {
+    ("机场公交专线1路", "2"): [{"stationName": n, "station_lat": la, "station_lon": lo} for n, la, lo in [
+        ("机场二号航站楼站", 38.2822972819, 114.6916457667), ("南焦客运站", 37.99, 114.51)]],
+    ("1001路", "2"): [{"stationName": n, "station_lat": la, "station_lon": lo} for n, la, lo in [
+        ("南焦客运站", 37.99, 114.51), ("元氏火车站", 37.76, 114.53)]],
+}.get((line, d), [])
+_p2 = query._hop_plan("石家庄市", _t1, "机场一号航站楼", _yd, "元氏火车站",
+                      {"142路", "156路"}, {"1001路"})
+assert "机场公交专线1路" in _p2 and "1001路" in _p2, _p2
+assert "走 993 米到 机场二号航站楼站" in _p2, _p2      # 说实话：得走到 T2 才有专线
+query.stops = _st6
 query._catalog, query._station_seq = _seq[0], _seq[1]
 query._cache.clear()
 
@@ -569,6 +588,28 @@ assert query.answer("从北流汽车站到玉林北站坐啥公交车", "玉林�
 query.render_hop = lambda ck, nm, got: ""      # 目录里查不到（真跨城）才走跨城那句
 assert "跨城" in query.answer("从北流汽车站到玉林北站坐啥公交车", "玉林市")
 query.render_hop, query.cities = _rh, _cit3
+
+# 「从机场一号航站楼到元氏火车站」没写城市：默认城查不到就沿用上一条问过的城
+_rh2, _st7, _cit4 = query.render_hop, query.stops, query.cities
+query.render_hop = lambda ck, nm, got: "" if ck == "玉林" else "石家庄 换乘"
+query.stops = lambda cn, kw: []
+query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "石家庄": {"mygolbs": "石家庄市"}}
+query._last("k-city")["city"] = "石家庄"
+assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-city") == "石家庄 换乘"
+assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-city2") == ""   # 没上文不硬编
+query.render_hop, query.stops, query.cities = _rh2, _st7, _cit4
+
+# 「玉林汽车站」平台没这个站：退到「车站」会匹上「玉林火车站」，退到「汽车站」查不到。
+# 通用字尾巴不参与模糊匹，宁可说不认得也不能换个站答
+_st5, query.stops = query.stops, lambda cn, kw: [
+    {"stationName": "玉林火车站", "relatedRoutes": ["1路"]},
+    {"stationName": "玉林火车站（出站口）", "relatedRoutes": ["1路"]},
+] if kw in ("车站", "火车站") else []
+assert query.find_stop("玉林市", "玉林汽车站")[0] is None
+assert query.find_stop("玉林市", "玉林火车站")[0]["stationName"].startswith("玉林火车站")
+# 站名认不出时别拿跨城那套顶包：跨城得两头都站得住
+assert "跨城" not in query.answer("从北流汽车总站到玉林汽车站坐啥公交线路", "玉林市")
+query.stops = _st5
 
 # 「从北流到玉林汽车总站」：「北流」是地名不是站名，挑那一带能跟对面同线的站
 assert query.hop("从北流到玉林汽车总站坐哪个公交线路") == ("北流", "玉林汽车总站")
