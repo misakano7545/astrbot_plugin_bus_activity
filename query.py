@@ -1278,13 +1278,18 @@ def answer(msg, default_city, ctx="", key=""):
     name = (cities().get(city_key) or {}).get("mygolbs") or (prefix if city_key not in cities() else None)
     last["city"] = city_key
     got = hop(msg)
+    # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
+    # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城
+    out = render_hop(city_key, name, got) if (got and name) else None
+    if out:
+        return out
     if got:
         ca = detect_city(got[0], "", "")[0]
         cb = detect_city(got[1], "", "")[0]
         if ca and cb and ca != cb:
             return f"{got[0]}在{ca}，{got[1]}在{cb}，跨城的公交串不起来，这段得坐高铁或长途"
     if got and name:
-        return render_hop(city_key, name, got) or ""
+        return out or ""      # render_hop 返回空串 = 有一边不是公交站，交回给模型
     if name and TRANSFER_RE.search(msg):
         # 「这条线路每站能换什么」没有线路号，用上一条答过的线路
         want = (prefix + line[0] if prefix and not explicit else line[0]) if line else last.get("line") or ""

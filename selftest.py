@@ -539,6 +539,15 @@ assert query._hop_plan("玉林市", _a, "玉福路口", _b, "玉林北站", {"6�
 query._catalog, query._station_seq = _seq[0], _seq[1]
 query._cache.clear()
 
+# 「从北流汽车站到玉林北站」两站分属北流和玉林，但同一条 北流105路 直达：
+# 得先按目录真查，查不到才说跨城，别拿城市名先判死
+_rh, query.render_hop = query.render_hop, lambda ck, nm, got: "北流105路 直达（18 站）"
+_cit3, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}, "北流": {"mygolbs": "北流市"}}
+assert query.answer("从北流汽车站到玉林北站坐啥公交车", "玉林市") == "北流105路 直达（18 站）"
+query.render_hop = lambda ck, nm, got: ""      # 目录里查不到（真跨城）才走跨城那句
+assert "跨城" in query.answer("从北流汽车站到玉林北站坐啥公交车", "玉林市")
+query.render_hop, query.cities = _rh, _cit3
+
 print("selftest ok")
 
 if "--live" in sys.argv:
