@@ -335,6 +335,9 @@ def _mygolbs(city_name, want):
         if d not in ("1", "2"):
             continue
         payload = _live_my(city_name, name, d)
+        # 目录拿到了、实时那一步超时：别当成「这条线这会儿没车」
+        if payload.get("error") and "detail" in payload:
+            return {"error": payload.get("msg") or "上游这会儿没响应，过会儿再问"}
         cars = payload.get("list") or []
         # hasReal=1 且回的就是「获取实时数据成功」说明上游认为线路在运营，只是这一趟没有车报 GPS
         if payload.get("hasReal") in ("1", 1) or "成功" in str(payload.get("msg") or ""):
