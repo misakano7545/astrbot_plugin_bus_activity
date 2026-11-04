@@ -252,6 +252,12 @@ def detect_city(msg, prefix, default_city):
         return max(hits, key=len), True
     if prefix and prefix in idx:
         return prefix, True
+    # 区县名在句子里也能猜：「南海区8路」「伦教街道办事处公交线路」这类掌上不认区县当城市名
+    dd = [k for k in DISTRICTS if k in msg]
+    if dd:
+        key = norm_city(DISTRICTS[max(dd, key=len)])
+        if key in idx:
+            return key, True
     # 「东胜区8路」：区县名不是城市，掌上也不认它当城市名，得先翻到属地级市
     if prefix and DISTRICTS.get(prefix):
         key = norm_city(DISTRICTS[prefix])
@@ -1444,6 +1450,11 @@ def answer(msg, default_city, ctx="", key=""):
                 last["city"] = prev
         if out:
             return out
+        # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）
+        if not explicit and re.search(r"站|线路|几路", msg):
+            hint = re.sub(r"公交$", "", STOPSUF.sub("", TAIL.sub("", msg))).strip()
+            return (f"「{hint}」这个站没查到，是哪座城的？说个城市名我再查" if hint
+                    else "这个站没查到，是哪座城的？说个城市名我再查")
     # 这一句只给「刚刚真的没连上、而且问的是公交」的情况：以前按时间窗判断，
     # 任何一句闲聊都会收到「上游没响应」，成了「彻底变成问公交工具」的由来
     return "上游这会儿没响应，过会儿再问" if (BUS_RE.search(msg) and _up_fail[0] >= t0) else ""
