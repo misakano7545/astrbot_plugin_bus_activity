@@ -33,6 +33,12 @@ assert query.parse("105路还有几站") == ("105", "")
 assert query.parse("陆川 1 路有车吗") == ("1", "陆川")
 assert query.parse("早上8点有车吗") is None  # 裸数字不带「路」不算线路
 assert query.parse("玉林 6 路夜班还有几站") == ("6夜班", "玉林")   # 「路」后的定性词要一起吃掉
+# 「查询 G02 路」的「查询」是动词，不是县名前缀——否则 detect_city 会拿它当城市去查
+assert query.parse("查询 G02 路现在 512 车到哪个地方了？") == ("G02", "")
+assert query.parse("查询一下 G02 路") == ("G02", "")
+# 「512 车」「513 号车」是车号；「11 路车」中间隔着「路」，不是车号
+assert [g for g in query.VEH_RE.findall("现在 512 车到哪")[0]] == ["", "512"]
+assert query.VEH_RE.findall("11 路车") == [] and query.VEH_RE.findall("513 号车")[0][1] == "513"
 
 # 目录匹配：全等优先，前缀只在候选少时接受
 cat = [("6路", "a"), ("6路夜班", "b")]
