@@ -513,7 +513,8 @@ AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
 MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
 # 只剥带数据源的写法：「查桥站」这种真站名不能被「查」吃掉
-SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上)(?:查一下|查查|查|看看|看|搜一下|搜)?")
+SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上)\s*[，,、:：]?\s*"
+                    r"(?:查一下|看一下|查查|看看|查|看|搜一下|搜)?\s*[，,、:：]?\s*")
 
 
 def stops(city_name, keyword):
@@ -975,6 +976,7 @@ def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     last = _last(key)
     msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
+    raw = msg
     sm = SRC_RE.search(msg)
     src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
@@ -984,7 +986,7 @@ def answer(msg, default_city, ctx="", key=""):
         line = parse(ctx)
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
     inherited = False
-    if src and not line and last.get("line") and re.search(r"看|查|数据|接口", msg):
+    if src and not line and last.get("line") and re.search(r"看|查|数据|接口", raw):
         line = (last["line"], "")
         inherited = True
     prefix = line[1] if line else ""
