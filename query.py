@@ -51,6 +51,9 @@ _cache = {}
 # 必须至少含一个字母，否则「11路」「2026年」会被当线号
 ALPHA_PAT = (r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]{2,7}(?![A-Za-z0-9]))(?=[A-Za-z0-9]*[A-Za-z])"
              r"[A-Za-z]{0,2}\d{1,4}[A-Za-z]{0,2}(?![A-Za-z0-9])")
+# 香港一个「1」对应五家公司（城巴/九巴/屿巴/新界小巴/港岛小巴）：点名单算一家，
+# 长名字排前面，「小巴」放最后当统称（港岛小巴/新界小巴都含这两个字）
+OPS = ("新界小巴", "港岛小巴", "九龙小巴", "城巴", "九巴", "屿巴", "龙运", "新巴", "港铁", "小巴")
 # 「玉林 G02 路」「B1 有车吗」「105路」都认；裸数字必须带「路」，防「8点」误判
 # 「路」后面紧跟的定性词（夜班/专线）得一起吃掉，否则「6路夜班」会被截成「6」
 LINE_RE = re.compile(
@@ -94,7 +97,8 @@ JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|
 # 不单独算信号；实词、线号、数据源名才是。
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|" + ALPHA_PAT)
+    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|"
+    r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + ALPHA_PAT)
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
 ASK = re.compile(r"多久|几站|几分钟|几辆|几台|几点|有车|有没有|有吗|还有|在哪|到哪|到吗|怎么坐|怎么去|"
@@ -150,7 +154,12 @@ def parse(msg):
     """→ (线路号, 紧贴着的汉字段)。县内线路「陆川1路」靠这个前缀区分。"""
     m = LINE_RE.search(msg)
     if not m:
-        return None
+        # 「香港城巴1」香港人不带「路」字：算子名＋号也算一条线，前缀里留住算子名
+        m = re.search(r"(" + "|".join(OPS) + r")\s*(\d{1,4})(?![0-9])", msg)
+        if not m:
+            return None
+        pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", msg[: m.end(1)]))
+        return m.group(2), _snap(pre)
     # 「环山二号线」的线名自己就带汉字前缀，别再把它当县名重复拼一次
     # 先剥掉整段的动词再取尾巴：PREFIX_RE 只吃 4 个字，「帮我查一下东胜区」窗口里会剩
     # 「下东胜区」这种半截词，当成站名/线名前缀去查就成了一条不存在的线
@@ -484,6 +493,11 @@ def _mygolbs(city_name, want):
 
 def _chelaile(city_id, want):
     rows = _cached("catalog-cl", city_id, CATALOG_TTL, lambda: chelaile.lines(city_id))
+    # 「香港城巴1」：同号五家公司各有车，点了名就只留这一家（名字里的括号就是公司）
+    op = next((o for o in OPS if o in want), "")
+    if op:
+        rows = [r for r in rows if op in r[0]]
+        want = want.replace(op, "")
     hit = _pick(rows, want)
     if not hit:
         return None
@@ -499,7 +513,7 @@ def _chelaile(city_id, want):
             # state=-1 等待发车、-2 临时停运、-3 末班已过，desc 是现成中文文案
             desc = desc or d.get("desc") or ""
             to = d.get("to") or ""
-            groups.append((f"{to}（{co.group(1)}）" if co else to, d["buses"]))
+            groups.append((f"{to}（{co.group(1)}）" if co and not op else to, d["buses"]))
     # 多家公司同名时抬头别写成「1（九巴） 有 7 辆」，那不是一家的车
     return {"source": "车来了", "line": re.sub(r"[（(].*?[)）]", "", name)
             if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc}
@@ -1479,6 +1493,10 @@ def _last(key):
 def _one(city_key, name, num, prefix, msg, src, explicit, last):
     """一条线路的回答：时刻表 / 公司 / 站表 / 到站 / 实时，按问法选。"""
     wants = ([prefix + num] if prefix and norm_city(prefix) != city_key else []) + [num]
+    # 「香港城巴1」：同号五家公司各有 1 路，只给点名的这家——城市由 city_key 定，算子名留给 _chelaile 分流
+    op = next((o for o in OPS if o in prefix), "")
+    if op:
+        wants = [op + num]
     # 目录里的线名常省掉行政后缀：「东胜区8路」在鄂尔多斯目录里叫「东胜8路」
     bare = re.sub(r"(区|县|旗|市|镇)$", "", prefix) if prefix else ""
     if len(bare) >= 2 and bare != prefix:
@@ -1491,7 +1509,8 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
         if cat.get("error") and "detail" in cat:
             return cat.get("msg") or ""
         # 前缀被 PREFIX_RE 截短过（「新乐专1路」→「庄新乐专」），目录里有真线名就用真的
-        full = _exact_line(name, msg, num)
+        # 点名单（「城巴1」）时不能纠：香港掌上目录里只有一个 1 路（九巴的），纠过去就答错公司
+        full = None if op else _exact_line(name, msg, num)
         if full:
             wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
     last["line"] = wants[0]

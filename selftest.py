@@ -769,6 +769,21 @@ assert query.render_plan("玉林市", "玉林汽车总站", "玉林北站") == "
 query._post = _p111
 query._cache.clear()
 
+# 「香港城巴1」：同一个号五家公司各有车，点了名只报这一家；没点名照旧合并
+assert query.parse("香港城巴1") == ("1", "香港城巴")        # 香港人不带「路」字
+assert query.parse("城巴1") == ("1", "城巴")
+_cl, query.chelaile = query.chelaile, type("C", (), {
+    "lines": staticmethod(lambda cid: [("1（九巴）", "l1"), ("1（九巴）", "l2"),
+                                       ("1（城巴）", "c1"), ("1（城巴）", "c2")]),
+    "live": staticmethod(lambda cid, lid: {"to": f"{lid}方向", "buses": [("14", "某站", 2300)], "desc": ""}),
+})
+query._cache.clear()
+_hi = query._chelaile("085", "城巴1")
+assert _hi["line"] == "1（城巴）" and [g[0] for g in _hi["groups"]] == ["c1方向", "c2方向"], _hi
+assert query._chelaile("085", "1")["line"] == "1"      # 没点名：两家都报，抬头去掉公司
+query.chelaile = _cl
+query._cache.clear()
+
 print("selftest ok")
 
 if "--live" in sys.argv:
