@@ -54,7 +54,10 @@ def lines(city_id):
     目录是方向级记录，同名会有多个 lineId；以前用 setdefault 只留第一条，
     结果只查得到一个方向的车（见 issue #6）。
     """
-    data = _unwrap(_get("bus/cityLineList", _params(city_id)))
+    text = _get("bus/cityLineList", _params(city_id))
+    if not text:      # _get 连不上给的空串；当成「这城没线路」会让上面答「没这条线」，是谎话
+        raise RuntimeError("上游这会儿连不上，过一会儿再问一句")
+    data = _unwrap(text)
     seen = {}
     for row in (data.get("allLines") or {}).get("all") or []:
         seen.setdefault(row["lineName"], []).append(row["lineId"])

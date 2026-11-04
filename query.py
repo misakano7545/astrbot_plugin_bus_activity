@@ -108,6 +108,9 @@ def _cached(kind, key, ttl, fn):
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
     val = fn()
+    # 网络抖动别进缓存：catalog 一挂就是一小时查不到车，全是这条缓存留的
+    if isinstance(val, dict) and val.get("error") and "detail" in val:
+        return val
     # 过期键长期占位会让 _cache 一直涨，顺手清掉同一个 kind 下的过期项，超上限再整体淘汰
     if len(_cache) >= CACHE_MAX:
         now = time.time()
@@ -115,6 +118,10 @@ def _cached(kind, key, ttl, fn):
             _cache.pop(k, None)
     _cache[(kind, key)] = (time.time(), val)
     return val
+
+
+# 最近一次连不上上游的时刻（秒）。上游挂着时别静默交给模型——模型那层会直接挂住
+_up_fail = [0.0]
 
 
 def _post(params, timeout=8):
@@ -127,8 +134,11 @@ def _post(params, timeout=8):
         # 缺 CITYNAME 或线路名不存在时上游回的是 HTML 错误页，不是 JSON
         return {"status": e.code, "msg": f"HTTP {e.code}"}
     except (urllib.error.URLError, OSError) as e:
-        # 连不上/握手超时也曾直接抛到消息处理里，群里看到的是「:( …出现异常」这一整段
-        return {"status": -9, "msg": f"连不上上游 {e}", "error": True}
+        _up_fail[0] = time.time()
+        # 连不上/握手超时也曾直接抛到消息处理里，群里看到的是「:( …出现异常」这一整段。
+        # msg 会原样发给群友（render 直接 return error），异常细节只留在 detail 里
+        return {"status": -9, "msg": "上游这会儿连不上，过一会儿再问一句",
+                "error": True, "detail": str(e)}
     text = raw.lstrip()
     if not text.startswith("{"):
         # 58 字节令牌 = Origin 头不对，前置分流层直出的占位串
@@ -500,16 +510,16 @@ def find_stop(city_name, raw):
             # 「石家庄131区间有没有车」退到 3 字就是城市名本身，会把「石家庄站」搜出来
             if norm_city(raw[:n]) == norm_city(city_name):
                 continue
-            rows = stops(city_name, raw[:n])
+            rows = [r for r in stops(city_name, raw[:n]) or [] if r.get("stationName")]
             if rows:
                 return rows[0], raw[:n]
     # 用户写的和站牌上的常常差一两个字（「玉林旅游客运站」vs「旅游汽车客运站」），
     # 拿尾巴当关键词搜一遍，再挑最像的那个，相似度不够宁可不认
     for n in (3, 2):
         if len(raw) > n:
-            rows = stops(city_name, raw[-n:])
-            best = max(rows or [], key=lambda r: difflib.SequenceMatcher(
-                None, raw, r.get("stationName") or "").ratio(), default=None)
+            rows = [r for r in stops(city_name, raw[-n:]) or [] if r.get("stationName")]
+            best = max(rows, key=lambda r: difflib.SequenceMatcher(
+                None, raw, r["stationName"]).ratio(), default=None)
             if best and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
                 return best, best["stationName"]
     return None, raw
@@ -777,7 +787,10 @@ def _stop_chelaile(city_name, msg):
                 if (c or {}).get("mygolbs") == city_name), None)
     if not cid:
         return ""
-    rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
+    try:
+        rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
+    except Exception:
+        return ""
     note = f"（扫了 {min(len(rows), SWEEP_MAX)} 条线路）" if len(rows) > SWEEP_MAX else ""
 
     wants = [norm_city(x) for x in _cands(city_name, msg)]
@@ -844,7 +857,10 @@ def _sweep_chelaile(city_name):
                 if (c or {}).get("mygolbs") == city_name), None)
     if not cid:
         return ""
-    rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
+    try:
+        rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
+    except Exception:
+        return ""
     note = f"（抽查了 120 条）" if len(rows) > 120 else ""
     rows = rows[:120]
 
@@ -941,8 +957,10 @@ def answer(msg, default_city, ctx="", key=""):
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
     sm = SRC_RE.search(msg)
     src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
+    inherited = False
     if src and not line and last.get("line") and re.search(r"看|查|数据|接口", msg):
         line = (last["line"], "")
+        inherited = True
     prefix = line[1] if line else ""
     if prefix in ("那", "这", "该", "此", "本"):      # 指示词不是县名，别拼进线路名
         prefix = ""
@@ -990,11 +1008,24 @@ def answer(msg, default_city, ctx="", key=""):
             last["line"] = want
             return out
     if line:
+        # 「车来了查XX校区的线路」带站点，别因为上一条问过 9 路就答成 9 路
+        if inherited and name:
+            out = render_stop(city_key, name, msg, src)
+            if out:
+                return out
         # 前缀是线路名的一部分（容县11路），明写城市也不该丢——explicit 只管去哪个目录找
         wants = ([prefix + line[0]] if prefix and norm_city(prefix) != city_key else []) + [line[0]]
         # 前缀被 PREFIX_RE 截短过（「新乐专1路」→「庄新乐专」），目录里有真线名就用真的，
         # 也别再回退裸号——裸号是另一条线
-        full = _exact_line(name, msg, line[0]) if (name and prefix) else None
+        if name and prefix:
+            cat = _catalog(name)
+            # 网络挂了才不敢兜底：目录取不到时裸号会答成另一条线（「新乐专1路」→ 1 路）；
+            # 业务上的「这城没目录」照旧往下走
+            if cat.get("error") and "detail" in cat:
+                return cat.get("msg") or ""
+            full = _exact_line(name, msg, line[0])
+        else:
+            full = None
         if full:
             wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
         last["line"] = wants[0]
@@ -1022,5 +1053,5 @@ def answer(msg, default_city, ctx="", key=""):
         out = render_stop(city_key, name, msg, src)
         if out:
             return out
-        return ""
-    return ""
+    # 上游这时候连不上就说一句，别静默交给模型（模型那层可能十几分钟没动静）
+    return "上游这会儿没响应，过会儿再问" if time.time() - _up_fail[0] < 30 else ""

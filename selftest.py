@@ -213,11 +213,13 @@ query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "容县": {"mygolbs"
 _rc, query.render_company = query.render_company, lambda *a: None
 _rs, query.render_stops = query.render_stops, lambda *a: None
 _ra, query.render_at = query.render_at, lambda *a: None
+_cg, query._catalog = query._catalog, \
+    lambda cn: {"buslines": [{"lineName": "陆川1路"}] if cn == "玉林市" else []}
 query.answer("玉林 容县 11 路有车吗", "玉林市")
 assert _cap[-1] == ("容县", ["11"]), _cap[-1]          # 别拿玉林的目录查裸号 11
 query.answer("玉林 陆川 1 路有车吗", "玉林市")
 assert _cap[-1] == ("玉林", ["陆川1"]), _cap[-1]       # 目录里有陆川1路
-query.query, query.cities = _q, _cit
+query.query, query.cities, query._catalog = _q, _cit, _cg
 query.render_company, query.render_stops, query.render_at = _rc, _rs, _ra
 
 # 没写城市、默认城市又查不到：要说明「按谁查的」，别让用户以为这条线不存在
@@ -292,6 +294,14 @@ _st2 = query.stops
 query.stops = lambda cn, kw: [{"stationName": "玉林北站", "relatedRoutes": ["G01路"]}] if kw == "玉林北站" else []
 assert query.pick_stop("玉林市", "玉林北站有哪几路车") == "玉林北站"
 query.stops = _st2
+# 上一条问过 9 路，再来一句带站点的「车来了查XX校区」：别拿上一条的线路号答
+_ql, _cit2, _rst = query.query, query.cities, query.render_stop
+query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+query.query = lambda ck, wants, src=None: (_ for _ in ()).throw(AssertionError("不该走线路"))
+query.render_stop = lambda ck, cn, m, src=None: "医科大学玉林校区有 3 条线路：G01"
+query._last("k9")["line"] = "9"
+assert query.answer("车来了查广西医科大玉林校区的线路", "玉林市", key="k9").startswith("医科大学玉林校区")
+query.query, query.cities, query.render_stop = _ql, _cit2, _rst
 _cl, _ct3 = query.chelaile, query.cities
 
 
@@ -303,6 +313,7 @@ class _CL:
 
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
 query.chelaile = _CL
+query._cache.clear()        # 车来了目录 1 小时缓存，不然读到上面几次真接口的结果
 _out = query.render_stop("玉林", "玉林市", "车来了查广西医科大玉林校区的线路", "chelaile")
 assert "G01路" in _out and "G02路" in _out and "99路" not in _out, _out
 query.chelaile, query.cities = _cl, _ct3
