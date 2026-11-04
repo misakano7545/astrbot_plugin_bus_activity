@@ -43,6 +43,8 @@ LINE_RE = re.compile(
     r"(?P<metro>(?:地铁|轨道交通)\s*\d+\s*号线|地铁\s*[\u4e00-\u9fa5]{1,3}线)"
     r"|(?P<alpha>(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9]))(?:\s*路)?"
     r"|(?P<num>\d{1,3})\s*路(?P<qual>夜班)?"
+    # 「131区间」不带「路」也算线路——石家庄目录里就叫「131路区间」
+    r"|(?P<inum>\d{1,3})\s*(?P<iqual>区间|支线|快线|专线)"
     r"|(?P<cnnum>[一二三四五六七八九十]{1,3})\s*路"
 )
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
@@ -94,8 +96,9 @@ def parse(msg):
     if not m:
         return None
     pre = PREFIX_RE.search(msg[: m.start()])
-    num = (m.group("alpha") or m.group("num") or m.group("metro")
-           or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
+    num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
+        (m.group("alpha") or m.group("num") or m.group("metro")
+         or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
     return norm_line(num), pre
 
@@ -480,6 +483,9 @@ def find_stop(city_name, raw):
     """
     for n in (8, 6, 5, 4, 3):
         if len(raw) >= n:
+            # 「石家庄131区间有没有车」退到 3 字就是城市名本身，会把「石家庄站」搜出来
+            if norm_city(raw[:n]) == norm_city(city_name):
+                continue
             rows = stops(city_name, raw[:n])
             if rows:
                 return rows[0], raw[:n]

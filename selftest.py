@@ -266,6 +266,9 @@ assert query.parse("南宁 二十三路") == ("23", "南宁")
 assert query.parse("8点出门") is None
 # 「wb2api」「tx收紧」这种英文缩写里夹的数字，别当成线路号
 assert query.parse("用的wb客户端多用户切换和wb2api都好几天没更新了，tx是不是收紧了？") is None
+# 「131区间」不带「路」也是线路号；站名不许退到城市名本身（「石家庄」→ 石家庄站）
+assert query.parse("石家庄131区间有没有车") == ("131区间", "石家庄")
+assert query.norm_line("131路区间") == query.norm_line("131区间")
 assert [query._cn_num(x) for x in ("一", "九", "十", "十二", "二十三", "两")] == [1, 9, 10, 12, 23, 2]
 
 # 「没有数据」的说法不能撞上 main.py 的 FALSE_CLAIM，否则整句被吞、用户收不到
