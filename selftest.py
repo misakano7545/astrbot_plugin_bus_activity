@@ -322,6 +322,14 @@ _rows = [
     {"stationName": "汽车总站（陆川）", "lat": "22.3135", "lng": "110.2595", "relatedRoutes": ["陆川1路"]},
 ]
 assert query._merge_same(_rows, _rows[0])["relatedRoutes"] == ["9路", "G02路"]
+# 问一片站台时要分组说清哪路车在哪个站台等，同一路车只挂一个站台
+_cat3, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "9路", "from": "甲", "to": "乙"}, {"lineName": "G02路", "from": "丙", "to": "丁"}]}
+_st3, query.stops = query.stops, lambda cn, kw: _rows if kw == "汽车总站" else []
+_out = query.render_stop("玉林", "玉林市", "汽车总站有哪几路车")
+assert "汽车总站（二医院）（1 条）" in _out and "汽车总站（1 条）" in _out \
+    and "陆川1路" not in _out, _out
+query._catalog, query.stops = _cat3, _st3
 # 平台没给坐标时退回按名字匹，不能因为缺字段就把线路全丢了
 assert query._merge_same([_rows[0], dict(_rows[1], lat=None)], _rows[0])["relatedRoutes"] == ["9路", "G02路"]
 # 站表不许截断：23 条就报 23 条，否则用户再问「剩下的呢」认不出站名

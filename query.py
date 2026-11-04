@@ -611,22 +611,33 @@ def stops(city_name, keyword):
                                   "KEYWORD": keyword}).get("busstations") or [])
 
 
+def _same_rows(rows, hit):
+    """同一个站被平台拆成的几条记录：「汽车总站」「（二医院）」「（大北路）」。
+    站名不同但都在 100 多米内，是同一片站台，不是隔壁站。
+    """
+    base = hit["stationName"]
+    out, seen = [], {base}
+    for r in [hit] + list(rows):
+        n = r.get("stationName") or ""
+        # 只有「汽车总站（二医院）」这种加括号的才是同一个站的另一条记录；
+        # 「芳村花园」「芳村西塱」是隔壁站，「芳村（地铁站）」是另一种车
+        if n in seen or not n.startswith((base + "（", base + "(", base + "·")) \
+                or "地铁" in n or "轨道交通" in n or not _near_same(hit, r):
+            continue
+        seen.add(n)
+        out.append((n, list(r.get("relatedRoutes") or [])))
+    return [(base, list(hit.get("relatedRoutes") or []))] + out
+
+
 def _merge_same(rows, hit):
     """平台把同一个站拆成「汽车总站」和「汽车总站（二医院）」两条，前者的线路表是残的
     （G02 就只挂在后者名下），只取 rows[0] 会漏掉真正经过的线。
 
     「芳村」和「芳村（地铁站）」也同前缀，但那是两种车，别混进公交清单里。
     """
-    base = hit["stationName"]
-    routes = set(hit.get("relatedRoutes") or [])
-    for r in rows:
-        n = r.get("stationName") or ""
-        # 只有「汽车总站（二医院）」这种加括号的才是同一个站的另一条记录；
-        # 「芳村花园」「芳村西塱」是隔壁站，「芳村（地铁站）」是另一种车
-        if n != base and n.startswith((base + "（", base + "(", base + "·")) \
-                and "地铁" not in n and "轨道交通" not in n \
-                and _near_same(hit, r):
-            routes |= set(r.get("relatedRoutes") or [])
+    routes = set()
+    for _, rs in _same_rows(rows, hit):
+        routes |= set(rs)
     return dict(hit, relatedRoutes=sorted(routes))
 
 
@@ -1079,16 +1090,29 @@ def render_stop(city_key, city_name, msg, src=None):
     if not rows_:
         return None
     row = next((r for r in rows_ if r.get("stationName") == name), rows_[0])
-    routes = _merge_same(rows_, row).get("relatedRoutes") or []
-    if not routes:
+    groups = _same_rows(rows_, row)
+    if not any(rs for _, rs in groups):
         return None
     rows = _catalog(city_name).get("buslines") or []
     ends = {}
     for r in rows:
         ends.setdefault(r["lineName"], []).append(f"{r.get('from')} ↔ {r.get('to')}")
-    items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes if ends.get(n)] or list(routes)
     # 别截 12 条：用户要的是全部，截了还得再问一轮「剩下的呢」，而那轮多半认不出站名
-    out = f"{name}有 {len(items)} 条线路：" + "".join("\n" + i for i in items)
+    out = ""
+    if len(groups) == 1:
+        routes = groups[0][1]
+        items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes if ends.get(n)] or list(routes)
+        out = f"{name}有 {len(items)} 条线路：" + "".join("\n" + i for i in items)
+    else:
+        # 同一片站台被拆成几条记录（汽车总站 / （二医院）/ （大北路）），说清哪路车在哪个站台等
+        seen, blocks = set(), []
+        for gname, routes in sorted(groups, key=lambda g: -len(g[1])):
+            items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes
+                     if n not in seen and ends.get(n)]
+            seen |= set(routes)
+            if items:
+                blocks.append(f"{gname}（{len(items)} 条）：" + "".join("\n" + i for i in items))
+        out = (f"{name}这一片分 {len(blocks)} 个站台，共 {len(seen)} 条线路：\n" + "\n".join(blocks))
     # 点名车来了却没扫到，别让掌上的结果冒充车来了的
     return out + ("\n（车来了没扫到这个站，上面是掌上的）" if src == "chelaile" else "")
 
