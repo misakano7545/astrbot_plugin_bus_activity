@@ -92,5 +92,6 @@ class BusActivity(Star):
         logger.info(f"公交查询: {question[:30]} -> {(text or '没查到')[:60]}")
         if text:
             return text
-        # 闲聊也调这个工具时别塞「没查到」堵住模型——None 表示这条结果不进 prompt
-        return "没查到这条线路或这个站点，照实说没查到。" if BUS_RE.search(question) else None
+        # 答不上来也必须给一句话：返 None 模型手里没料就直接沉默，群里看着像机器人死了
+        return (f"「{question[:24]}」这条没查到数据。可能是城市、线路号或站名对不上，"
+                "回用户时问一句是哪个城市的哪条线/哪一站，别自己编线路和车辆。")
