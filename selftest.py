@@ -2,6 +2,7 @@
 
 不联网，只验解析/匹配/排版这些纯逻辑；加 --live 再打一次真接口。
 """
+import re
 
 import sys
 
@@ -264,6 +265,13 @@ assert query.parse("玉林 十路有车吗") == ("10", "玉林")
 assert query.parse("南宁 二十三路") == ("23", "南宁")
 assert query.parse("8点出门") is None
 assert [query._cn_num(x) for x in ("一", "九", "十", "十二", "二十三", "两")] == [1, 9, 10, 12, 23, 2]
+
+# 「没有数据」的说法不能撞上 main.py 的 FALSE_CLAIM，否则整句被吞、用户收不到
+for _bad in ("巩义市这座城暂时没有公交数据，掌上和车来了都没覆盖",
+             "这条线路查不了"):
+    _ok = not re.search(r"数据源|只接了|只有玉林|玉林的接口|"
+                        r"查不了.{0,8}(公交|线路)|(公交|线路).{0,8}查不了", _bad)
+    assert _ok == (not _bad.startswith("这条")), _bad
 
 # 图片消息的 base64 里有「yJ0」，别当成线路号（答成「没查到了YJ0这条线」）
 _IMG = '<attachmentType="image/jpeg",attachmentIndex=0,description="eyJ0ZXh0IjoiW+WbvueJh10ifQ==">'

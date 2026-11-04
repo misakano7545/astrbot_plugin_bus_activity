@@ -873,7 +873,8 @@ def answer(msg, default_city, ctx="", key=""):
         # 表里只有 320 城，县级市常缺（义乌、慈溪、晋江掌上都有）：拿原名直接问掌上
         if not city_key and len(prefix) >= 2:
             if not _covered(prefix):
-                return f"{prefix}上游没有公交数据（掌上、车来了都没覆盖），公交查不了"
+                # 别写「查不了」：main.py 的 FALSE_CLAIM 会把这句当假话整句吞掉，用户啥也收不到
+                return f"{prefix}这座城暂时没有公交数据，掌上和车来了都没覆盖"
             city_key = norm_city(prefix)
     if not city_key:
         return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
