@@ -307,6 +307,15 @@ assert query.pick_stop("广州市", "广州地铁芳村站附近有多少条公�
 query.stops = lambda cn, kw: [{"stationName": "丰州", "relatedRoutes": ["6路"]}] if kw == "丰州" else []
 assert query.pick_stop("泉州市", "泉州丰州公交站现在有什么车") == "丰州"
 query.stops = _st
+# 「汽车总站（陆川）」也长成「汽车总站（…）」，可陆川汽车总站是另一个县的站，差 36.8 公里
+_rows = [
+    {"stationName": "汽车总站", "lat": "22.6269", "lng": "110.1439", "relatedRoutes": ["9路"]},
+    {"stationName": "汽车总站（二医院）", "lat": "22.6279", "lng": "110.1456", "relatedRoutes": ["G02路"]},
+    {"stationName": "汽车总站（陆川）", "lat": "22.3135", "lng": "110.2595", "relatedRoutes": ["陆川1路"]},
+]
+assert query._merge_same(_rows, _rows[0])["relatedRoutes"] == ["9路", "G02路"]
+# 平台没给坐标时退回按名字匹，不能因为缺字段就把线路全丢了
+assert query._merge_same([_rows[0], dict(_rows[1], lat=None)], _rows[0])["relatedRoutes"] == ["9路", "G02路"]
 # 站表不许截断：23 条就报 23 条，否则用户再问「剩下的呢」认不出站名
 _cat, _stops = query._catalog, query.stops
 query._catalog = lambda cn: {"buslines": [{"lineName": f"{i}路", "from": "甲", "to": "乙"} for i in range(23)]}

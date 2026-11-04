@@ -624,9 +624,22 @@ def _merge_same(rows, hit):
         # 只有「汽车总站（二医院）」这种加括号的才是同一个站的另一条记录；
         # 「芳村花园」「芳村西塱」是隔壁站，「芳村（地铁站）」是另一种车
         if n != base and n.startswith((base + "（", base + "(", base + "·")) \
-                and "地铁" not in n and "轨道交通" not in n:
+                and "地铁" not in n and "轨道交通" not in n \
+                and _near_same(hit, r):
             routes |= set(r.get("relatedRoutes") or [])
     return dict(hit, relatedRoutes=sorted(routes))
+
+
+def _near_same(a, b):
+    """「汽车总站（陆川）」也长成「汽车总站（…）」，可那是另一个县的站。
+    用坐标分：同站的几条记录实测差 136–209 米，陆川那条 36.8 公里。
+    shortcut: 0.01° 粗判（纬度约 1.1km），跨城级别足够了，要精确再上 haversine
+    """
+    try:
+        return abs(float(a["lat"]) - float(b["lat"])) < 0.01 \
+            and abs(float(a["lng"]) - float(b["lng"])) < 0.01
+    except (KeyError, TypeError, ValueError):
+        return True        # 平台没给坐标就退回按名字匹，跟以前一样
 
 
 def find_stop(city_name, raw):
