@@ -975,12 +975,14 @@ def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     last = _last(key)
     msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
+    sm = SRC_RE.search(msg)
+    src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
+    # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
+    msg = SRCPRE.sub("", msg)
     line = parse(msg)
     if not line and ctx:        # 引用别人那句追问「这路还有几辆」，线路号在被引用的话里
         line = parse(ctx)
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
-    sm = SRC_RE.search(msg)
-    src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
     inherited = False
     if src and not line and last.get("line") and re.search(r"看|查|数据|接口", msg):
         line = (last["line"], "")

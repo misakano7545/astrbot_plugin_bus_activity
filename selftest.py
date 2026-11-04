@@ -294,6 +294,9 @@ assert query.VEH_RE.search("玉林 9路有车吗") is None
 _res = {"line": "G02", "groups": [("甲", [("513", "A站", 100)]), ("乙", [("517", "B站", 200)])]}
 assert "513" in query.render("玉林", "G02", _res, "513") and "517" not in query.render("玉林", "G02", _res, "513")
 assert "没跑 999" in query.render("玉林", "G02", _res, "999")
+# 「用掌上公交查G02路」：数据源那层壳不能当城市名，否则前缀取成「上公交」
+assert query.parse(query.SRCPRE.sub("", "用掌上公交查G02路")) == ("G02", "")
+assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41", "石家庄")
 # 「车来了查X校区的线路」：数据源和动词不能留在站名里；点名车来了就扫车来了的站表
 assert list(query._cands("玉林市", "车来了查广西医科大玉林校区的线路")) == ["广西医科大玉林校区"]
 # 「玉林北站有哪几路车」：城市名剥掉只剩「北站」搜不到，得再拿原样那句试一次
