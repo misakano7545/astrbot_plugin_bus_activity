@@ -258,6 +258,11 @@ query.answer("你从车来了的这个看一下数据怎么样？", "玉林市",
 assert _cap2[-1] == ("玉林", ["9"], "chelaile"), _cap2[-1]
 query.query, query.cities, query.render_at = _q2, _ct2, _ra2
 
+# 「用车来了看看有G02」里的「了看看有」不是县名——别把动词当城市前缀，答成「是哪儿的公交」
+assert query.parse("用车来了看看有G02都有哪几台车") == ("G02", "")
+assert query.parse("玉林 用车来了看看G02") == ("G02", "")
+assert query.parse("玉林 陆川 1 路") == ("1", "陆川")      # 真县名前缀还得留着
+
 # 问首末班时刻 → 回答时间，别拿「末班已开走」糊过去
 _cat = query._catalog
 query._catalog = lambda c: {"buslines": [

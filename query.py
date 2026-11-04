@@ -45,6 +45,9 @@ LINE_RE = re.compile(
     r"|(?P<num>\d{1,3})\s*路(?P<qual>夜班)?"
 )
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
+# 「用车来了看看有G02」里的「了看看有」不是县名，是动词和语气词
+JUNK_HEAD = re.compile(r"^(?:车来了|掌上公交|掌上|帮我|麻烦|你|我|再|还|也|就|那|这)+")
+JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|部|辆|只|几)+$")
 INTENT = ("车", "到哪", "几站", "还有", "来了", "多久", "快吗", "有没有",
           "坐什么", "怎么坐", "怎么去", "换乘", "几路",
           "在哪", "实时", "几辆", "几点", "末班", "首班", "怎么样", "到站")
@@ -75,7 +78,8 @@ def parse(msg):
         return None
     pre = PREFIX_RE.search(msg[: m.start()])
     num = (m.group("alpha") or m.group("num") or m.group("metro")) + (m.group("qual") or "")
-    return norm_line(num), (pre.group(1) if pre else "")
+    pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
+    return norm_line(num), pre
 
 
 def _cached(kind, key, ttl, fn):
