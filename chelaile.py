@@ -24,10 +24,15 @@ SRC = "app"
 def _get(handler, params):
     url = BASE + handler + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": REFERER})
-    return urllib.request.urlopen(req, timeout=10).read().decode("utf-8", "replace")
+    try:
+        return urllib.request.urlopen(req, timeout=10).read().decode("utf-8", "replace")
+    except OSError:      # 超时/握手失败；让调用方按「没有这条线」处理，别把异常抛进消息处理
+        return ""
 
 
 def _unwrap(text):
+    if not text:                      # _get 连不上时给的空串
+        return {}
     body = json.loads(text.split("**YGKJ", 1)[1].rsplit("YGKJ##", 1)[0])
     jr = body["jsonr"]
     if jr.get("status") != "00":
@@ -51,7 +56,7 @@ def lines(city_id):
     """
     data = _unwrap(_get("bus/cityLineList", _params(city_id)))
     seen = {}
-    for row in data["allLines"]["all"]:
+    for row in (data.get("allLines") or {}).get("all") or []:
         seen.setdefault(row["lineName"], []).append(row["lineId"])
     return [(name, lid) for name, lids in seen.items() for lid in lids]
 
@@ -69,6 +74,8 @@ def live(city_id, line_id):
     sign = hashlib.md5((t[1:-1].replace(":", "=").replace(",", "&") + SALT).encode()).hexdigest()
     body = _unwrap(_get("bus/line!encryptedLineDetail.action",
                         _params(city_id, lineId=line_id, cryptoSign=sign)))
+    if "encryptResult" not in body:
+        return {"state": None, "desc": "", "to": "", "buses": []}
     d = _decrypt(body["encryptResult"])
     line = d.get("line") or {}
     stops = d.get("stations") or []

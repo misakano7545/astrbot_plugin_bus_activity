@@ -43,8 +43,12 @@ class BusActivity(Star):
         # 引用别人的消息追问（「那 39 路往哪开」）时，城市只在被引用的那句里
         ctx = " ".join(m.message_str for m in event.get_messages()
                        if getattr(m, "message_str", None))
-        text = await asyncio.to_thread(answer, event.message_str, self.default_city, ctx,
-                                       event.unified_msg_origin)
+        try:
+            text = await asyncio.to_thread(answer, event.message_str, self.default_city, ctx,
+                                           event.unified_msg_origin)
+        except Exception as e:      # 没兜住的异常会变成群里那段「:( …出现异常」traceback
+            logger.warning(f"公交直答失败: {e}")
+            return
         if not text:
             return  # 没认出城市/站名/线路，交给 LLM 那一路
         logger.info(f"公交直答: {event.message_str[:30]} -> {text[:60]}")

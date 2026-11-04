@@ -126,6 +126,9 @@ def _post(params, timeout=8):
     except urllib.error.HTTPError as e:
         # 缺 CITYNAME 或线路名不存在时上游回的是 HTML 错误页，不是 JSON
         return {"status": e.code, "msg": f"HTTP {e.code}"}
+    except (urllib.error.URLError, OSError) as e:
+        # 连不上/握手超时也曾直接抛到消息处理里，群里看到的是「:( …出现异常」这一整段
+        return {"status": -9, "msg": f"连不上上游 {e}", "error": True}
     text = raw.lstrip()
     if not text.startswith("{"):
         # 58 字节令牌 = Origin 头不对，前置分流层直出的占位串
