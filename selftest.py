@@ -406,6 +406,20 @@ assert query._dest_after("玉林市", "你看一下G02到高新产业园，去�
 assert query._dest_after("玉林市", "我在玉林北站，G02现在到那里我要多少分钟", "玉林北站") is None
 query.find_stop = _fs
 
+# 平台把「汽车总站」拆成两条，前一条的线路表是残的——G02 只挂在「汽车总站（二医院）」名下
+_rows = [{"stationName": "汽车总站", "relatedRoutes": ["玉林总站-福绵新滔工业园"]},
+         {"stationName": "汽车总站（二医院）", "relatedRoutes": ["G02路", "9路"]},
+         {"stationName": "北流汽车总站", "relatedRoutes": ["北流105路"]}]
+_m = query._merge_same(_rows, _rows[0])
+assert "G02路" in _m["relatedRoutes"] and "北流105路" not in _m["relatedRoutes"], _m
+assert _m["stationName"] == "汽车总站", _m          # 合并只并线路，不改站名
+# 隔壁站和地铁站不是同一个站，不能并进公交清单（芳村一度从 18 条涨到 63 条）
+_rows = [{"stationName": "芳村", "relatedRoutes": ["1路"]},
+         {"stationName": "芳村（地铁站）", "relatedRoutes": ["地铁1号线"]},
+         {"stationName": "芳村花园南门总站", "relatedRoutes": ["106路"]}]
+assert query._merge_same(_rows, _rows[0])["relatedRoutes"] == ["1路"], \
+    query._merge_same(_rows, _rows[0])
+
 # issue #10：末班比较不跨零点（字符串比较时 '00:02' < '22:40'）
 import types as _t
 _lt, _real = query.time, sys.modules["time"]
@@ -424,10 +438,16 @@ for _now, _first, _last, _want in [((9, 0), "05:30", "23:44", False),
                                    ((23, 50), "05:30", "23:44", True),
                                    ((0, 30), "05:30", "23:44", True),
                                    ((20, 0), "17:47", "23:10", False),
-                                   ((13, 0), "17:47", "23:10", True),
+                                   # 13:00 问 17:47 才开班的车：离首班更近，是没开不是收班
+                                   ((13, 0), "17:47", "23:10", False),
+                                   ((18, 50), "17:47", "23:10", False),
                                    ((0, 30), "22:00", "01:00", False)]:
     _at(*_now)
     assert query._past_last(_last, _first) is _want, (_now, _first, _last, query._past_last(_last, _first))
+# 距首班几分钟：判断「还没到首班」用，跨零点要取模
+_at(13, 0)
+assert query._mins_to("17:47") == 287, query._mins_to("17:47")
+assert query._mins_to("ba") is None
 query.time = _lt
 
 # issue #11：香港「1」对应五家公司，按名字分组各查各的，别取前两条

@@ -304,7 +304,11 @@ def _past_last(last, first=""):
     first_m = mins(first)
     if first_m is not None:
         # 按运营窗口判：末班 23:44 的线路，早上 9 点当然还没开走
-        return (now_m - first_m) % (24 * 60) > (last_m - first_m) % (24 * 60)
+        if (now_m - first_m) % (24 * 60) <= (last_m - first_m) % (24 * 60):
+            return False
+        # 窗口外也是两种情况：末班 21:30 的夜班车中午问「离首班更近」，那是还没开，
+        # 不是已经收班——不分开就会回「末班已经开走了」
+        return (first_m - now_m) % (24 * 60) > (now_m - last_m) % (24 * 60)
     # 没首班就按「末班离现在多久」算，跨零点自然成立：00:02 问 22:40 → 已开走，
     # 23:00 问 00:10 → 还没到。
     # shortcut: 以 12 小时为界判过去/将来，早班车式的末班（06:00）在下午会判错
@@ -587,6 +591,24 @@ def stops(city_name, keyword):
                                   "KEYWORD": keyword}).get("busstations") or [])
 
 
+def _merge_same(rows, hit):
+    """平台把同一个站拆成「汽车总站」和「汽车总站（二医院）」两条，前者的线路表是残的
+    （G02 就只挂在后者名下），只取 rows[0] 会漏掉真正经过的线。
+
+    「芳村」和「芳村（地铁站）」也同前缀，但那是两种车，别混进公交清单里。
+    """
+    base = hit["stationName"]
+    routes = set(hit.get("relatedRoutes") or [])
+    for r in rows:
+        n = r.get("stationName") or ""
+        # 只有「汽车总站（二医院）」这种加括号的才是同一个站的另一条记录；
+        # 「芳村花园」「芳村西塱」是隔壁站，「芳村（地铁站）」是另一种车
+        if n != base and n.startswith((base + "（", base + "(", base + "·")) \
+                and "地铁" not in n and "轨道交通" not in n:
+            routes |= set(r.get("relatedRoutes") or [])
+    return dict(hit, relatedRoutes=sorted(routes))
+
+
 def find_stop(city_name, raw):
     """站名从长到短试，命中即止——用户嘴里不会带括号后缀，得让平台的站名去对。
 
@@ -600,7 +622,7 @@ def find_stop(city_name, raw):
                 continue
             rows = [r for r in stops(city_name, raw[:n]) or [] if r.get("stationName")]
             if rows:
-                return rows[0], raw[:n]
+                return _merge_same(rows, rows[0]), raw[:n]
     # 用户写的和站牌上的常常差一两个字（「玉林旅游客运站」vs「旅游汽车客运站」），
     # 拿尾巴当关键词搜一遍，再挑最像的那个，相似度不够宁可不认
     for n in (3, 2):
@@ -609,7 +631,7 @@ def find_stop(city_name, raw):
             best = max(rows, key=lambda r: difflib.SequenceMatcher(
                 None, raw, r["stationName"]).ratio(), default=None)
             if best and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
-                return best, best["stationName"]
+                return _merge_same(rows, best), best["stationName"]
     return None, raw
 
 
@@ -693,6 +715,17 @@ def _goes(city_name, line, a, b):
     return None
 
 
+def _mins_to(hhmm):
+    """距 hhmm 还有几分钟（按 24 小时取模，跨零点也对）。解析不了返回 None。"""
+    try:
+        h, m = (hhmm or "").split(":")[:2]
+        tgt = int(h) * 60 + int(m)
+    except ValueError:
+        return None
+    t = _now()
+    return (tgt - (t.tm_hour * 60 + t.tm_min)) % (24 * 60)
+
+
 def _hop_line(city_name, line, d, ia, ib):
     """这一路下一辆车几分钟到 A（上游预测），从 A 坐到 B 要几分钟（按每段均速累）。"""
     payload = _live_my(city_name, line, d, ia + 1)      # STATIONORDER 1 基
@@ -701,6 +734,12 @@ def _hop_line(city_name, line, d, ia, ib):
         first, last = _first_last(city_name, line, d)
         if last and _past_last(last, first):
             return f"，末班 {last} 已经开走了" + (f"，首班 {first}" if first else "")
+        # 起点站没到站预测时上游会写 tips，「等待发车」比「没车」准
+        if "等待发车" in [r.get("busToStationTips") for r in payload.get("routeOnStationRTimeInfoList") or []]:
+            return "，起点站的车在等发车"
+        ahead = _mins_to(first)
+        if ahead is not None and ahead < 12 * 60:
+            return f"，首班 {first} 还没到"
         return "，这会儿没车报位置"
     return f"，下一辆约 {max(1, round(eta[0]))} 分钟后到，坐过去 {max(1, round(_run(payload, ia, ib)))} 分钟"
 
@@ -920,8 +959,10 @@ def render_stop(city_key, city_name, msg, src=None):
         return None
     # 再搜一次站名会撞上同名地铁站（「芳村」和「芳村（地铁站）」），按站名精确挑
     rows_ = stops(city_name, name) or []
-    row = next((r for r in rows_ if r.get("stationName") == name), rows_[0] if rows_ else {})
-    routes = row.get("relatedRoutes") or []
+    if not rows_:
+        return None
+    row = next((r for r in rows_ if r.get("stationName") == name), rows_[0])
+    routes = _merge_same(rows_, row).get("relatedRoutes") or []
     if not routes:
         return None
     rows = _catalog(city_name).get("buslines") or []
