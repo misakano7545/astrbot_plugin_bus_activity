@@ -472,12 +472,14 @@ def render(city_key, want, res):
 
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的话|附近|周边|周围|还有|吗|呢|啊).*$")
+TAIL = re.compile(r"(怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|吗|呢|啊).*$")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
 # 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
 MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
+# 只剥带数据源的写法：「查桥站」这种真站名不能被「查」吃掉
+SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上)(?:查一下|查查|查|看看|看|搜一下|搜)?")
 
 
 def stops(city_name, keyword):
@@ -521,11 +523,12 @@ def hop(msg):
     return m.group(1).lstrip("从"), TAIL.sub("", m.group(2)).rstrip("的了")
 
 
-def pick_stop(city_name, msg):
-    """从整句里抠站名：按标点切片，逐片砍掉「我在/坐什么」再拿去搜。"""
+def _cands(city_name, msg):
+    """从整句里抠出可能的站名：按标点切片，逐片砍掉「我在/坐什么」。"""
     city = norm_city(city_name)
     for part in re.split(r"[，,。.？?！!、\s]+", msg):
-        cand = LEAD.sub("", TAIL.sub("", part))
+        cand = SRCPRE.sub("", part)      # 「车来了查X」里的数据源和动词
+        cand = LEAD.sub("", TAIL.sub("", cand))
         # 「广州地铁芳村站附近」：城市名和「地铁」都不是站名的一部分
         cand = re.sub(rf"^{re.escape(city)}", "", cand)
         cand = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
@@ -534,6 +537,11 @@ def pick_stop(city_name, msg):
             cand = re.split(r"到|去|往|在|经停", cand)[-1]
         if len(cand) < 2 or norm_city(cand) == city or LINE_RE.search(cand):
             continue                        # 城市名和线路号不是站名
+        yield cand
+
+
+def pick_stop(city_name, msg):
+    for cand in _cands(city_name, msg):
         got, _ = find_stop(city_name, cand)
         if got:
             return got["stationName"]
@@ -762,8 +770,47 @@ def render_transfer(city_name, want):
     return "\n\n".join(out) or None
 
 
-def render_stop(city_key, city_name, msg):
+def _stop_chelaile(city_name, msg):
+    """车来了没有站点搜索接口：只能把目录里每条线的站表扫一遍找这个站（docs/车来了API.md §5.2）。"""
+    cid = next((c.get("chelaile") for c in cities().values()
+                if (c or {}).get("mygolbs") == city_name), None)
+    if not cid:
+        return ""
+    rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
+    note = f"（扫了 {min(len(rows), SWEEP_MAX)} 条线路）" if len(rows) > SWEEP_MAX else ""
+
+    wants = [norm_city(x) for x in _cands(city_name, msg)]
+
+    def one(row):
+        n, lid = row
+        try:
+            sn = _cached("route-cl", (cid, lid), CATALOG_TTL,
+                         lambda lid=lid: chelaile.stations(cid, lid))
+        except Exception:
+            return None
+        # 两家站名不完全一样（「广西医科大玉林校区」↔「医科大学玉林校区」），得模糊匹
+        hit = next((s for s in sn
+                    if any(w in norm_city(s) or difflib.SequenceMatcher(None, w, norm_city(s)).ratio() >= 0.8
+                           for w in wants)), None)
+        return (n, hit) if hit else None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        got = [g for g in pool.map(one, rows[:SWEEP_MAX]) if g]
+    if not got:
+        return ""
+    names = []
+    for n, _ in got:
+        if norm_line(n) not in [norm_line(x) for x in names]:
+            names.append(n)
+    return f"{got[0][1]} 车来了这边有 {len(names)} 条线路{note}：" + "".join(f"\n{i}" for i in names)
+
+
+def render_stop(city_key, city_name, msg, src=None):
     """「X 站有哪几路」：站点经停线路，每条带首末站。"""
+    if src == "chelaile":       # 点名车来了就真给车来了的：两家站表不合并，线的集合也不一样
+        out = _stop_chelaile(city_name, msg)
+        if out:
+            return out
     name = pick_stop(city_name, msg)
     if not name:
         return None
@@ -779,7 +826,9 @@ def render_stop(city_key, city_name, msg):
         ends.setdefault(r["lineName"], []).append(f"{r.get('from')} ↔ {r.get('to')}")
     items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes if ends.get(n)] or list(routes)
     # 别截 12 条：用户要的是全部，截了还得再问一轮「剩下的呢」，而那轮多半认不出站名
-    return f"{name}有 {len(items)} 条线路：" + "".join("\n" + i for i in items)
+    out = f"{name}有 {len(items)} 条线路：" + "".join("\n" + i for i in items)
+    # 点名车来了却没扫到，别让掌上的结果冒充车来了的
+    return out + ("\n（车来了没扫到这个站，上面是掌上的）" if src == "chelaile" else "")
 
 
 # 「玉林还有哪条线路有车」这类全城问题没法靠线路号答，得把目录扫一遍。
@@ -969,7 +1018,7 @@ def answer(msg, default_city, ctx="", key=""):
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
         if SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg):
             return render_sweep(name)
-        out = render_stop(city_key, name, msg)
+        out = render_stop(city_key, name, msg, src)
         if out:
             return out
         return ""

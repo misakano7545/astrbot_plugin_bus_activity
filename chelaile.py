@@ -61,6 +61,12 @@ def lines(city_id):
     return [(name, lid) for name, lids in seen.items() for lid in lids]
 
 
+def stations(city_id, line_id):
+    """线路站表（明文 lineRoute），只要站名——车来了没有站点搜索接口，找站只能扫这个。"""
+    data = _unwrap(_get("bus/line!lineRoute.action", _params(city_id, lineId=line_id)))
+    return [s.get("sn") or "" for s in data.get("stations") or []]
+
+
 def _decrypt(blob):
     dec = Cipher(algorithms.AES(KEY), modes.ECB()).decryptor()
     raw = dec.update(base64.b64decode(blob)) + dec.finalize()
