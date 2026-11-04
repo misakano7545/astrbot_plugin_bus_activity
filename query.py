@@ -667,7 +667,7 @@ def find_stop(city_name, raw):
             rows = [r for r in stops(city_name, raw[:n]) or [] if r.get("stationName")]
             # 2 字兜底只认同名的：「石家」会搜出石家庄东站/石家庄站（地铁站），跟问的站没关系
             if n == 2:
-                rows = [r for r in rows if r["stationName"] == raw]
+                rows = [r for r in rows if r["stationName"] == raw[:n]]
             if rows:
                 return _merge_same(rows, rows[0]), raw[:n]
     # 「陆川汽车总站」平台写作「汽车总站（陆川）」：县名被挪到括号里，顺序反过来了，
@@ -719,7 +719,11 @@ def _cands(city_name, msg):
         # 再退回剥掉「公交站」的写法：「丰州公交站」平台上是「丰州」
         bare = [STOPSUF.sub("", c) for c in (cand, whole)]
         for c in dict.fromkeys([cand, whole] + bare):
-            if len(c) >= 2 and norm_city(c) != city and not LINE_RE.search(c):
+            # 「泉州公交 惠南工业区四期站」：切出来的「泉州公交」只剩城市名，拿去搜站会匹到
+            # 「中化泉州公司」这种同名不同地的站
+            core = re.sub(r"(公交)?(车?站|台)?$", "", c) or c
+            if len(c) >= 2 and norm_city(c) != city and norm_city(core) != city \
+                    and not LINE_RE.search(c):
                 yield c
 
 

@@ -304,9 +304,15 @@ _st = query.stops
 query.stops = lambda cn, kw: [{"stationName": "芳村", "relatedRoutes": ["19路"]}] if kw == "芳村站" else []
 assert query.pick_stop("广州市", "广州地铁芳村站附近有多少条公交线") == "芳村"
 # 「泉州丰州公交站现在有什么车」：站牌上就叫「丰州」，没有「公交站」这个后缀，而且只有 2 字
-query.stops = lambda cn, kw: [{"stationName": "丰州", "relatedRoutes": ["6路"]}] if kw == "丰州" else []
+query.stops = lambda cn, kw: (
+    [{"stationName": "丰州", "relatedRoutes": ["6路"]}] if kw == "丰州"
+    else [{"stationName": "辋川公交站", "relatedRoutes": ["惠安13路"]}] if kw == "公交站" else [])
 assert query.pick_stop("泉州市", "泉州丰州公交站现在有什么车") == "丰州"
+# 2 字兜底要跟截出来的那两字比，不能拿整串比——否则「丰州公交站」永远匹不到「丰州」
+assert query.find_stop("泉州市", "丰州公交站")[1] == "丰州"
 query.stops = _st
+# 「泉州公交 惠南工业区四期站」切出来的「泉州公交」只剩城市名，别拿去搜站（会匹到「中化泉州公司」）
+assert list(query._cands("泉州市", "泉州公交 惠南工业区四期站现在有什么车")) == ["惠南工业区四期站"]
 # 「陆川汽车总站」平台写作「汽车总站（陆川）」：县名挪进括号，前缀认得出是哪一条
 _st2, query.stops = query.stops, lambda cn, kw: [
     {"stationName": "汽车总站", "relatedRoutes": ["9路"]},
