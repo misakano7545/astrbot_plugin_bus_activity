@@ -58,7 +58,9 @@ LINE_RE = re.compile(
     r"|(?<![A-Za-z0-9])(?![\u4e00-\u9fa5]{0,4}(?:地铁|轨道交通))"
     r"(?P<numline>[\u4e00-\u9fa5]{0,4}?[一二三四五六七八九十\d]{1,3}\s*号线)"
     r"|(?P<alpha>(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9]))(?:\s*路)?"
-    r"|(?P<num>\d{1,3})\s*[路线](?P<qual>夜班|区间|支线|快线|专线)?"
+    # 带前导零的四位线号（重庆「0492」）口语里不加「路」字；裸的 492 不加路字就太宽（可能是数量）
+    r"|(?<![0-9])(?P<zero>0\d{2,3})(?![0-9])"
+    r"|(?P<num>\d{1,3})\s*(?:夜宵|夜班|通宵)?\s*[路线](?P<qual>夜班|区间|支线|快线|专线)?"
     # 「131区间」不带「路」也算线路——石家庄目录里就叫「131路区间」
     r"|(?P<inum>\d{1,3})\s*(?P<iqual>区间|支线|快线|专线)"
     r"|(?P<cnnum>[一二三四五六七八九十]{1,3})\s*路"
@@ -88,7 +90,7 @@ JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|
 # 不单独算信号；实词、线号、数据源名才是。
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|\d{1,3}\s*[路线]|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])")
+    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,3}\s*[路线]|(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,3}(?![A-Za-z0-9])")
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
 ASK = re.compile(r"多久|几站|几分钟|几辆|几台|几点|有车|有没有|有吗|还有|在哪|到哪|到吗|怎么坐|怎么去|"
@@ -151,7 +153,7 @@ def parse(msg):
     head = JUNK_HEAD.sub("", msg[: m.start()])
     pre = "" if m.group("numline") else PREFIX_RE.search(head)
     num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
-        (m.group("alpha") or m.group("num") or m.group("metro") or m.group("numline")
+        (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
          or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
     return norm_line(num), _snap(pre)
@@ -170,7 +172,7 @@ def _lines(msg):
             continue
         end = m.end()
         num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
-            (m.group("alpha") or m.group("num") or m.group("metro") or m.group("numline")
+            (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
              or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
         # 只认紧贴着的汉字前缀：多行里上一行的「樟」不算 12 路的前缀
         pre = re.search(r"([\u4e00-\u9fa5]{1,4})$", JUNK_HEAD.sub("", msg[: m.start()]))

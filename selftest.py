@@ -710,6 +710,15 @@ assert query._msg_line("玉林市", "那玉林北站定制夜班车呢？") == "
 assert query._msg_line("玉林市", "玉林北站有哪几条公交线？") is None
 query._catalog, query._live_my = _cat4, _lm4
 
+# 重庆「0492」是夜班线，和白天线的「492路」是两条线：带前导零的四位号不加「路」也认
+assert query.parse("重庆0492") == ("0492", "重庆")
+assert query.BUS_RE.search("重庆0492")
+assert query.parse("重庆492路") == ("492", "重庆")      # 两位数写法不能串到 0492
+# 上海 343 是夜宵线，口语带「夜宵线」三个字照样认成 343 去目录里查
+assert query.parse("上海343夜宵线现在有没有车") == ("343", "上海")
+assert query.BUS_RE.search("上海343夜宵线现在有没有车")
+assert not query.BUS_RE.search("晚上吃夜宵去")
+
 # 站名里带裸县名（「元氏火车站」→ 元氏县 → 石家庄）：别落回默认城玉林交白卷
 _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
                                            "石家庄": {"mygolbs": "石家庄市"}}
