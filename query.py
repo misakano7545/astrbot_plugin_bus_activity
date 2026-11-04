@@ -758,8 +758,8 @@ def render_stop(city_key, city_name, msg):
     for r in rows:
         ends.setdefault(r["lineName"], []).append(f"{r.get('from')} ↔ {r.get('to')}")
     items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes if ends.get(n)] or list(routes)
-    head = f"{name}有 {len(items)} 条线路："
-    return head + "".join("\n" + i for i in items[:12]) + ("\n…还有 " + str(len(items) - 12) + " 条" if len(items) > 12 else "")
+    # 别截 12 条：用户要的是全部，截了还得再问一轮「剩下的呢」，而那轮多半认不出站名
+    return f"{name}有 {len(items)} 条线路：" + "".join("\n" + i for i in items)
 
 
 # 「玉林还有哪条线路有车」这类全城问题没法靠线路号答，得把目录扫一遍。

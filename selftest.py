@@ -275,6 +275,13 @@ assert query.parse("石家庄131路有没有车") == ("131", "石家庄")
 _st = query.stops
 query.stops = lambda cn, kw: [{"stationName": "芳村", "relatedRoutes": ["19路"]}] if kw == "芳村站" else []
 assert query.pick_stop("广州市", "广州地铁芳村站附近有多少条公交线") == "芳村"
+# 站表不许截断：23 条就报 23 条，否则用户再问「剩下的呢」认不出站名
+_cat, _stops = query._catalog, query.stops
+query._catalog = lambda cn: {"buslines": [{"lineName": f"{i}路", "from": "甲", "to": "乙"} for i in range(23)]}
+query.stops = lambda cn, kw: [{"stationName": "谈固站", "relatedRoutes": [f"{i}路" for i in range(23)]}]
+_out = query.render_stop("石家庄市", "石家庄市", "谈固站有哪几路公交车")
+assert _out.count("\n") == 23 and "还有" not in _out, _out
+query._catalog, query.stops = _cat, _stops
 query.stops = _st
 assert query.norm_line("131路区间") == query.norm_line("131区间")
 assert [query._cn_num(x) for x in ("一", "九", "十", "十二", "二十三", "两")] == [1, 9, 10, 12, 23, 2]
