@@ -1435,6 +1435,13 @@ def answer(msg, default_city, ctx="", key=""):
         if SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg):
             return render_sweep(name)
         out = render_stop(city_key, name, msg, src)
+        # 「伦教街道办事处公交线路」没写城市：默认城没这个站就沿用上一条问过的城，
+        # 佛山 342 路问完接着问伦教，别去玉林的站表里找
+        if not out and not explicit and prev in cities() and prev != city_key:
+            pname = (cities().get(prev) or {}).get("mygolbs")
+            out = render_stop(prev, pname, msg, src) if pname else None
+            if out:
+                last["city"] = prev
         if out:
             return out
     # 这一句只给「刚刚真的没连上、而且问的是公交」的情况：以前按时间窗判断，

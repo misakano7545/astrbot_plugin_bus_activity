@@ -641,6 +641,15 @@ _last5["city"] = "鄂尔多斯"
 _ans5 = query.answer("陆川1路有车吗", "玉林市", key="k-lc") or ""
 assert "陆川" in _ans5, _ans5
 query.cities = _c5
+
+# 「佛山公交342路」→「伦教街道办事处公交线路」：站名提问也要沿用上一条问过的城，
+# 默认城玉林的站表里没有伦教街道办事处，别去那儿找
+_c6, _rs6, _cit6 = query.cities, query.render_stop, query.cities
+query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "佛山": {"mygolbs": "佛山市"}}
+query.render_stop = lambda ck, cn, msg, src=None: "" if ck == "玉林" else "佛山 11 条"
+query._last("k-fl")["city"] = "佛山"
+assert query.answer("伦教街道办事处公交线路", "玉林市", key="k-fl") == "佛山 11 条"
+query.cities, query.render_stop = _c6, _rs6
 assert query.DISTRICTS.get("东胜区") == "鄂尔多斯市"
 assert query.norm_city(query.DISTRICTS["东胜区"]) == "鄂尔多斯"
 # 目录里这条线叫「东胜8路」，行政后缀得能省掉
