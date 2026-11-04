@@ -718,6 +718,10 @@ assert query.parse("重庆492路") == ("492", "重庆")      # 两位数写法�
 assert query.parse("上海343夜宵线现在有没有车") == ("343", "上海")
 assert query.BUS_RE.search("上海343夜宵线现在有没有车")
 assert not query.BUS_RE.search("晚上吃夜宵去")
+# 四位数线号（石家庄 1002/1101）：num 只吃 3 位时，正则会从第二位起匹成「002」「101」
+assert query.parse("石家庄1002路现在有没有车") == ("1002", "石家庄")
+assert query.parse("石家庄1101路现在有没有车") == ("1101", "石家庄")
+assert query.BUS_RE.search("石家庄1101路有没有车")
 
 # 站名里带裸县名（「元氏火车站」→ 元氏县 → 石家庄）：别落回默认城玉林交白卷
 _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
