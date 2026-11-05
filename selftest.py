@@ -993,6 +993,8 @@ assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1)], "28")] == [
 assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1), ("28路", 2)], "28")] == ["28路"]   # 全等优先
 assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1)], "大容山旅游专")] == ["大容山旅游专线（28路）"]
 
+assert query.STOPS_RE.search("玉林9路站点") and not query.STOPS_RE.search("9路现在到哪个站点了")
+
 print("selftest ok")
 
 if "--live" in sys.argv:

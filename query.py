@@ -1289,7 +1289,8 @@ def render_at(city_key, city_name, want, msg):
     return f"{hit[0][1]['lineName']} 到{station_name}：" + "；".join(out)
 
 
-STOPS_RE = re.compile(r"所有?站点|全部站点|站(点)?列(表|出来)|经过哪些站|有哪些站|停哪些站|站序|沿途")
+# 「9路站点」这种只说两个字的也要认；「到站点了没」「哪个站点」问的是实时位置，别抢
+STOPS_RE = re.compile(r"所有?站点|全部站点|站(点)?列(表|出来)|经过哪些站|有哪些站|停哪些站|站序|沿途|(?<![到哪个几])站点")
 
 
 def render_stops(city_name, want):
