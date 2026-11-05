@@ -813,6 +813,8 @@ _lm4, query._live_my = query._live_my, lambda cn, n, d, order=1: {
     if n.startswith("玉林") else []}
 _s4 = query.render_sweep("玉林市", False, ["G01路", "玉林北站定制夜班车"])
 assert "玉林北站定制夜班车 1 辆" in _s4 and "G01路 没车报位置" in _s4, _s4
+# 「这个站还在跑的线路有几条」：条数得写在头一句，不然人得自己去数哪行有车
+assert _s4.startswith("玉林市这 2 条线这会儿有 1 条在跑："), _s4
 assert query._msg_line("玉林市", "那玉林北站定制夜班车呢？") == "玉林北站定制夜班车"
 assert query._msg_line("玉林市", "玉林北站有哪几条公交线？") is None
 # 「现在有玉林北站夜班车吗」：少说了「定制」，且「现在」在句首——以前被 TAIL 吃空，回成反问

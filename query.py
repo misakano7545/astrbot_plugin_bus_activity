@@ -1806,7 +1806,11 @@ def render_sweep(city_name, want_plates=False, only=None):
                     f"{c.get('busNumber')}（{c.get('stationName') or '在途'}）" for c in pl[n][:6]
                 ) + (f" 等 {per[n]} 辆" if per[n] > 6 else "")
             return f"\n{n} {per[n]} 辆"
-        return f"{city_name}这 {len(names)} 条线这会儿：" + "".join(row(n) for n in names)
+        # 「这个站还在跑的公交线路有几条」：先把条数说出来，别让人自己去数哪行有车
+        run = [n for n in names if per[n]]
+        order = run + [n for n in names if not per[n]]
+        return (f"{city_name}这 {len(names)} 条线这会儿有 {len(run)} 条在跑："
+                + "".join(row(n) for n in order))
     if not live:
         if note:
             return f"{city_name}这会儿抽查了 {len(names)} 条主线，都没车报位置，可能都收班了"
