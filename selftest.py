@@ -1133,6 +1133,11 @@ assert query.SWEEP_RE.search("南宁今晚还有没有公交"), "时间词那句
 assert query.STOPASK_RE.search("新乡胖东来三胖有哪些公交")
 assert not query.STOPASK_RE.search("玉林汽车总站有什么公交车不是站")
 
+# 「新乡饮马口站有几条线路」不是「几路」，快路没接住就整句进了模型（它去报全城 93 条）
+assert query.BUS_RE.search("新乡饮马口站有几条线路")
+assert query.BUS_RE.search("饮马口站有哪些线路")
+assert not query.BUS_RE.search("这条线路真长"), "聊线路长短不该抢"
+
 print("selftest ok")
 
 if "--live" in sys.argv:
