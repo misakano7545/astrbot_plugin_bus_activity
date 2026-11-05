@@ -986,6 +986,13 @@ assert "最快的是 1路" in _b and "桂K1" in _b and "4 分钟" in _b and "2�
 query._catalog, query._station_seq, query._live_my = _cat2, _sq, _lm2
 query._cache.clear()
 
+# 目录把号写在括号里（「大容山旅游专线（28路）」）：归一化会连号一起剥掉，
+# 拿裸号查必须能匹上，否则「玉林28路」永远「没这条线」
+_pk = query._pick
+assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1)], "28")] == ["大容山旅游专线（28路）"]
+assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1), ("28路", 2)], "28")] == ["28路"]   # 全等优先
+assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1)], "大容山旅游专")] == ["大容山旅游专线（28路）"]
+
 print("selftest ok")
 
 if "--live" in sys.argv:

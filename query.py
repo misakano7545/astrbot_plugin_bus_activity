@@ -353,6 +353,13 @@ def _pick(catalog, want):
     exact = [c for c in catalog if norm_line(c[0]) == want]
     if exact:
         return exact
+    # 目录把号写在括号里（「大容山旅游专线（28路）」），归一化时括号连同号一起被剥掉，
+    # 拿裸号 28 去比永远「没这条线」
+    if want.isdigit():
+        alias = [c for c in catalog
+                 if want in re.findall(r"[（(]\s*(\d{1,4})\s*[路线]", c[0])]
+        if alias:
+            return alias
     near = [c for c in catalog if norm_line(c[0]).startswith(want)]
     if not near:
         return []
@@ -1294,7 +1301,9 @@ def render_stops(city_name, want):
         names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, row["upperOrDown"])]
         if names:
             body = "\n".join(f"{i}. {n}" for i, n in enumerate(names, 1))
-            out.append(f"{line_name}（往{row.get('to') or '?'}，{len(names)} 站）：\n{body}")
+            # 线名自带括号（「大容山旅游专线（28路）」）时就别套括号，否则连成「）（」
+            br = ("", "") if line_name.endswith(("）", ")")) else ("（", "）")
+            out.append(f"{line_name}{br[0]}往{row.get('to') or '?'}，{len(names)} 站{br[1]}：\n{body}")
     return "\n\n".join(out) or None
 
 
