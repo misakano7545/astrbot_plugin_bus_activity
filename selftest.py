@@ -894,6 +894,26 @@ assert query._chelaile("085", "1")["line"] == "1"      # 没点名：两家都�
 query.chelaile = _cl
 query._cache.clear()
 
+# 只给车牌：省简称+字母+5 位（闽AYC505）或 6 位（闽A17997D 新能源）
+assert query.PLATE_RE.search("查询一下闽AYC505有没有在路上").group(1) == "闽AYC505"
+assert query.PLATE_RE.search("福州闽A17997D").group(1) == "闽A17997D"
+assert query.PLATE_RE.search("玉林9路") is None
+assert query.BUS_RE.search("闽AYC505")           # 光给车牌也得让快路接单
+assert query.PLATE["闽A"] == "福州市"
+assert query._plate_key("闽A·17997d") == query._plate_key("A17997D") == "A17997D"
+# 找不到要报扫了多少，别报成「全城都没有」；找到要报线路、方向和站位
+_cat, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "9路", "from": "甲站", "to": "乙站", "upperOrDown": "1"}]}
+_pi, query._plate_index = query._plate_index, lambda cn: ({"K12345": ("9路", "1", "火车站")}, 50, 80)
+query._cache.clear()
+assert query.render_plate("玉林市", "桂K12345") == "桂K12345 在 9路 上，往乙站方向，刚过 火车站"
+assert "只扫了前 50 条" in query.render_plate("玉林市", "桂K99999")
+query._plate_index = lambda cn: ({}, 80, 80)
+query._cache.clear()
+assert "80 条方向全扫了" in query.render_plate("玉林市", "桂K99999")
+query._plate_index, query._catalog = _pi, _cat
+query._cache.clear()
+
 print("selftest ok")
 
 if "--live" in sys.argv:

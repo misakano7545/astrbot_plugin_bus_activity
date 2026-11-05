@@ -16,8 +16,10 @@ from pathlib import Path
 
 try:  # AstrBot 按包加载时走相对导入，单文件调试时退回顶层模块
     from . import chelaile
+    from .plates import PLATE
 except ImportError:
     import chelaile
+    from plates import PLATE
 
 HERE = Path(__file__).parent
 CHELAILE_CITIES = json.loads((HERE / "cities.json").read_text("utf-8"))
@@ -97,10 +99,13 @@ JUNK_HEAD = re.compile(r"^(?:车来了|掌上公交|掌上|查询|查一下|查�
 JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|部|辆|只|几)+$")
 # 像在问公交才去查。线路/路线/站点这三个词在闲聊里到处都是（「人生路线」「这个站点好难」），
 # 不单独算信号；实词、线号、数据源名才是。
+# 完整车牌：省简称 + 字母 + 5 位（普通）或 6 位（新能源，闽A17997D）
+PLATE_PAT = (r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云藏陕甘青宁新]"
+             r"[A-Z][A-Z0-9]{4,6}(?![A-Za-z0-9])")
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
     r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|"
-    r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + ALPHA_PAT)
+    r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + PLATE_PAT + r"|" + ALPHA_PAT)
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
 ASK = re.compile(r"多久|几站|几分钟|几辆|几台|几点|有车|有没有|有吗|还有|在哪|到哪|到吗|怎么坐|怎么去|"
@@ -744,6 +749,8 @@ STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
 # 「11 路车」中间隔着「路」，不会被当成车号
 VEH_RE = re.compile(r"-\s*(\d{2,5})(?!\d)|(?<![\dA-Za-z])(\d{2,5})\s*[号]?车")
+# 完整车牌：省简称 + 字母 + 5 位（普通）或 6 位（新能源，闽A17997D）
+PLATE_RE = re.compile("(" + PLATE_PAT + ")")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 # 群里 @机器人 的三种写法：OneBot 的 CQ 码、QQ 官方的 [At:xxx]、以及没转换掉的「@大肥鱼 」
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>|(?<!\S)@\S+\s*")
@@ -1525,6 +1532,9 @@ def render_stop(city_key, city_name, msg, src=None):
 # 放在站点判断之后：能认出站名就以站点为准，「十字街有几路车」不会被抢走。
 SWEEP_RE = re.compile(r"哪条|哪些|哪几|哪路|还有|在跑|运营")
 SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让用户点名，别硬扫
+# 按车牌查只能逐线翻 104（两家都没这个接口）：一个城扫到此为止，再多群里等不起
+PLATE_MAX = 1600
+PLATE_TTL = 60
 
 
 def _sweep_chelaile(city_name):
@@ -1634,6 +1644,64 @@ def render_sweep(city_name, want_plates=False, only=None):
             + "".join(f"\n{n} {c} 辆（{ends[n]}）" for n, c in live))
 
 
+def _plate_key(p):
+    """车牌归一：去掉省简称和分隔符，只比字母数字（闽A·17997D / 闽a17997d / A17997D 都对）。"""
+    return re.sub(r"[^0-9A-Z]", "", (p or "").upper())
+
+
+def _plate_index(city_name):
+    """全城逐线翻一遍，车牌 → (线路, 方向, 站位)。两家都没按车牌查的接口，只能这样。
+
+    返回 (索引, 扫了几个方向, 全城几个方向)，扫不完时前两个不等。
+    """
+    rows = _catalog(city_name).get("buslines") or []
+    dirs = {}
+    for r in rows:
+        d = str(r.get("upperOrDown") or "")
+        if d in ("1", "2"):
+            dirs.setdefault(r["lineName"], []).append(d)
+    jobs = [(n, d) for n, ds in dirs.items() for d in ds]
+    total = len(jobs)
+    if total > PLATE_MAX:
+        # shortcut: 上千条线的城市扫不满，先扫按号排的主线再补其余的，扫不全别报成「全城都没有」
+        trunk = sorted((n for n in dirs if n.endswith("路") and n[:-1].isdigit()),
+                       key=lambda n: int(n[:-1]))
+        names = trunk + [n for n in dirs if n not in set(trunk)]
+        jobs = [(n, d) for n in names for d in dirs[n]][:PLATE_MAX]
+    idx = {}
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        got = pool.map(lambda j: _live_my(city_name, j[0], j[1]).get("list") or [], jobs)
+        for (name, d), cs in zip(jobs, got):
+            for c in cs:
+                b = _plate_key(c.get("busNumber"))
+                if b:
+                    idx[b] = (name, d, c.get("stationName") or "在途")
+    return idx, len(jobs), total
+
+
+def render_plate(city_name, plate, dir_msg=""):
+    """「闽A17997D 在哪」：扫全城找这一辆，报它在哪条线、哪个方向、到了哪站。"""
+    try:
+        idx, scanned, total = _cached("plate-idx", city_name, PLATE_TTL,
+                                      lambda: _plate_index(city_name))
+    except Exception:
+        return f"{city_name}这边扫车牌的时候上游没响应，过会儿再问一次"
+    hit = idx.get(_plate_key(plate))
+    if not hit:
+        part = (f"只扫了前 {scanned} 条（全城 {total} 条方向）" if scanned < total
+                else f"{scanned} 条方向全扫了")
+        return f"{city_name}这会儿{part}，没看到 {plate} 这辆车，可能收班了或者在别的城市跑"
+    name, d, station = hit
+    ends = {r["lineName"]: f"{r.get('from')} ↔ {r.get('to')}"
+            for r in (_catalog(city_name).get("buslines") or [])}
+    to = ends.get(name, "")
+    side = ""
+    if to and " ↔ " in to:
+        side = to.split(" ↔ ")[1] if d == "1" else to.split(" ↔ ")[0]
+    return (f"{plate} 在 {name} 上" + (f"，往{side}方向" if side else "") +
+            f"，刚过 {station}")
+
+
 LAST = {}          # 会话 → 上一条答过的城市/线路；追问「每站能换乘啥」不带车次，靠它
 
 
@@ -1727,6 +1795,12 @@ def answer(msg, default_city, ctx="", key=""):
         prefix = ""
     city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
     base = norm_city(default_city)
+    # 「闽AYC505」没写城市：车牌头两位就是车管所，能定到哪座城（否则会落回默认城白扫一遍）
+    pm = PLATE_RE.search(msg)
+    if pm and not explicit:
+        pc = PLATE.get(pm.group(1)[:2].upper())
+        if pc and norm_city(pc) in cities():
+            city_key, explicit = norm_city(pc), True
     # 前缀自己就是一座城（「玉林 容县 11 路」）时以它为准：玉林的目录里没有容县11路，
     # 拿玉林的目录查裸号会静默答成玉林 11 路
     if prefix and norm_city(prefix) in cities():
@@ -1765,6 +1839,9 @@ def answer(msg, default_city, ctx="", key=""):
         out = render_city_company(name, msg)
         if out:
             return out
+    # 「闽A17997D 在哪」：只给车牌没给线路，全城逐线翻一遍找这辆
+    if pm and not line:
+        return render_plate(name, pm.group(1))
     got = hop(msg)
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
     # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城
