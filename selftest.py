@@ -827,6 +827,11 @@ assert query.parse("500MB") is None
 assert query.parse("99KB") is None
 assert not query.BUS_RE.search("9KB")
 assert query.parse("玉林9路") == ("9", "玉林")          # 放宽字母数别把普通线号带坏
+# 「9999x 8123」是算式：乘号连着两个数字就不是线号（9KB 收窄后 9999X 仍匹得上）
+assert query.parse("9999x 8123等于多少") is None
+assert query.parse("9999x8123") is None
+assert query.parse("800×600") is None
+assert query.answer("9999x 8123等于多少", "玉林市") == ""   # 别回「没查到 9999X 这条线」
 
 # 站名里带裸县名（「元氏火车站」→ 元氏县 → 石家庄）：别落回默认城玉林交白卷
 _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
