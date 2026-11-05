@@ -734,16 +734,16 @@ query._cache.clear()
 
 # 「从北流汽车站到玉林北站」两站分属北流和玉林，但同一条 北流105路 直达：
 # 得先按目录真查，查不到才说跨城，别拿城市名先判死
-_rh, query.render_hop = query.render_hop, lambda ck, nm, got: "北流105路 直达（18 站）"
+_rh, query.render_hop = query.render_hop, lambda ck, nm, got, **kw: "北流105路 直达（18 站）"
 _cit3, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}, "北流": {"mygolbs": "北流市"}}
 assert query.answer("从北流汽车站到玉林北站坐啥公交车", "玉林市") == "北流105路 直达（18 站）"
-query.render_hop = lambda ck, nm, got: ""      # 目录里查不到（真跨城）才走跨城那句
+query.render_hop = lambda ck, nm, got, **kw: ""      # 目录里查不到（真跨城）才走跨城那句
 assert "跨城" in query.answer("从北流汽车站到玉林北站坐啥公交车", "玉林市")
 query.render_hop, query.cities = _rh, _cit3
 
 # 「从机场一号航站楼到元氏火车站」没写城市：默认城查不到就沿用上一条问过的城
 _rh2, _st7, _cit4 = query.render_hop, query.stops, query.cities
-query.render_hop = lambda ck, nm, got: "" if ck == "玉林" else "石家庄 换乘"
+query.render_hop = lambda ck, nm, got, **kw: "" if ck == "玉林" else "石家庄 换乘"
 query.stops = lambda cn, kw: []
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "石家庄": {"mygolbs": "石家庄市"}}
 query._last("k-city")["city"] = "石家庄"
@@ -891,7 +891,7 @@ _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
                                            "石家庄": {"mygolbs": "石家庄市"}}
 assert query._district_city("机场一号航站楼元氏火车站") == "石家庄"
 assert query._district_city("玉林北站") is None          # 撞名的裸名不收，别乱猜
-_rh8, query.render_hop = query.render_hop, lambda ck, nm, got: f"HOP:{ck}" if ck == "石家庄" else None
+_rh8, query.render_hop = query.render_hop, lambda ck, nm, got, **kw: f"HOP:{ck}" if ck == "石家庄" else None
 _rp8, query.render_plan = query.render_plan, lambda nm, a, b: ""
 assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-d8") == "HOP:石家庄"
 query.cities, query.render_hop, query.render_plan = _c8, _rh8, _rp8
@@ -1240,6 +1240,21 @@ assert query.parse("成都东16现在有车吗") == ("东16", "成都")
 assert query.parse("玉林2023年GDP") is None
 assert query.BUS_RE.search("成都东16")
 query.cities = _cd7
+
+# 同一所学校被平台拆成几条站记录，各挂各的线：「市一职校（玉林技师学院）」只挂城际，
+# 7路/G01 挂在「玉林技师学院（市一职中）」名下 —— 别名要能认到一起去
+assert query._alias("玉林技师学院（市一职中）") & query._alias("市一职校（玉林技师学院）") == {"玉林技师学院"}
+_s8, query.stops = query.stops, lambda c, k: {
+    "市一职校（玉林技师学院）": [{"stationName": "市一职校（玉林技师学院）", "relatedRoutes": ["城际线"],
+                                  "lat": "22.6500", "lng": "110.2000"}],
+    "玉林技师学院": [{"stationName": "市一职校（玉林技师学院）", "relatedRoutes": ["城际线"],
+                      "lat": "22.6500", "lng": "110.2000"},
+                     {"stationName": "玉林技师学院（市一职中）", "relatedRoutes": ["G01路"],
+                      "lat": "22.6519", "lng": "110.2013"}],
+}.get(k, [])
+assert query._full_stop("玉林市", {"stationName": "市一职校（玉林技师学院）",
+                                 "relatedRoutes": ["城际线"]})["relatedRoutes"] == ["G01路", "城际线"]
+query.stops = _s8
 
 print("selftest ok")
 if "--live" in sys.argv:

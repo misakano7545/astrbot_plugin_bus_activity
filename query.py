@@ -901,6 +901,22 @@ def _same_rows(rows, hit, base=None):
     return [(base, list(hit.get("relatedRoutes") or []))] + out
 
 
+def _full_stop(city_name, st):
+    """平台把同一所学校拆成几条站记录，各挂各的线：「市一职校（玉林技师学院）」只挂城际，
+    7路/G01 挂在「玉林技师学院（市一职中）」名下。括号里的别名再搜一遍，照 _merge_same 并起来。"""
+    rows = [r for r in stops(city_name, st["stationName"]) or [] if r.get("stationName")]
+    for alias in re.findall(r"[（(]([^）)]{2,})[）)]", st["stationName"]):
+        rows += [r for r in stops(city_name, alias) or [] if r.get("stationName")]
+    hit = next((r for r in rows if r["stationName"] == st["stationName"]), None)
+    return _merge_same(rows, hit) if hit and len(rows) > 1 else st
+
+
+def _alias(s):
+    """站名括号里的别名也算这个名字：「市一职校（玉林技师学院）」和「玉林技师学院（市一职中）」。"""
+    return ({s, re.sub(r"[（(][^）)]*[）)]", "", s or "")}
+            | set(re.findall(r"[（(]([^）)]{2,})[）)]", s or "")))
+
+
 def _merge_same(rows, hit):
     """平台把同一个站拆成「汽车总站」和「汽车总站（二医院）」两条，前者的线路表是残的
     （G02 就只挂在后者名下），只取 rows[0] 会漏掉真正经过的线。
@@ -1176,8 +1192,13 @@ def _goes(city_name, line, a, b):
     for d in ("1", "2"):
         names = [r.get("stationName") or "" for r in _station_seq(city_name, line, d)]
         # 先认同名，「汽车总站」不能被「北流汽车总站」顶掉
-        idx = lambda s: next((i for i, n in enumerate(names) if n == s),
-                             next((i for i, n in enumerate(names) if s in n), None))
+        def idx(s):
+            i = next((i for i, n in enumerate(names) if n == s), None)
+            if i is None:
+                i = next((i for i, n in enumerate(names) if s in n), None)
+            if i is None:      # 括号里的别名对得上也是同一个门（一职校 / 技师学院两条记录）
+                i = next((i for i, n in enumerate(names) if _alias(s) & _alias(n)), None)
+            return i
         ia, ib = idx(a), idx(b)
         if ia is not None and ib is not None and ia < ib:
             return d, ia, ib
@@ -1247,7 +1268,7 @@ def render_plan(city_name, a, b):
     return f"从{a}到{b}：\n{rows[0]}\n或者{rows[1]}"
 
 
-def render_hop(city_key, city_name, raw):
+def render_hop(city_key, city_name, raw, only_direct=False):
     """A 站到 B 站：拿两站的经停线路求交，再按站序验方向，验不过的不算直达。"""
     a, a_name = find_stop(city_name, raw[0])
     b, b_name = find_stop(city_name, raw[1])
@@ -1262,10 +1283,13 @@ def render_hop(city_key, city_name, raw):
         return None                              # 两边都不是站名，多半本来就不是问公交
     if not a or not b:
         return ""       # 有一边不是公交站（机场、外地地名）就交回给模型，别硬给一句话了事
+    a, b = _full_stop(city_name, a), _full_stop(city_name, b)
     ra = set(a.get("relatedRoutes") or [])
     rb = set(b.get("relatedRoutes") or [])
     head = f"从{a['stationName']}到{b['stationName']}"
     if not ra & rb:
+        if only_direct:
+            return ""
         plan = _hop_plan(city_name, a, a_name, b, b_name, ra, rb)
         if plan:
             return plan
@@ -1277,6 +1301,8 @@ def render_hop(city_key, city_name, raw):
         if got:
             direct.append((line, got))
     if not direct:
+        if only_direct:
+            return ""
         plan = _hop_plan(city_name, a, a_name, b, b_name, ra, rb)
         return plan or f"{head}有同名线路但方向反了，得换乘"
     if len(direct) == 1:
@@ -2406,9 +2432,13 @@ def answer(msg, default_city, ctx="", key=""):
     got = hop(msg)
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
     # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城
-    # 掌上自己有换乘方案（CMD=111：两次换乘也排、按总时长排序），先问它——手算的只换一次，
-    # 经常不是最快那条
-    out = ((render_plan(name, got[0], got[1]) or render_hop(city_key, name, got))
+    # 掌上自己有换乘方案（CMD=111：两次换乘也排、按总时长排序），手算的只换一次、经常不是最快那条，
+    # 所以没直达才交给它排
+    # 能直达就先让 render_hop 答——它带方向、车在哪、首末班；111 那边如果起点站记录只挂了
+    # 一条线（同一所学校拆成好几条记录），会把城际公交当前半段，排出来的方案比直达还差
+    out = ((render_hop(city_key, name, got, only_direct=True)
+            or render_plan(name, got[0], got[1])
+            or render_hop(city_key, name, got))
            if (got and name) else None)
     # 站名里带裸县名（「元氏火车站」）：先在那个县所在的城查，别落回默认城交白卷
     if not out and got and not explicit:
