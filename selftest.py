@@ -455,10 +455,18 @@ query._catalog = lambda c: {"buslines": [
     {"lineName": "G02路", "upperOrDown": "2", "from": "乙站", "to": "甲站"}]}
 _fl = query._first_last
 query._first_last = lambda c, n, d: ("06:40", "18:40") if d == "1" else ("07:45", "19:50")
+_pl = query._price
+query._price = lambda c, n: "2元/人次"
 _t = query.render_times("玉林市", "G02")
 assert _t.count("首班") == 2 and "07:45" in _t and "乙站 → 甲站" in _t, _t
+assert "票价 2元/人次" in _t, _t            # 问首末班顺带把票价报上
 assert query.render_times("玉林市", "999") is None
-query._catalog, query._first_last = _cat, _fl
+# 问票价：单独问也答，且「往X方向」只念这个方向
+assert query.render_price("玉林市", "G02") == "G02路 票价 2元/人次"
+assert query.render_price("玉林市", "999") is None
+query._price = lambda c, n: ""
+assert "没标票价" in query.render_price("玉林市", "G02")
+query._catalog, query._first_last, query._price = _cat, _fl, _pl
 
 # 实例是 UTC：时钟要按北京时间报（23:37 那种是 UTC，实际 07:37）
 import time as _tm

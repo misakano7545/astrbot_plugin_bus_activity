@@ -384,14 +384,30 @@ def _past_last(last, first=""):
     return (last_m - now_m) % (24 * 60) > 12 * 60
 
 
+def _seq_payload(city_name, line, direction):
+    """CMD=103 整包（站序 + 首末班 + 票价的 commonts），首末班和票价共用这一份缓存。"""
+    return _cached("firstlast", (city_name, line, direction), CATALOG_TTL,
+                   lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
+                                  "DIRECTION": direction}))
+
+
 def _first_last(city_name, line, direction):
     """(首班, 末班)，取不到给空串。只在整车数为 0 时调用，回答「是不是收班了」。"""
-    r = _cached("firstlast", (city_name, line, direction), CATALOG_TTL,
-                lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
-                               "DIRECTION": direction}))
-    fl = r.get("firstLast") or []
+    fl = _seq_payload(city_name, line, direction).get("firstLast") or []
     return (min((x.get("first") or "" for x in fl), default=""),
             max((x.get("last") or "" for x in fl), default=""))
+
+
+def _price(city_name, line):
+    """票价只藏在 103 的 commonts 那句话里，各家写法不一样：
+    「票价：2元/人次」「票价3元」「单程票价4元一票制。石家庄公交…」「票价2元。\\n热线…」
+    shortcut: 只认带「元」的阿拉伯数字写法，中文数字票价（「票价一元」）会漏；只取方向 1，
+    分段计价的线会不准。遇到了再补。
+    """
+    m = re.search(r"票价[:：]?\s*([^。\n；;]{1,30})",
+                  _seq_payload(city_name, line, "1").get("commonts") or "")
+    v = re.split(r"[\s，,（(]", (m.group(1) if m else "").strip())[0]
+    return v if "元" in v else ""
 
 
 def _last_bus(city_name, line, direction):
@@ -1211,9 +1227,29 @@ def render_times(city_name, want, msg=""):
         if only and only not in (row.get("to") or ""):     # 「往X方向的首末班」只念这个方向
             continue
         f, l = _first_last(city_name, name, d)
+        p = _price(city_name, name)
         if f or l:                                   # 两个方向时刻不同就各念一行
             out.append(f"{name} 首班 {f or '?'}，末班 {l or '?'}"
-                       f"（{row.get('from') or '?'} → {row.get('to') or '?'}）")
+                       f"（{row.get('from') or '?'} → {row.get('to') or '?'}）"
+                       + (f" 票价 {p}" if p else ""))
+    return "\n".join(dict.fromkeys(out)) or None
+
+
+PRICE_RE = re.compile(r"票价|多少钱|几块钱?|收费")
+# 「往X方向」在 render_price 里也得认，跟 render_times 一个口径
+
+
+def render_price(city_name, want, msg=""):
+    """票价：掌上写在 103 的 commonts 里，车来了整家没有这个字段，那边只能说没标。"""
+    rows = _catalog(city_name).get("buslines") or []
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
+    only = _dir(msg)
+    out = []
+    for name, row in hit:
+        if only and only not in (row.get("to") or ""):
+            continue
+        p = _price(city_name, name)
+        out.append(f"{name} 票价 {p}" if p else f"{name} 平台上没标票价")
     return "\n".join(dict.fromkeys(out)) or None
 
 
@@ -1516,7 +1552,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     last["line"] = wants[0]
     if name:
         for w in wants:
-            if TIMES_RE.search(msg):          # 问首末班时刻表
+            if PRICE_RE.search(msg):          # 问票价（掌上把价格写在 103 的 commonts 里）
+                out = render_price(name, w, msg)
+            elif TIMES_RE.search(msg):        # 问首末班时刻表
                 out = render_times(name, w, msg)
             elif COMPANY_RE.search(msg):      # 问公司/找失物/投诉
                 out = render_company(name, w)
