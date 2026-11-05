@@ -160,6 +160,15 @@ def _snap(pre):
     return pre
 
 
+def _line_pre(pre):
+    """线名自带的县级市前缀：「安宁12」的安宁属昆明，可城市键被兰州的安宁区占了，
+    剥掉前缀就会匹到昆明市区的 12 路。区县名自己（安宁区）不算这种前缀。"""
+    if not pre or (pre in DISTRICTS and not pre.endswith("市")):
+        return ""
+    host = (cities().get(pre) or cities().get(norm_city(pre)) or {}).get("mygolbs") or ""
+    return norm_city(pre) if host and norm_city(host) != norm_city(pre) else ""
+
+
 def parse(msg):
     """→ (线路号, 紧贴着的汉字段)。县内线路「陆川1路」靠这个前缀区分。"""
     # 「9999x 8123等于多少」：乘号连着两个数字是算式，不是线号。
@@ -187,6 +196,9 @@ def parse(msg):
                 return norm_line(m.group(1)[-1] + m.group(2)), m.group(1)[:-1]
             if not m or m.group(1) not in cities():
                 return None
+            # 「安宁12」：城市键被同名区占掉了（掌上只有兰州的安宁区），线名里的前缀还得留着
+            if _line_pre(m.group(1)):
+                return norm_line(_line_pre(m.group(1)) + m.group(2)), m.group(1)
             return m.group(2), m.group(1)
         pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", msg[: m.end(1)]))
         return m.group(2), _snap(pre)
@@ -202,6 +214,10 @@ def parse(msg):
     # 「柳州快1路」：快/慢 粘在线号前，被当成了前缀的尾巴——挪回线名里
     if pre[-1:] in ("快", "慢") and (not pre[:-1] or pre[:-1] in cities()):
         num, pre = pre[-1] + num, pre[:-1]
+    # 「安宁12」：安宁市属昆明，可掌上只有兰州的安宁区，城市键被占了，线名里还得留着前缀
+    # （安宁K12）。剥掉会匹到昆明市区的 12 路，答成别人的车。
+    if pre and _line_pre(pre):
+        num = norm_line(_line_pre(pre) + num)
     return norm_line(num), _snap(pre)
 
 
@@ -312,6 +328,16 @@ def cities():
                     idx.setdefault(norm_city(name), {})["mygolbs"] = name
         except Exception:
             pass  # 掌上城市表拉不到就只用车来了那份，不阻断查询
+        # 区名剥掉后缀会顶掉同名县级市：「安宁」在掌上只有兰州的安宁区，用户说「安宁」
+        # 多指昆明的安宁市。两边指向不同城、且父城在表里时，按县级市走。
+        for _k, _v in DISTRICTS.items():
+            _b = norm_city(_k)
+            if not _k.endswith("市") or _b not in idx:
+                continue
+            _host = idx[_b].get("mygolbs") or ""
+            if _host != _k and DISTRICTS.get(_host) not in (None, _v) and norm_city(_v) in idx:
+                idx[_b] = dict(idx[norm_city(_v)])
+                idx[_host] = {"mygolbs": DISTRICTS[_host]}   # 明写「安宁区」还查兰州，裸「安宁」才归昆明
         return idx
     return _cached("cities", "", CITY_TTL, build)
 
@@ -771,6 +797,16 @@ def _near(city_key, want, n=4):
     name = (cities().get(city_key) or {}).get("mygolbs")
     rows = (_catalog(name).get("buslines") or []) if name else []
     w = norm_line(want)
+    # 「安宁12」：线名自带地名（安宁K12），报同地名开头的几条比按数字相似度挑出来的准
+    head = re.match(r"[\u4e00-\u9fa5]{2,6}", w)
+    if head:
+        same = [r["lineName"] for r in rows if norm_line(r["lineName"]).startswith(head.group(0))]
+        cl = (cities().get(city_key) or {}).get("chelaile")
+        if cl:      # 车来了那边也有一批同地名的线（安宁K1…），别只报掌上目录里那一条
+            same += [n for n, _ in (chelaile.lines(cl) or []) if norm_line(n).startswith(head.group(0))]
+        same = list(dict.fromkeys(same))
+        if same:
+            return "、".join(same[:n])
     hit = sorted({r["lineName"] for r in rows},
                  key=lambda x: -difflib.SequenceMatcher(None, norm_line(x), w).ratio())[:n]
     return "、".join(hit) if hit and difflib.SequenceMatcher(None, norm_line(hit[0]), w).ratio() >= 0.5 else ""
@@ -1040,10 +1076,10 @@ def _exact_line(city_name, msg, want):
     for r in rows:
         n = norm_line(r["lineName"])
         # 句子里把城市名也粘进了线名（「西安环山二号线」）：目录名是它的后缀也算。
-        # 只认差 2–4 个汉字的情况（城市名被粘进线名），否则「G01」会被认成「1」；
-        # 差一个字的多半是「快1」里的「快」——那是线名的一部分，不是城市名，认了会退成 1 路
+        # 只认 head 就是这座城的名字——「安宁12」的「安宁」是线名本身（安宁K12），
+        # 当成城市名剥掉会把昆明市区的 12 路答成安宁的车
         head = w[:len(w) - len(n)] if w.endswith(n) and len(w) > len(n) else ""
-        if not (w and n.endswith(w) or re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", head or "")):
+        if not (w and n.endswith(w) or (head and norm_city(head) == norm_city(city_name))):
             continue
         # 「新乐专一路」的「一」也是数字，得和 1 等价地认
         cns = "零一二三四五六七八九"
@@ -1358,6 +1394,8 @@ def render_at(city_key, city_name, want, msg):
         mins, left, plate = eta
         got[lab] = (max(1, round(mins)), plate, "马上到" if left <= 0 else f"还有 {left} 站")
     if not got:
+        if not hit:
+            return None                  # 目录里根本没这条线，交给上层说「没查到」
         if not near:
             return f"{hit[0][1]['lineName']} 不经过{station_name}"
         return None
@@ -2084,14 +2122,16 @@ def _last(key):
 
 def _one(city_key, name, num, prefix, msg, src, explicit, last):
     """一条线路的回答：时刻表 / 公司 / 站表 / 到站 / 实时，按问法选。"""
-    wants = ([prefix + num] if prefix and norm_city(prefix) != city_key else []) + [num]
+    # num 里已经带着这个前缀（「安宁市12路」→ 安宁12）时别再拼一次，否则成了「安宁安宁12」
+    wants = ([prefix + num] if prefix and norm_city(prefix) != city_key
+              and not num.startswith(norm_city(prefix)) else []) + [num]
     # 「香港城巴1」：同号五家公司各有 1 路，只给点名的这家——城市由 city_key 定，算子名留给 _chelaile 分流
     op = next((o for o in OPS if o in prefix), "")
     if op:
         wants = [op + num]
     # 目录里的线名常省掉行政后缀：「东胜区8路」在鄂尔多斯目录里叫「东胜8路」
     bare = re.sub(r"(区|县|旗|市|镇)$", "", prefix) if prefix else ""
-    if len(bare) >= 2 and bare != prefix:
+    if len(bare) >= 2 and bare != prefix and not num.startswith(bare):
         wants.insert(len(wants) - 1, bare + num)
     # 有前缀要纠前缀截短；「环山二号线」这种自带汉字的线名也要纠（前缀是空的）
     if name and (prefix or not num[:1].isdigit()):
@@ -2187,8 +2227,8 @@ def answer(msg, default_city, ctx="", key=""):
             city_key, explicit = norm_city(pc), True
     # 前缀自己就是一座城（「玉林 容县 11 路」）时以它为准：玉林的目录里没有容县11路，
     # 拿玉林的目录查裸号会静默答成玉林 11 路
-    if prefix and norm_city(prefix) in cities():
-        city_key, explicit = norm_city(prefix), True
+    if prefix and (prefix in cities() or norm_city(prefix) in cities()):
+        city_key, explicit = (prefix if prefix in cities() else norm_city(prefix)), True
     # 同群接着问（「那 K502 呢」）：没明写城市就沿用上一条问过的城市，别落回默认城。
     # 带地名前缀的（「陆川1路」）不适用——刚问过鄂尔多斯就问陆川1路，会被答成鄂尔多斯 1路
     if line and not explicit and not prefix and last.get("city") in cities() and last["city"] != city_key:

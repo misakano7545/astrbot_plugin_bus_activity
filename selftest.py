@@ -1112,6 +1112,20 @@ assert query.render_at("玉林", "玉林市", "9", "十字街") == \
 query._first_last, query._window = _fl, _w
 query.pick_stop, query._catalog, query._station_seq, query._live_my, query._etas = _p, _c2, _s, _l, _e
 
+# 「安宁12」：安宁市属昆明，可掌上只有兰州的安宁区，「安宁」这个键被区占了。裸「安宁」得
+# 归昆明、线名里的「安宁」不能当城市名剥掉，否则会答成昆明市区的 12 路
+_c0, _cat0, _cl0 = query.cities, query._catalog, query.chelaile.lines
+query.cities = lambda: {"安宁": {"mygolbs": "昆明市", "chelaile": "081"},
+                        "安宁区": {"mygolbs": "兰州市"},
+                        "昆明": {"mygolbs": "昆明市", "chelaile": "081"}}
+assert query._line_pre("安宁") == "安宁", query._line_pre("安宁")
+assert query._line_pre("安宁区") == "", query._line_pre("安宁区")
+assert query.parse("安宁12")[0] == "安宁12", query.parse("安宁12")
+query._catalog = lambda n: {"buslines": [{"lineName": "安宁K1"}, {"lineName": "12路"}]}
+query.chelaile.lines = lambda c: [("安宁K7", "1")]
+assert query._near("昆明", "安宁12") == "安宁K1、安宁K7", query._near("昆明", "安宁12")
+query._catalog, query.chelaile.lines, query.cities = _cat0, _cl0, _c0
+
 print("selftest ok")
 
 if "--live" in sys.argv:
