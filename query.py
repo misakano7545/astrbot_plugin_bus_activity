@@ -820,7 +820,7 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?线路|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -949,6 +949,12 @@ def find_stop(city_name, raw):
             # 「石家庄北站」退到「北站」会匹上「石家庄东站」：带方位字的要求方位也对得上
             dirs = [c for c in "东南西北中" if c in raw]
             if best and dirs and not any(c in best["stationName"] for c in dirs):
+                best = None
+            # 「湛江东简客运站」靠「客运站」搜出来的「吴川东升客运站」跟问的没关系：
+            # 去掉通用后缀，剩下的字得真在候选名里按顺序出现
+            core = re.sub(r"(?:客运站|汽车站|火车站|公交站|客运中心|站)$", "", raw)
+            core = re.sub(rf"^{re.escape(norm_city(city_name))}", "", core)
+            if best and len(core) >= 2 and not _subseq(core, best["stationName"]):
                 best = None
             if best and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
                 return _merge_same(rows, best), best["stationName"]
@@ -1840,7 +1846,8 @@ BEST_RE = re.compile(r"最快|最少|哪[辆部个条]?先|先到|等得最少|�
 # 放在站点判断之后：能认出站名就以站点为准，「十字街有几路车」不会被抢走。
 SWEEP_RE = re.compile(r"哪条|哪几|哪路|还有|在跑|运营")
 # 「新乡胖东来三胖有哪些公交」：问的是那个地方有哪些线，不是整城清单、也不是哪条在跑
-STOPASK_RE = re.compile(r"(?:有哪些|有没有|有什么)[\u4e00-\u9fa5]{0,5}(?:公交车|公交|巴士|公车|线路)?[？?吗呢啊]*$")
+STOPASK_RE = re.compile(r"(?:有哪些|有没有|有什么|有几条?|有多少条?|哪几条)[\u4e00-\u9fa5]{0,5}"
+                         r"(?:公交车|公交|巴士|公车|线路)?[？?吗呢啊]*$")
 # 「南宁今晚还有没有公交」问的是这会儿有没有车，不是某个地方——留给 SWEEP_RE
 _NOTPLACE = re.compile(r"今晚|今天|现在|目前|几点|多久|什么时候|在跑|运营|还有")
 SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让用户点名，别硬扫
@@ -2227,7 +2234,7 @@ def answer(msg, default_city, ctx="", key=""):
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
     line = parse(msg)
-    if not line and ctx and not re.search(r"在跑|运营|哪条|哪些|全部|车牌|号牌", msg) \
+    if not line and ctx and not re.search(r"在跑|运营|哪条|哪些|有几|几条|条线路|全部|车牌|号牌", msg) \
             and not PLATE_RE.search(msg):
         # 引用别人那句追问「这路还有几辆」，线路号在被引用的话里。
         # 但本句问的是全城（「还有没有在跑的线路」「每辆车的车牌」）时不能拿引用里那一路顶替——
@@ -2420,6 +2427,12 @@ def answer(msg, default_city, ctx="", key=""):
         if STOPASK_RE.search(msg) and not _NOTPLACE.search(msg):
             place = STOPASK_RE.sub("", msg).replace(norm_city(name), "", 1).strip()
             if len(place) >= 2:
+                core = re.sub(r"(?:客运站|汽车站|火车站|公交站|客运中心|站)$", "", place)
+                names = {r.get("stationName") for r in stops(name, core) or [] if r.get("stationName")}
+                if core and core != place and len({n for n in names if n.startswith(core)}) == 1:
+                    got = render_stop(city_key, name, next(iter(n for n in names if n.startswith(core))))
+                    if got:
+                        return got
                 return f"{norm_city(name)}站表里没查到「{place}」这个站"
         # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）
         if not explicit and re.search(r"站|线路|几路", msg):
