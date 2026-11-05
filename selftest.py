@@ -1085,6 +1085,10 @@ assert query._plate_core("桂K11860D") == "11860D"
 # 「北流有哪些公交线路」是线路清单，「有哪些公交公司」才是公司清单
 assert query.CITYLINES_RE.search("北流有哪些公交线路") and not query.CITY_CO_RE.search("北流有哪些公交线路")
 assert query.CITY_CO_RE.search("北流有哪些公交公司") and query.CITY_CO_RE.search("玉林公交公司电话是多少")
+# 「济宁有哪几个公交公司」——「哪几个/几个/多少个」原来不认，掉进扫车分支答成「抽查了 60 条主线都没车」
+for m in ("济宁有哪几个公交公司", "济宁有几个公交公司", "济宁有多少个公交公司"):
+    assert query.CITY_CO_RE.search(m), m
+assert not query.CITY_CO_RE.search("济宁9路有几个站")
 # 「玉林市含有几家公交公司」原来落到站名兜底，答成「市含」这个站——问的是公司数，不是站点
 for m in ("玉林市含有几家公交公司", "玉林有几家公交公司", "玉林市公交公司有几家"):
     assert query.CITY_CO_RE.search(m), m
