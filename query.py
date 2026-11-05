@@ -347,6 +347,7 @@ def cities():
             _p = idx.get(norm_city(_v)) or {}
             if _p.get("chelaile"):
                 _e["chelaile"] = _p["chelaile"]
+                _e["_borrow"] = True      # 借来的 id 只查带地名的线名，裸号会答成父城的车
         return idx
     return _cached("cities", "", CITY_TTL, build)
 
@@ -671,6 +672,9 @@ def query(city_key, wants, src=None, veh=""):
             fetch = {"mygolbs": _mygolbs, "chelaile": _chelaile}[source]
             target = ent.get(source)
             if not target:
+                continue
+            # 县级市借父城的车来了 id：「吴川9路」不能拿湛江市区的 9 路顶
+            if source == "chelaile" and ent.get("_borrow") and not re.search(r"[\u4e00-\u9fa5]", want):
                 continue
             try:
                 got = fetch(target, want)
@@ -1137,7 +1141,9 @@ def _exact_line(city_name, msg, want, city_key=""):
     cid = (cities().get(city_key or norm_city(city_name)) or {}).get("chelaile")
     if cid and (not best or norm_line(best) == w):
         try:
-            hit += scan([n for n, _ in chelaile.lines(cid) or []])
+            # 只收比裸号更长的：「吴川9路」不能拿湛江市区的 9 路顶（上游没这条就说没这条）
+            hit += [n for n in scan([n for n, _ in chelaile.lines(cid) or []])
+                    if len(norm_line(n)) > len(w)]
         except Exception:
             pass
         best = max(hit, key=lambda n: len(norm_line(n)), default=None)

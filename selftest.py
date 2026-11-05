@@ -1184,7 +1184,13 @@ query.cities = lambda: {"吴川": {"mygolbs": "吴川市", "chelaile": "157"}}
 query._catalog = lambda cn: {"buslines": [{"lineName": "1路（梅菉-霞山新线）"}]}
 query.chelaile.lines = lambda cid: [("吴川2路（梅菉-霞山旧线）", "1"), ("2路", "2")]
 assert query._exact_line("吴川市", "湛江吴川二路（梅菉-霞山旧线）", "2", "吴川") == "吴川2路（梅菉-霞山旧线）"
-assert query._exact_line("吴川市", "湛江2路", "2", "吴川") == "2路"
+# 车来了目录里只有别的县的同名线时宁可返空（「吴川9路」不许变湛江市区 9 路）
+assert query._exact_line("吴川市", "湛江2路", "2", "吴川") is None
+# 借来的车来了 id 只查带地名的线名：「吴川9路」不许落成湛江市区的 9 路
+_c3 = query.cities
+query.cities = lambda: {"吴川": {"mygolbs": "吴川市", "chelaile": "157", "_borrow": True}}
+assert "error" in query.query("吴川", ["9"], "chelaile", ""), "裸号不该去借来的目录里查"
+query.cities = _c3
 query.cities, query.chelaile.lines, query._catalog = _c2, _cl2, _cat2
 
 print("selftest ok")
