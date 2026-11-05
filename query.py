@@ -407,6 +407,11 @@ def detect_city(msg, prefix, default_city):
         key = norm_city(DISTRICTS[prefix])
         if key in idx:
             return key, True
+    # 「佛256线」：城市名少写一个字，但只有佛山以「佛」开头——别去问「佛是哪儿的公交」
+    if prefix:
+        cand = [k for k in idx if k.startswith(prefix)]
+        if len(cand) == 1:
+            return cand[0], True
     key = norm_city(default_city)
     if key not in idx:
         return None, False
