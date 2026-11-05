@@ -1281,7 +1281,7 @@ def render_at(city_key, city_name, want, msg):
     dest = _dest_after(city_name, msg, station_name)
     rows = _catalog(city_name).get("buslines") or []
     hit = _pick([(r["lineName"], r) for r in rows], want)
-    out, dead = [], []
+    got, dead = {}, []                # 方向名 -> (分钟, 车牌, 站数)；没预测的进 dead
     near = False                      # 这条线到底过不过我这个站
     for line_name, row in hit:
         d = row["upperOrDown"]
@@ -1294,33 +1294,38 @@ def render_at(city_key, city_name, want, msg):
         near = True
         # 「G02 到高新产业园，去玉林北站」问的是在产业园上车、往玉林北站那个方向，别把终点当上车站
         if dest and dest != station_name:
-            got = _goes(city_name, line_name, station_name, dest)   # 只留能开到 dest 的方向
-            if not got or got[0] != d:
+            g = _goes(city_name, line_name, station_name, dest)   # 只留能开到 dest 的方向
+            if not g or g[0] != d:
                 continue
+        lab = row.get("to") or ""
         eta = _etas(_live_my(city_name, line_name, d, idx))
         if not eta:
-            dead.append(row.get("to") or "?")
+            dead.append(lab)
+            got.setdefault(lab, None)     # 方向还在，只是这会儿没车报过来
             continue
         mins, left, plate = eta
-        span = "马上到" if left <= 0 else f"还有 {left} 站"
-        out.append((row.get("to") or "", plate, max(1, round(mins)), span))
-    if not out:
-        # 这条线确实过我这一站、但这个方向这会儿没有车往这儿开（刚过站 / 还没发车）。
-        # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
-        if dead:
-            return (f"{hit[0][1]['lineName']} 这会儿没有开往{station_name}的车"
-                    f"（往{'、'.join(dict.fromkeys(dead))}方向都没有）")
+        got[lab] = (max(1, round(mins)), plate, "马上到" if left <= 0 else f"还有 {left} 站")
+    if not got:
         if not near:
             return f"{hit[0][1]['lineName']} 不经过{station_name}"
         return None
-    # 「N 路离 X 站大约几分钟」：站在站台的人要的是这一句，别念「往X：桂K… 约 18:10 到」
     line_name = hit[0][1]["lineName"]
-    if len(out) == 1:                       # 只有一个方向有车时不念方向名
-        _, plate, m, span = out[0]
-        return f"{line_name} 离{station_name} 大约 {m} 分钟（{plate}，{span}）"
-    return f"{line_name} 离{station_name}：" + "；".join(
-        (f"往{lab} " if lab else "") + f"大约 {m} 分钟（{plate}，{span}）"
-        for lab, plate, m, span in out)
+    live = {k: v for k, v in got.items() if v}
+    if not live:
+        # 这条线确实过我这一站、但两个方向这会儿都没有车往这儿开（刚过站 / 还没发车）。
+        # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
+        return (f"{line_name} 这会儿没有开往{station_name}的车"
+                f"（往{'、'.join(dict.fromkeys(dead))}方向都没有）")
+
+    # 「N 路离 X 站大约几分钟」：站在站台的人要的是这一句，别念「往X：桂K… 约 18:10 到」
+    def one(lab, v):
+        return (f"往{lab} " if lab else "") + f"大约 {v[0]} 分钟（{v[1]}，{v[2]}）"
+
+    if len(got) == 1:                     # 只有一个方向过这站（或点了方向），不用念方向名
+        return f"{line_name} 离{station_name} " + one("", live[list(live)[0]])
+    # 中途站两个方向都要报：只报一边会被当成哪边都能坐；哪个方向没车也如实说
+    parts = [one(k, v) for k, v in live.items()] + [f"往{k} 这会儿没有到站时间" for k in dead]
+    return f"{line_name} 离{station_name}：" + "；".join(parts)
 
 
 # 「9路站点」这种只说两个字的也要认；「到站点了没」「哪个站点」问的是实时位置，别抢

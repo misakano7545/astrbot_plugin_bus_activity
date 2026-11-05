@@ -1034,6 +1034,10 @@ query._catalog = lambda cn: _both
 query._etas = lambda p: ((20.0 if p["n"] == "2" else 7.0), 2, "桂K" + p["n"])
 assert query.render_at("玉林", "玉林市", "9", "十字街") == \
     "9路 离十字街：往甲 大约 7 分钟（桂K1，还有 2 站）；往乙 大约 20 分钟（桂K2，还有 2 站）"
+# 哪个方向没有到站时间也要如实报出来，不能只念有车的那一边
+query._etas = lambda p: (7.0, 2, "桂K1") if p["n"] == "1" else None
+assert query.render_at("玉林", "玉林市", "9", "十字街") == \
+    "9路 离十字街：往甲 大约 7 分钟（桂K1，还有 2 站）；往乙 这会儿没有到站时间"
 query.pick_stop, query._catalog, query._station_seq, query._live_my, query._etas = _p, _c2, _s, _l, _e
 
 print("selftest ok")
