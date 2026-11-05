@@ -751,9 +751,13 @@ STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 VEH_RE = re.compile(r"-\s*(\d{2,5})(?!\d)|(?<![\dA-Za-z])(\d{2,5})\s*[号]?车")
 # 完整车牌：省简称 + 字母 + 5 位（普通）或 6 位（新能源，闽A17997D）
 PLATE_RE = re.compile("(" + PLATE_PAT + ")")
+# 「桂K06833D 的自编号是啥」：车牌谁都有，问的是内部车号——两家都没有对照关系
+SELFNO_RE = re.compile(r"自编号|自编|车号|车辆编号|内部编号")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 # 群里 @机器人 的三种写法：OneBot 的 CQ 码、QQ 官方的 [At:xxx]、以及没转换掉的「@大肥鱼 」
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>|(?<!\S)@\S+\s*")
+# 引用别人的消息会整段塞进 message_str（[引用消息(: 内容)]），里面的线路号会抢答正文的问题
+QUOTE_RE = re.compile(r"\[引用消息\((.*?)\)\]", re.S)
 # 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
 MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
@@ -1702,6 +1706,33 @@ def render_plate(city_name, plate, dir_msg=""):
             f"，刚过 {station}")
 
 
+def render_selfno(city_key, city_name, plate):
+    """「XX 的自编号是啥」：掌上只给车牌（104 的 busNumber），车来了只给自编号（licence），
+    两家没有共同的键，坐标能对但差几十秒就偏一站，不拿它猜。只能报车来了这条线挂的号。"""
+    try:
+        idx, _scanned, _total = _cached("plate-idx", city_name, PLATE_TTL,
+                                        lambda: _plate_index(city_name))
+    except Exception:
+        return f"{city_name}这边查车牌的时候上游没响应，过会儿再问一次"
+    hit = idx.get(_plate_key(plate))
+    cid = (cities().get(city_key) or {}).get("chelaile")
+    nos = []
+    if hit and cid:
+        base = hit[0].replace("路", "").upper()
+        try:
+            for nm, lid in chelaile.lines(cid):
+                if nm.upper().replace("路", "") == base:
+                    nos += [b[0] for b in chelaile.live(cid, lid)["buses"]]
+        except Exception:
+            nos = []
+    nos = [n for n in dict.fromkeys(n for n in nos if n)]
+    head = (f"{plate} 在 {hit[0]} 上，但掌上只报车牌不报自编号"
+            if hit else f"没扫到 {plate} 这辆车，自编号更对不上")
+    tail = (f"；车来了这条线现在挂的是 {'、'.join(nos)}，它那边没有车牌字段，分不出哪辆是它"
+            if nos else "；车来了这边也没给出自编号")
+    return head + tail
+
+
 LAST = {}          # 会话 → 上一条答过的城市/线路；追问「每站能换乘啥」不带车次，靠它
 
 
@@ -1771,13 +1802,19 @@ def answer(msg, default_city, ctx="", key=""):
     last = _last(key)
     t0 = time.time()
     msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
+    qm = QUOTE_RE.search(msg)
+    if qm:
+        # 引用内容只当上下文：引用「G02 现在 2 辆」再问「桂K06833D 自编号是啥」，G02 会把车牌问题顶掉
+        ctx = (ctx + " " + qm.group(1)).strip()
+        msg = msg.replace(qm.group(0), " ")
     raw = msg
     sm = SRC_RE.search(msg)
     src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
     line = parse(msg)
-    if not line and ctx and not re.search(r"在跑|运营|哪条|哪些|全部|车牌|号牌", msg):
+    if not line and ctx and not re.search(r"在跑|运营|哪条|哪些|全部|车牌|号牌", msg) \
+            and not PLATE_RE.search(msg):
         # 引用别人那句追问「这路还有几辆」，线路号在被引用的话里。
         # 但本句问的是全城（「还有没有在跑的线路」「每辆车的车牌」）时不能拿引用里那一路顶替——
         # 引用的是「还有 5 条在跑」，parse(ctx) 会随便挑一条线答成它的实时
@@ -1841,6 +1878,8 @@ def answer(msg, default_city, ctx="", key=""):
             return out
     # 「闽A17997D 在哪」：只给车牌没给线路，全城逐线翻一遍找这辆
     if pm and not line:
+        if SELFNO_RE.search(msg):
+            return render_selfno(city_key, name, pm.group(1))
         return render_plate(name, pm.group(1))
     got = hop(msg)
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的

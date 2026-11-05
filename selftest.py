@@ -5,6 +5,7 @@
 import re
 
 import sys
+import types
 
 import query
 
@@ -912,6 +913,27 @@ query._plate_index = lambda cn: ({}, 80, 80)
 query._cache.clear()
 assert "80 条方向全扫了" in query.render_plate("玉林市", "桂K99999")
 query._plate_index, query._catalog = _pi, _cat
+query._cache.clear()
+
+# 引用消息：里面的线路号不能把正文的车牌问题顶掉（引用「G02 现在 2 辆」问「桂K12345 自编号」）
+qm = query.QUOTE_RE.search("[引用消息(: 有，G02路 现在 2 辆在路上)] 桂K12345自编号是啥")
+assert qm and "G02路 现在 2 辆" in qm.group(1)
+assert query.SELFNO_RE.search("桂K12345自编号是啥") and not query.SELFNO_RE.search("桂K12345")
+assert query.parse("有，G02路 现在 2 辆在路上")          # 引用原文本身会被 parse 认成线，才需要先剥掉
+
+# 自编号：掌上没这个字段，只能报车来了挂的号，且说清对不上
+_cl2, query.chelaile = query.chelaile, types.SimpleNamespace(
+    lines=lambda cid: [("9", "L1")],
+    live=lambda cid, lid: {"buses": [("514", "甲站", 100), ("397", "乙站", 900)]})
+_ci, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+query._plate_index = lambda cn: ({"K12345": ("9路", "1", "火车站")}, 50, 80)
+query._cache.clear()
+_sn = query.render_selfno("玉林", "玉林市", "桂K12345")
+assert "只报车牌不报自编号" in _sn and "514、397" in _sn, _sn
+query._plate_index = lambda cn: ({}, 80, 80)
+query._cache.clear()
+assert "没扫到" in query.render_selfno("玉林", "玉林市", "桂K99999")
+query._plate_index, query.cities, query.chelaile = _pi, _ci, _cl2
 query._cache.clear()
 
 print("selftest ok")
