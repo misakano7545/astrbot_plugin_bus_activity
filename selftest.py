@@ -1349,6 +1349,25 @@ assert "玉林总站-福绵新滔工业园（2站）" in _p9c, _p9c
 assert "玉林至北流城际公交线路（29站）" in _p9c, _p9c
 assert "汽车总站是 玉林至北流城际公交线路 的首发站" in _p9c, _p9c
 assert "26路 2站、6路 3站" in _p9c, _p9c
+# 111 只数站数，会排「反向坐 2 站福绵线再换城际」这种凑数方案——玉林本地没人这么干，
+# 比最快方案慢的、腿只坐 1~2 站的直接不显示
+_p9f, query._ask111 = query._ask111, lambda cn, a, b: [
+    {"stationNum": "34站", "totalTime": "1小时3分钟", "routeUpDownSimple1": [
+        {"routeName": "7路", "upStationName": "电脑城", "upStationIndex": 1, "downStationIndex": 12}],
+     "routeUpDownSimple2": [
+        {"routeName": "玉林至北流城际公交线路", "upStationName": "旅游汽车客运站",
+         "upStationIndex": 9, "downStationIndex": 32}]},
+    {"stationNum": "32站", "totalTime": "1小时10分钟", "totalWalkDistance": "231米",
+     "routeUpDownSimple1": [
+        {"routeName": "玉林总站-福绵新滔工业园", "upStationName": "电脑城（新民路）",
+         "upStationIndex": 26, "downStationIndex": 28}],
+     "routeUpDownSimple2": [
+        {"routeName": "玉林至北流城际公交线路", "upStationName": "市二医院西院（一环北路）",
+         "upStationIndex": 2, "downStationIndex": 32}]}]
+_p9g = query.render_plan("玉林市", "玉林电脑城", "北流汽车总站")
+assert "福绵" not in _p9g, _p9g
+assert "坐 7路（11站）" in _p9g and "或者" not in _p9g, _p9g
+query._ask111 = _p9f
 query.mygolbs.stations, query.render_hop = _p9d, _p9e
 query._ask111 = _p9a
 
@@ -1360,7 +1379,7 @@ assert yulin.no_real("玉樟线").startswith("玉林-樟木")
 assert yulin.plan(["9路"], ["23路"]) == ("9路", "工业品电器城", "23路")
 assert yulin.split("1/3/G02夜班车") == ["1", "3", "G02夜班车"]
 _w9 = query.render_ways(*yulin.ways("G01路"))
-assert "中药港：8" in _w9 and "技师学院" in _w9, _w9
+assert "中药港：8" in _w9 and "技师学院" not in _w9, _w9   # 技师学院是另一个站，注释里不许并进这句
 # 「主要换乘站」用导乘表，问「每站」仍逐站扫上游
 assert "主要换乘站" in query.render_transfer("玉林市", "G01路", "G01主要换乘站")
 assert "主要换乘站" not in (query.render_transfer("玉林市", "G01路", "G01每站能换乘啥") or "")

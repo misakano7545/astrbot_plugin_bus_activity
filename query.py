@@ -1234,6 +1234,11 @@ def render_plan(city_name, a, b):
             first_legs = legs
         if k == 0 and len(legs) < 2 and (legs[0].get("upStationName") or "") in (a, ra):
             return ""       # 能直达就让 render_hop 答——它带车在哪、首末班，这里排不出这些
+        # 111 只数站数，会排「坐 1~2 站再换」的凑数方案：电脑城反向坐 2 站福绵线再换城际，
+        # 玉林本地没人这么干。最快的那个方案（k=0）无论多短都留着。
+        if k and any(1 <= abs((lg.get("downStationIndex") or 0) - (lg.get("upStationIndex") or 0)) <= 2
+                     for lg in legs):
+            continue
         ride = ""
         for leg in legs:
             nm = leg["routeName"]
