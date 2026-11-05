@@ -759,7 +759,7 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|吗|呢|啊).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|吗|呢|啊|等).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -903,6 +903,10 @@ def _cands(city_name, msg):
         if LINE_RE.search(cand):
             # 「G02到高新产业园」「11路还有多久到双溪口」：线路号后面那个才是站，先切再砍
             cand = re.split(r"到|去|往|在|经停", cand)[-1]
+        # 站名在线路号前面（「我在玉林火车站等9路」「玉林火车站9路还有几站」）时号后面没站名，
+        # 得把号本身刮掉再当站名试
+        # shortcut: 不认站名里带阿拉伯数字的（「3号门」），遇到了再收窄
+        cand = re.sub(r"[A-Za-z]?\d{1,4}\s*[路线]", "", cand)
         cand = LEAD.sub("", TAIL.sub("", cand))
         whole = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
         # 「广州地铁芳村站附近」：城市名和「地铁」都不是站名的一部分
@@ -1267,24 +1271,37 @@ def render_at(city_key, city_name, want, msg):
     dest = _dest_after(city_name, msg, station_name)
     rows = _catalog(city_name).get("buslines") or []
     hit = _pick([(r["lineName"], r) for r in rows], want)
-    out = []
+    out, dead = [], []
+    near = False                      # 这条线到底过不过我这个站
     for line_name, row in hit:
         d = row["upperOrDown"]
+        names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, d)]
+        # 两家站名写法不一样（「玉林火车站」↔「火车站」），互相包含也算同一个站
+        idx = next((i + 1 for i, n in enumerate(names)
+                    if station_name in n or (len(n) >= 2 and n in station_name)), None)
+        if not idx:
+            continue
+        near = True
+        # 「G02 到高新产业园，去玉林北站」问的是在产业园上车、往玉林北站那个方向，别把终点当上车站
         if dest and dest != station_name:
             got = _goes(city_name, line_name, station_name, dest)   # 只留能开到 dest 的方向
             if not got or got[0] != d:
                 continue
-        names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, d)]
-        idx = next((i + 1 for i, n in enumerate(names) if station_name in n), None)
-        if not idx:
-            continue
         eta = _etas(_live_my(city_name, line_name, d, idx))
         if not eta:
+            dead.append(row.get("to") or "?")
             continue
         mins, left, plate = eta
         span = "马上到" if left <= 0 else f"还有 {left} 站"
         out.append(f"往{row.get('to') or '?'}：{plate} 约 {_clock(mins)} 到（{max(1, round(mins))} 分钟），{span}")
     if not out:
+        # 这条线确实过我这一站、但这个方向这会儿没有车往这儿开（刚过站 / 还没发车）。
+        # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
+        if dead:
+            return (f"{hit[0][1]['lineName']} 这会儿没有开往{station_name}的车"
+                    f"（往{'、'.join(dict.fromkeys(dead))}方向都没有）")
+        if not near:
+            return f"{hit[0][1]['lineName']} 不经过{station_name}"
         return None
     return f"{hit[0][1]['lineName']} 到{station_name}：" + "；".join(out)
 
@@ -2050,11 +2067,17 @@ def answer(msg, default_city, ctx="", key=""):
             city_key = base if base in cities() else None
         # 表里只有 320 城，县级市常缺（义乌、慈溪、晋江掌上都有）：拿原名直接问掌上
         # 「刚才看到」「听说」也是两个汉字的前缀，但不问公交，别拿它去问上游、更别回「这座城没数据」
-        if not city_key and len(prefix) >= 2 and looks_like_ask(msg):
-            if not _covered(prefix):
-                # 别写「查不了」：main.py 的 FALSE_CLAIM 会把这句当假话整句吞掉，用户啥也收不到
-                return f"{prefix}这座城暂时没有公交数据，掌上和车来了都没覆盖"
-            city_key = norm_city(prefix)
+        if not city_key and len(prefix) >= 2:
+            bn = (cities().get(base) or {}).get("mygolbs")
+            # 前缀截到的常是站名的尾巴（「我在汽车总站等 9 路」→「车总站等」）：
+            # 它在默认城里是个站，就按默认城查——这条不看 looks_like_ask，「我在…等」会被当成闲聊
+            if line and bn and find_stop(bn, prefix)[0]:
+                city_key = base
+            elif looks_like_ask(msg):
+                if not _covered(prefix):
+                    # 别写「查不了」：main.py 的 FALSE_CLAIM 会把这句当假话整句吞掉，用户啥也收不到
+                    return f"{prefix}这座城暂时没有公交数据，掌上和车来了都没覆盖"
+                city_key = norm_city(prefix)
     if not city_key:
         return ("" if not looks_like_ask(msg) else
                 f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试")
@@ -2064,7 +2087,8 @@ def answer(msg, default_city, ctx="", key=""):
     last["city"] = city_key
     # 「北流有哪些公交线路」问的是线路清单，别被下面的 CITY_CO_RE 抢成公司清单。
     # 「伦教街道办事处公交线路」问的是那个地方的站，只有明写了城市名（北流/玉林）才算整城
-    if not line and name and not re.search(r"在跑|运营|还有", msg) and (
+    # 「从玉林汽车总站到玉林北站坐哪条公交线路呢」是问换乘，不是要整城清单
+    if not line and name and not hop(msg) and not re.search(r"在跑|运营|还有", msg) and (
             CITYLINES_RE.search(msg) or (explicit and "公交线路" in msg)):
         out = render_city_lines(name)
         if out:
