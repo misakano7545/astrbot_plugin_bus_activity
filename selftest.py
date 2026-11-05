@@ -942,6 +942,23 @@ assert qm and "G02路 现在 2 辆" in qm.group(1)
 assert query.SELFNO_RE.search("桂K12345自编号是啥") and not query.SELFNO_RE.search("桂K12345")
 assert query.parse("有，G02路 现在 2 辆在路上")          # 引用原文本身会被 parse 认成线，才需要先剥掉
 
+# 微信的引用是整段 XML：wxid_m9ngvm9jcku022 / <svrid>858091132112776141 里的数字会被当成线号，
+# 一条「查看X站方向还有没有」被回成「没查到「022」这条线」加四遍「没查到「V1」」
+# 正题在 <title>，被引用的那句在 <refermsg><content>
+_wx = ('<msg><appmsg><title>查看北流城南站方向还有没有</title><refermsg>'
+       '<svrid>858091132112776141</svrid><chatusr>wxid_m9ngvm9jcku022</chatusr>'
+       '<content>北流105路 这会儿没车</content></refermsg></appmsg></msg>')
+_cwx, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "北流105路", "upperOrDown": "1", "from": "玉林北站", "to": "北流城南站"},
+    {"lineName": "北流105路", "upperOrDown": "2", "from": "北流城南站", "to": "玉林北站"}]}
+_fwx, query._first_last = query._first_last, lambda cn, ln, d: ("07:30", "19:50")
+_wxo = query.answer(_wx, "玉林市", key="wx1")
+assert "北流105路 往北流城南站方向" in _wxo and "022" not in _wxo, _wxo
+assert query._dir("查看北流城南站方向还有没有，不是那个方向还在跑吗") == "北流城南站"
+assert query._dir("往呈贡广场方向有几辆车") == "呈贡广场"
+assert query._dir("哪个方向没车") == ""
+query._catalog, query._first_last = _cwx, _fwx
+
 # 自编号：掌上只报车牌、车来了只报自编号，靠同一刻的 GPS 一对一配（一辆只能配一个号）
 _cl2, query.chelaile = query.chelaile, types.SimpleNamespace(
     lines=lambda cid: [("9", "L1")],

@@ -5,6 +5,7 @@
 """
 
 import difflib
+import html
 import json
 import re
 import time
@@ -692,8 +693,17 @@ def _car(plate, stn, dist, status=""):
 
 def _dir(msg):
     """「往呈贡广场方向」问的是单向：只留这个方向的车/时刻。"""
-    m = re.search(r"(?:往|去|到)\s*([^，,。.？?！!\s]{2,12}?)\s*方向", msg or "")
-    return m.group(1) if m else ""
+    # 「北流城南站方向还有没有」不带「往」，也得认；但「那个方向」「哪个方向」不是站名。
+    # 先按带「往/去/到」的语法走，别让「219路往呈贡广场方向」把线号也吃进方向名
+    msg = msg or ""
+    m = re.search(r"(?:往|去|到)\s*([^，,。.？?！!\s]{2,12}?)\s*方向", msg)
+    if m:
+        return m.group(1)
+    for m in re.finditer(r"(?:查看|看看|查一下|问一下|查|看|问)?\s*"
+                         r"([^，,。.？?！!\s]{2,12}?)\s*方向", msg):
+        if m.group(1)[0] not in "这那哪该此各两同反":
+            return m.group(1)
+    return ""
 
 
 def render(city_key, want, res, veh="", dir=""):
@@ -784,6 +794,11 @@ SELFNO_RE = re.compile(r"自编号|自编|车号|车辆编号|内部编号")
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>|(?<!\S)@\S+\s*")
 # 引用别人的消息会整段塞进 message_str（[引用消息(: 内容)]），里面的线路号会抢答正文的问题
 QUOTE_RE = re.compile(r"\[引用消息\((.*?)\)\]", re.S)
+# 微信的引用是整段 XML 塞进正文：<title> 是这一句，<refermsg><content> 是被引用的那句。
+# 不剥掉的话 wxid_m9ngvm9jcku022 / <signature>…V1_8V… 里的数字字母会被当成线号，
+# 一条追问能回出「没查到「022」这条线」「没查到「V1」这条线」四五遍
+WX_TITLE = re.compile(r"<title>(.*?)</title>", re.S)
+WX_REF = re.compile(r"<refermsg>.*?<content>(.*?)</content>.*?</refermsg>", re.S)
 # 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
 MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
@@ -1404,6 +1419,23 @@ def render_times(city_name, want, msg=""):
                        f"（{row.get('from') or '?'} → {row.get('to') or '?'}）"
                        + (f" 票价 {p}" if p else ""))
     return "\n".join(dict.fromkeys(out)) or None
+
+
+def render_dir_window(city_name, want, d):
+    """「往X方向还有没有车」：只念这个方向的首末班，再说这会儿在不在窗口里。"""
+    hit = _pick_city_line([(r["lineName"], r) for r in _catalog(city_name).get("buslines") or []],
+                          want, city_name)
+    for name, row in hit:
+        ud = str(row.get("upperOrDown") or "")
+        if ud not in ("1", "2") or d not in (row.get("to") or ""):
+            continue
+        f, l = _first_last(city_name, name, ud)
+        if not (f or l):
+            continue
+        return (f"{name} 往{row.get('to')}方向 {f or '?'}–{l or '?'}，"
+                + {"after": "这会儿末班已经开走", "before": "这会儿首班还没到"}
+                .get(_window(f, l), "这会儿还在运营时段里"))
+    return None
 
 
 def render_ends(city_name, want):
@@ -2073,6 +2105,13 @@ def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     if CODE_RE.search(msg):      # 群里贴的脚本不查公交，交给模型
         return ""
+    # 微信的引用整段是 XML：真要答的那句在 <title>，被引用的话在 <refermsg><content>
+    if "<refermsg>" in msg or "<appmsg>" in msg:
+        rm = WX_REF.search(msg)
+        if rm:
+            ctx = (ctx + " " + html.unescape(re.sub(r"<[^>]+>", " ", rm.group(1)))).strip()
+        tm = WX_TITLE.search(msg)
+        msg = html.unescape(tm.group(1)) if tm else re.sub(r"<[^>]+>", " ", msg)
     last = _last(key)
     t0 = time.time()
     msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
@@ -2216,6 +2255,13 @@ def answer(msg, default_city, ctx="", key=""):
         if hit:
             # _pick 拿归一化名做全等比，原始线名（带「（28路）」）一个都匹不上
             line, prefix = (norm_line(hit), ""), ""
+    # 「北流城南站方向还有没有」：这句没写线号，问的是上一条那路车的某一个方向
+    if name and _dir(msg) and (not line or not line[0]):
+        cl = parse(ctx)                      # 微信引用里那句话带着线号
+        want = ((cl[1] + cl[0]) if cl and cl[1] else (cl[0] if cl else "")) or last.get("line") or ""
+        out = render_dir_window(name, want, _dir(msg)) if want else None
+        if out:
+            return out
     if name and TRANSFER_RE.search(msg):
         # 「这条线路每站能换什么」没有线路号，用上一条答过的线路
         want = (prefix + line[0] if prefix and not explicit else line[0]) if line else last.get("line") or ""
