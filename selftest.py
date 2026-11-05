@@ -490,6 +490,15 @@ assert not query.CITY_CO_RE.search("我们公司今年业绩咋样")      # 闲�
 assert query.CITY_CO_RE.search("玉林公交公司电话")
 query._post = _cc
 
+# 「牡丹江21」：城市名＋线号不带「路」，整句只有城市名和数字才认；多一个字就是句子
+_cit = query.cities
+query.cities = lambda: {"牡丹江": {"chelaile": "131", "mygolbs": "牡丹江市"}, "玉林": {}}
+assert query.parse("牡丹江21") == ("21", "牡丹江")
+assert query.parse("[At:123] 牡丹江21？") == ("21", "牡丹江")
+assert query.parse("玉林2023年GDP") is None        # 年份不能被当成 2023 路
+assert query.parse("今天好热") is None
+query.cities = _cit
+
 # 「西安阿房宫线」问的是地铁5号线/西户线：公交站旁边那条「（地铁站）」记录得单独报一行
 _st, _ct = query.stops, query._catalog
 query.stops = lambda c, k: [

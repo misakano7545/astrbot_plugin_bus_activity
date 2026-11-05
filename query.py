@@ -157,7 +157,13 @@ def parse(msg):
         # 「香港城巴1」香港人不带「路」字：算子名＋号也算一条线，前缀里留住算子名
         m = re.search(r"(" + "|".join(OPS) + r")\s*(\d{1,4})(?![0-9])", msg)
         if not m:
-            return None
+            # 「牡丹江21」：城市名＋线号，口语里不带「路」字。整句只有「城市名＋数字」才认，
+            # 多一个字就是句子（「玉林2023年GDP」），留给模型，别把年份当线路
+            t = re.sub(r"[?？。!！,，\s]+$", "", AT_RE.sub("", msg).strip())
+            m = re.fullmatch(r"([\u4e00-\u9fa5]{2,6})(\d{1,4})", t)
+            if not m or m.group(1) not in cities():
+                return None
+            return m.group(2), m.group(1)
         pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", msg[: m.end(1)]))
         return m.group(2), _snap(pre)
     # 「环山二号线」的线名自己就带汉字前缀，别再把它当县名重复拼一次
