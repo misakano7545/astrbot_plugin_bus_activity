@@ -927,6 +927,8 @@ def _bus_row(rows):
 # 站名从长到短试时，砍掉的尾巴只能是这类通用字（「饮马口站」→「饮马口」）；
 # 「北流汽车新城」砍掉「新城」匹上「北流汽车总站」，那是另一个站
 STOP_TRIM_OK = re.compile(r"[公交汽车火车客运总站台路口地铁]+")
+# 口语站名和平台站名对不上的常用别名（「玉林公交公司」平台上叫「公共汽车公司」）
+STOP_ALIAS = {"公交公司": "公共汽车公司"}
 
 
 def find_stop(city_name, raw):
@@ -1032,13 +1034,17 @@ def _cands(city_name, msg):
         # shortcut: 不认站名里带阿拉伯数字的（「3号门」），遇到了再收窄
         cand = re.sub(r"[A-Za-z]?\d{1,4}\s*[路线]", "", cand)
         cand = LEAD.sub("", TAIL.sub("", cand))
+        pre = cand                       # 剥「公交/地铁」前缀之前的原名，「公交公司」得靠它换写法
         whole = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
         # 「广州地铁芳村站附近」：城市名和「地铁」都不是站名的一部分
         cand = re.sub(r"^(地铁|轨道交通|公交)", "", re.sub(rf"^{re.escape(city)}", "", cand))
         # 先试剥掉城市名的「芳村站」，不行再试原样的「玉林北站」（北站是站名的一部分）
         # 再退回剥掉「公交站」的写法：「丰州公交站」平台上是「丰州」
         bare = [STOPSUF.sub("", c) for c in (cand, whole)]
-        for c in dict.fromkeys([cand, whole] + bare):
+        # 「玉林公交公司」先换成平台上的写法再试，否则会被砍成「公司」搜不出东西
+        alias = [c.replace(k, v) for c in (pre, whole, cand)
+                 for k, v in STOP_ALIAS.items() if k in c]
+        for c in dict.fromkeys(alias + [cand, whole] + bare):
             # 「泉州公交 惠南工业区四期站」：切出来的「泉州公交」只剩城市名，拿去搜站会匹到
             # 「中化泉州公司」这种同名不同地的站
             core = re.sub(r"(公交)?(车?站|台)?$", "", c) or c

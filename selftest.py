@@ -1222,8 +1222,15 @@ assert "8 寸金公交站 ↔ 四航局" in _c5o, _c5o
 assert "1 条线路" in _c5o and "只扫了前" not in _c5o
 query.cities, query.chelaile.lines, query.chelaile.stations = _c5c, _c5l, _c5s
 
-print("selftest ok")
+# 「玉林公交公司」平台站名是「公共汽车公司」：别名换写法再搜，别砍成「公司」
+_a6, _s6 = query.cities, query.stops
+query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+query.stops = lambda cn, kw: [{"stationName": "公共汽车公司"}] * 2 if "公共汽车" in kw else []
+assert "玉林公共汽车公司" in list(query._cands("玉林市", "玉林公交公司有没有公交"))
+assert query.pick_stop("玉林市", "公交公司有哪几路") == "公共汽车公司"
+query.cities, query.stops = _a6, _s6
 
+print("selftest ok")
 if "--live" in sys.argv:
     import importlib
 
