@@ -1153,6 +1153,9 @@ assert not query.BUS_RE.search("这条线路真长"), "聊线路长短不该抢"
 
 # 「饮马口站有几条线路」「东简客运站有几条线路」：问法得刮干净，别整句当站名
 assert query.TAIL.sub("", "饮马口站有几条线路") == "饮马口站", query.TAIL.sub("", "饮马口站有几条线路")
+# 「X 的公交线路」：TAIL 只剥「线路」会剩「的公交」，站名就搜不到了
+assert query.TAIL.sub("", "关山月美术馆②的公交线路") == "关山月美术馆②", \
+    query.TAIL.sub("", "关山月美术馆②的公交线路")
 assert query.STOPASK_RE.search("饮马口站有几条线路")
 assert not query._subseq("东简", "吴川东升客运站"), "东简客运站不该匹到吴川东升客运站"
 
