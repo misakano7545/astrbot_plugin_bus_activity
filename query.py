@@ -107,7 +107,7 @@ PLATE_PAT = (r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂�
              r"[A-Z][A-Z0-9]{4,6}(?![A-Za-z0-9])")
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
+    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|(?<![今昨天每这那晚])夜班车|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
     r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + PLATE_PAT + r"|" + ALPHA_PAT)
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
@@ -1055,24 +1055,37 @@ def _subseq(short, long):
     return all(c in it for c in short)
 
 
-def _msg_line(city_name, msg):
+def _msg_line(city_name, msg, city_key=""):
     """句子里点名的真线名不是「数字+路」（「玉林北站定制夜班车」）：按目录认。"""
-    names = [r.get("lineName") or "" for r in _catalog(city_name).get("buslines") or []]
-    for n in names:
-        if len(n) >= 4 and n in msg:
-            return n
-    # 简称：「大容山专线」少说了「旅游」。字基本都在、比例够、且全城只有一条对得上才认，
-    # 认不出来宁可去查站名，也不能硬塞一条别的线
-    # 「现在有玉林北站夜班车吗」：TAIL 收了「现在」，长在最前面会把整句吃空，先砍掉
-    msg = re.sub(r"^(?:现在|目前|当前)有?", "", msg.strip())
-    t = norm_line(TAIL.sub("", msg).replace(norm_city(city_name), ""))
-    if len(t) < 4:
-        return None
-    # 分母也剥掉城名：「玉林北站夜班车」丢的是「定制」，不该因为城名长短被算低
-    hit = {n for n in names
-           if len(t) / max(len(norm_line(n).replace(norm_city(city_name), "")), 1) >= 0.6
-           and _subseq(t, norm_line(n))}
-    return hit.pop() if len(hit) == 1 else None
+    def _look(names):
+        for n in names:
+            if len(n) >= 4 and n in msg:
+                return n
+        # 简称：「大容山专线」少说了「旅游」。字基本都在、比例够、且全城只有一条对得上才认，
+        # 认不出来宁可去查站名，也不能硬塞一条别的线
+        # 「现在有玉林北站夜班车吗」：TAIL 收了「现在」，长在最前面会把整句吃空，先砍掉
+        m = re.sub(r"^(?:现在|目前|当前)有?", "", msg.strip())
+        t = norm_line(TAIL.sub("", m).replace(norm_city(city_name), ""))
+        if len(t) < 4:
+            return None
+        # 分母也剥掉城名：「玉林北站夜班车」丢的是「定制」，不该因为城名长短被算低
+        hit = {n for n in names
+               if len(t) / max(len(norm_line(n).replace(norm_city(city_name), "")), 1) >= 0.6
+               and _subseq(t, norm_line(n))}
+        return hit.pop() if len(hit) == 1 else None
+
+    hit = _look([r.get("lineName") or "" for r in _catalog(city_name).get("buslines") or []])
+    if hit:
+        return hit
+    # 掌上目录里没有的线（湛江妇幼专线只在车来了那边）也得认：认不出就会沿用上一条问过的线，
+    # 变成「用车来了查湛江妇幼专线 → 没查到玉林北站定制夜班车这条线」
+    cid = (cities().get(city_key or norm_city(city_name)) or {}).get("chelaile")
+    if cid:
+        try:
+            return _look([n for n, _ in chelaile.lines(cid) or []])
+        except Exception:            # 车来了目录挂了就当没有，别把这条问题整句废掉
+            return None
+    return None
 
 
 def _dest_after(city_name, msg, stop):
@@ -2377,7 +2390,7 @@ def answer(msg, default_city, ctx="", key=""):
     # 「那玉林北站定制夜班车呢？」线名不是数字+路，parse 认不出；目录里有就当场认。
     # 这句自己点了线名就别沿用上一条的号：刚问完 12 路再问「用车来了查宝钢专线」会答成 12 路
     if name and (not line or inherited):
-        hit = _msg_line(name, msg)
+        hit = _msg_line(name, msg, city_key)
         if hit:
             # _pick 拿归一化名做全等比，原始线名（带「（28路）」）一个都匹不上
             line, prefix = (norm_line(hit), ""), ""

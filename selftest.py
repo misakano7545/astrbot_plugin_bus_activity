@@ -1166,6 +1166,18 @@ _txt = query.answer("用车来了查玉林大容山专线", "玉林市")
 assert "大容山" in _txt and "12 现在" not in _txt, _txt
 query._last, query.query, query.render_at, query._catalog = _lk0, _lq0, _ra0, _cat1
 
+# 只在车来了目录里的线名也要认（湛江妇幼专线），否则会沿用上一条问过的线
+_c1, _cl1 = query.cities, query.chelaile.lines
+query.cities = lambda: {"湛江": {"chelaile": "157", "mygolbs": "湛江市"}}
+query._catalog = lambda cn: {"buslines": []}
+query.chelaile.lines = lambda cid: [("妇幼专线", "1"), ("宝钢专线", "2")]
+assert query._msg_line("湛江市", "用车来了查湛江妇幼专线", "湛江") == "妇幼专线"
+assert query._msg_line("湛江市", "湛江宝钢专线", "湛江") == "宝钢专线"
+query.cities, query.chelaile.lines = _c1, _cl1
+# 「夜班车」进快路，但「昨晚夜班车真慢」这种叙述不算
+assert query.BUS_RE.search("玉林北站夜班车有没有车")
+assert not query.BUS_RE.search("昨晚夜班车真慢")
+
 print("selftest ok")
 
 if "--live" in sys.argv:
