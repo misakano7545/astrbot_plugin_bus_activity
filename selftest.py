@@ -7,6 +7,7 @@ import re
 import sys
 import types
 
+import mygolbs
 import query
 import yulin
 
@@ -105,17 +106,17 @@ assert query.hop("从广州公园前到玉林北站的话，坐什么车") == ("
 
 # 目录缓存一种形状：_mygolbs 存 dict、render_at 用 buslines，之前谁先跑谁写坏对方
 _rows = [{"lineName": "1路", "upperOrDown": "1", "from": "A", "to": "B"}]
-_cat, query._post = query._post, lambda *a, **k: {"buslines": _rows, "status": 1}
+_cat, mygolbs.post = mygolbs.post, lambda *a, **k: {"buslines": _rows, "status": 1}
 query._cache.clear()
 query._mygolbs("x市", "1")                     # 先让 dict 进缓存
 assert query._catalog("x市").get("buslines") == _rows
 assert query._catalog("x市")["buslines"][0]["lineName"] == "1路"
-query._post = _cat
+mygolbs.post = _cat
 query._cache.clear()
 
 # Origin 头是掌上公交的唯一命门：带上多余的斜杠或换 http，上游回 200 + 58 字节占位串
-assert query.HEADERS["Origin"] == "https://h5.mygolbs.com"
-assert not query.HEADERS["Origin"].endswith("/")
+assert mygolbs.HEADERS["Origin"] == "https://h5.mygolbs.com"
+assert not mygolbs.HEADERS["Origin"].endswith("/")
 
 # 城市识别：给假城市表，不联网
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "南宁": {"mygolbs": "南宁市"}}
@@ -146,12 +147,12 @@ assert query.answer("每一站能换乘啥线路", "玉林市", key="群B").star
 query._station_seq, query._catalog = _sq2, _cat2
 
 # 运营公司/咨询电话来自 114.routeBean：company 几乎全城都有，companyMobile 只有部分城市有
-_p114, query._post = query._post, lambda p, timeout=8: {"buslines": [
+_p114, mygolbs.post = mygolbs.post, lambda p, timeout=8: {"buslines": [
     {"routeBean": {"routeName": "9路", "company": "玉林公交", "companyMobile": ""}},
     {"routeBean": {"routeName": "1路", "company": "一汽巴士", "companyMobile": "一汽巴士:020-87763773"}}]}
 assert query.render_company("玉林市", "9") == "9路 归玉林公交\n平台没挂咨询电话，丢东西直接打 12345 或去线路终点站的调度室问"
 assert query.render_company("玉林市", "1") == "1路 归一汽巴士，咨询电话 020-87763773"
-query._post = _p114
+mygolbs.post = _p114
 
 # 地铁也在同一套目录里（掌上「地铁10号线」「轨道交通1号线」，车来了没有）；
 # 归一化要把「轨道交通」和「地铁」当成同一条，否则南宁查不到
@@ -219,10 +220,10 @@ assert query._car("桂K1", "十字街", 245, "2") == "桂K1 十字街 245m"
 assert query._car("桂K1", "十字街", 245, "9") == "桂K1 十字街"   # 别的状态别念距离
 
 # 上游业务失败（HTTP 200 + status "-2"）不能当成「没这条线路」
-_post, query._post = query._post, lambda *a, **k: {"status": "-2", "msg": "当前城市暂无法提供公交查询", "error": True}
+_post, mygolbs.post = mygolbs.post, lambda *a, **k: {"status": "-2", "msg": "当前城市暂无法提供公交查询", "error": True}
 query._cache.clear()
 assert query._mygolbs("火星市", "1")== {"error": "当前城市暂无法提供公交查询"}
-query._post = _post
+mygolbs.post = _post
 
 # 全城扫：认不出站名时才走 sweep，「十字街有几路车」不能被它抢走
 assert query.SWEEP_RE.search("还有哪条线路有公交车")
@@ -533,8 +534,8 @@ assert "没标票价" in query.render_price("玉林市", "G02")
 query._catalog, query._first_last, query._price = _cat, _fl, _pl
 
 # 没带线路号问公司/电话：「玉林公交公司电话是多少」以前返空，模型拿到空就自己编
-_cc = query._post
-query._post = lambda p, timeout=8: {"buslines": [
+_cc = mygolbs.post
+mygolbs.post = lambda p, timeout=8: {"buslines": [
     {"routeBean": {"routeName": "1路", "company": "甲公交", "companyMobile": ""}},
     {"routeBean": {"routeName": "2路", "company": "乙巴士", "companyMobile": "乙巴士:020-12345678"}}]}
 _x = query.render_city_company("某市")
@@ -544,7 +545,7 @@ assert "1 家" in _y and _y.count("020-12345678") == 1, _y
 assert query.render_city_company(None) is None
 assert not query.CITY_CO_RE.search("我们公司今年业绩咋样")      # 闲聊不能被公司查询抢走
 assert query.CITY_CO_RE.search("玉林公交公司电话")
-query._post = _cc
+mygolbs.post = _cc
 
 # 「首末站」问的是起讫站，不是首末班时间；下行是反过来的同一条，别念两遍
 _ce = query._catalog
@@ -919,7 +920,7 @@ assert query._same_station("元氏客运站", "元氏车站")
 assert not query._same_station("谈固站", "谈固东站")
 
 # 换乘先问掌上自己的方案（CMD=111）：多条、按总时长排序、带步行距离
-_p111, query._post = query._post, lambda p, timeout=8: (
+_p111, mygolbs.post = mygolbs.post, lambda p, timeout=8: (
     {"status": 1, "info": [{
         "stationNum": "21站", "totalTime": "1小时6分钟", "totalWalkDistance": "371米",
         "routeUpDownSimple1": [{"routeName": "28路", "upStationName": "玉林火车站"}],
@@ -936,7 +937,7 @@ assert query.render_plan("玉林市", "玉林火车站", "北流汽车总站") =
     "坐 28路，到北流客运中心换 北流105路，21站、约1小时6分钟、走路371米\n"
     "或者坐 G01路，到玉林高中初中部换 玉林至北流城际公交线路，31站、约1小时14分钟")
 assert query.render_plan("玉林市", "玉林汽车总站", "玉林北站") == ""   # 直达交回 render_hop，那边带车在哪
-query._post = _p111
+mygolbs.post = _p111
 query._cache.clear()
 
 # 「香港城巴1」：同一个号五家公司各有车，点了名只报这一家；没点名照旧合并

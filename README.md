@@ -59,6 +59,23 @@ AstrBot 插件：群里问一句「玉林 G02 路有没有车」，直接回当�
 
 把整个目录放进 AstrBot 的 `data/plugins/`，WebUI 插件页重载。依赖只有 `cryptography`（AstrBot 自带），无需 `requirements.txt`。
 
+## 单独取用两家接口
+
+两个上游的请求实现各自成文件，不依赖 AstrBot，也不依赖本插件任何模块，别的项目加个
+`PYTHONPATH` 就能 import：
+
+- `mygolbs.py` — 掌上公交：`city_names()` / `catalog(city)` / `stops(city, kw)` /
+  `stations(city, line, dir)` / `first_last()` / `price()` / `live(city, line, dir)` /
+  `lines(city, kw)`（运行公司、电话）/ `transfer(city, a, b)`，底层是 `post(params)`
+- `chelaile.py` — 车来了：`lines(city_id)` / `stations(city_id, line_id)` / `live(city_id, line_id)`
+
+```python
+import mygolbs
+print(mygolbs.first_last("玉林市", "9路", "1"))   # ('06:30', '18:20')
+```
+
+两个源共用一个 TTL 缓存（`mygolbs.cached`），`city → id` 的对照表在本仓 `cities.json`。
+
 ## 自检
 
 ```bash

@@ -18,10 +18,11 @@ from pathlib import Path
 import yulin          # 玉林导乘资料：只在上游给不出的地方补（换乘站表、上车点、联营线无实时）
 
 try:  # AstrBot 按包加载时走相对导入，单文件调试时退回顶层模块
-    from . import chelaile
+    from . import chelaile, mygolbs
     from .plates import PLATE
 except ImportError:
     import chelaile
+    import mygolbs
     from plates import PLATE
 
 HERE = Path(__file__).parent
@@ -38,19 +39,13 @@ for _k, _v in DISTRICTS.items():
         _old = DIST_BARE.get(_b)
         DIST_BARE[_b] = _v if _old in (None, _v) else ""      # 撞了就标空，不用
 
-API = "https://h5.mygolbs.com/ApiData.do"
-# Origin 是唯一命门：末尾多一个斜杠、换成 http、或干脆不带，上游都回 HTTP 200 +
-# 恒定 58 字节串 0vx0czK73ykwCHaLBTiKh0iCXQINzRvSZw4+b/H8FgE52U=，症状是「永远查不到」。
-HEADERS = {
-    "Origin": "https://h5.mygolbs.com",
-    "Referer": "https://h5.mygolbs.com/",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "User-Agent": "Mozilla/5.0 (Linux; Android 12) Mobile Safari/537.36",
-}
-CITY_TTL, CATALOG_TTL, LIVE_TTL = 6 * 3600, 3600, 20
-CACHE_MAX = 2048
+# 协议、请求、缓存都在 mygolbs.py 里，别的组件也能直接 import 那两个模块
+CITY_TTL, CATALOG_TTL, LIVE_TTL = mygolbs.CITY_TTL, mygolbs.CATALOG_TTL, mygolbs.LIVE_TTL
 LABEL = {"mygolbs": "掌上公交", "chelaile": "车来了"}
-_cache = {}
+_cache = mygolbs.cache
+_cached = mygolbs.cached
+# 连不上上游的时刻由 mygolbs.post 记，answer 末尾要靠它决定回不回「过会儿再问」
+_up_fail = mygolbs.last_fail
 
 # 带字母的线号：B601 / K502 / D01 / 121A / 1001M / C621A（字母在前在后都有，最多五位）
 # 必须至少含一个字母，否则「11路」「2026年」会被当线号
@@ -302,71 +297,14 @@ def _lines(msg):
     return out
 
 
-def _cached(kind, key, ttl, fn):
-    hit = _cache.get((kind, key))
-    if hit and time.time() - hit[0] < ttl:
-        return hit[1]
-    val = fn()
-    # 网络抖动别进缓存：catalog 一挂就是一小时查不到车，全是这条缓存留的
-    if isinstance(val, dict) and val.get("error") and "detail" in val:
-        return val
-    # 过期键长期占位会让 _cache 一直涨，顺手清掉同一个 kind 下的过期项，超上限再整体淘汰
-    if len(_cache) >= CACHE_MAX:
-        now = time.time()
-        for k in [k for k, (t, _) in _cache.items() if now - t >= CITY_TTL]:
-            _cache.pop(k, None)
-    _cache[(kind, key)] = (time.time(), val)
-    return val
-
-
-# 最近一次连不上上游的时刻（秒）。上游挂着时别静默交给模型——模型那层会直接挂住
-_up_fail = [0.0]
-
-
-def _post(params, timeout=8):
-    body = urllib.parse.urlencode(params).encode()
-    req = urllib.request.Request(API, data=body, headers=HEADERS, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        # 缺 CITYNAME 或线路名不存在时上游回的是 HTML 错误页，不是 JSON
-        return {"status": e.code, "msg": f"HTTP {e.code}"}
-    except (urllib.error.URLError, OSError) as e:
-        _up_fail[0] = time.time()
-        # 连不上/握手超时也曾直接抛到消息处理里，群里看到的是「:( …出现异常」这一整段。
-        # msg 会原样发给群友（render 直接 return error），异常细节只留在 detail 里
-        return {"status": -9, "msg": "上游这会儿连不上，过一会儿再问一句",
-                "error": True, "detail": str(e)}
-    text = raw.lstrip()
-    if not text.startswith("{"):
-        # 58 字节令牌 = Origin 头不对，前置分流层直出的占位串
-        return {"status": -9, "msg": "非 JSON 响应，检查 Origin 头"}
-    try:
-        data = json.loads(text)
-    except ValueError as e:
-        return {"status": -9, "msg": f"JSON 解析失败 {e}"}
-    if not isinstance(data, dict):
-        return {"status": -9, "msg": "响应不是对象"}
-    # 业务失败也是 HTTP 200（status 是字符串 "-1"/"-2"），别当成「没这条线路」或「没车」
-    if str(data.get("status")) != "1":
-        return {"status": data.get("status"), "msg": data.get("msg") or "", "error": True}
-    return data
-
-
 def cities():
     """归一化城市名 → {"mygolbs": 平台原名, "chelaile": cityId}"""
     def build():
         idx = {}
         for name, cid in CHELAILE_CITIES.items():
             idx.setdefault(norm_city(name), {})["chelaile"] = cid
-        try:
-            for row in _post({"CMD": "101"}).get("data") or []:
-                name = row.get("cityname") or ""
-                if name:
-                    idx.setdefault(norm_city(name), {})["mygolbs"] = name
-        except Exception:
-            pass  # 掌上城市表拉不到就只用车来了那份，不阻断查询
+        for name in mygolbs.city_names():
+            idx.setdefault(norm_city(name), {})["mygolbs"] = name
         # 区名剥掉后缀会顶掉同名县级市：「安宁」在掌上只有兰州的安宁区，用户说「安宁」
         # 多指昆明的安宁市。两边指向不同城、且父城在表里时，按县级市走。
         for _k, _v in DISTRICTS.items():
@@ -428,7 +366,7 @@ def detect_city(msg, prefix, default_city):
 def _covered(raw):
     """掌上有没有这座城的数据。表外的县级市（义乌、慈溪、晋江）有，巩义、昆山没有。"""
     try:
-        r = _cached("probe-city", raw, CITY_TTL, lambda: _post({"CMD": "119", "CITYNAME": raw}))
+        r = mygolbs.catalog(raw)
     except Exception:
         return False
     return r.get("status") == "1" and bool(r.get("buslines"))
@@ -533,42 +471,14 @@ def _window_note(w):
                                    for lab, f, l, _ in rows)
 
 
-def _seq_payload(city_name, line, direction):
-    """CMD=103 整包（站序 + 首末班 + 票价的 commonts），首末班和票价共用这一份缓存。"""
-    return _cached("firstlast", (city_name, line, direction), CATALOG_TTL,
-                   lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
-                                  "DIRECTION": direction}))
-
-
-def _first_last(city_name, line, direction):
-    """(首班, 末班)，取不到给空串。只在整车数为 0 时调用，回答「是不是收班了」。"""
-    fl = _seq_payload(city_name, line, direction).get("firstLast") or []
-    return (min((x.get("first") or "" for x in fl), default=""),
-            max((x.get("last") or "" for x in fl), default=""))
-
-
-def _price(city_name, line):
-    """票价只藏在 103 的 commonts 那句话里，各家写法不一样：
-    「票价：2元/人次」「票价3元」「单程票价4元一票制。石家庄公交…」「票价2元。\\n热线…」
-    shortcut: 只认带「元」的阿拉伯数字写法，中文数字票价（「票价一元」）会漏；只取方向 1，
-    分段计价的线会不准。遇到了再补。
-    """
-    m = re.search(r"票价[:：]?\s*([^。\n；;]{1,30})",
-                  _seq_payload(city_name, line, "1").get("commonts") or "")
-    v = re.split(r"[\s，,（(]", (m.group(1) if m else "").strip())[0]
-    return v if "元" in v else ""
+_seq_payload = mygolbs.seq_payload
+_first_last = mygolbs.first_last
+_price = mygolbs.price
+_live_my = mygolbs.live
 
 
 def _last_bus(city_name, line, direction):
     return _first_last(city_name, line, direction)[1]
-
-
-def _live_my(city_name, name, d, order=1):
-    """CMD=104 整包。order > 0 时上游给「到这个站」自己的预测（routeOnStationRTimeInfoList），
-    每站最多 2 辆 —— 比自己拿 dislist/speedlist 估准，也更少代码。"""
-    return _cached("live-my", (city_name, name, d, order), LIVE_TTL,
-                   lambda: _post({"CMD": "104", "CITYNAME": city_name, "LINENAME": name,
-                                  "DIRECTION": d, "STATIONORDER": str(order)}))
 
 
 def _etas(payload):
@@ -593,11 +503,9 @@ def _run(payload, ia, ib):
 
 
 
-def _catalog(city_name):
-    """CMD=119 的原始响应。同一个缓存 key 只能有一种形状——之前这里存 dict、
-    别处存 buslines 列表，谁先跑谁把对方写坏（render_at 就是这样崩的）。"""
-    return _cached("catalog-my", city_name, CATALOG_TTL,
-                   lambda: _post({"CMD": "119", "CITYNAME": city_name}))
+# 同一个缓存 key 只能有一种形状——之前这里存 dict、别处存 buslines 列表，
+# 谁先跑谁把对方写坏（render_at 就是这样崩的）。形状由 mygolbs.catalog 定
+_catalog = mygolbs.catalog
 
 
 def _mygolbs(city_name, want):
@@ -907,11 +815,7 @@ SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上)\s*[，,、:
                     r"(?:查一下|查询|查查|看一下|看看|查|看|搜一下|搜|问一下)?\s*[，,、:：]?\s*")
 
 
-def stops(city_name, keyword):
-    """CMD=102 站点搜索：带 lat/lng 和经停线路，是唯一能按站名反查线路的命令。"""
-    return _cached("stop", (city_name, keyword), CATALOG_TTL,
-                   lambda: _post({"CMD": "102", "CITYNAME": city_name,
-                                  "KEYWORD": keyword}).get("busstations") or [])
+stops = mygolbs.stops
 
 
 def _same_rows(rows, hit, base=None):
@@ -1227,10 +1131,7 @@ def _exact_line(city_name, msg, want, city_key=""):
     return best
 
 
-def _station_seq(city_name, line, direction):
-    return _cached("stations", (city_name, line, direction), CATALOG_TTL,
-                   lambda: _post({"CMD": "103", "CITYNAME": city_name, "LINENAME": line,
-                                  "DIRECTION": direction}).get("data") or [])
+_station_seq = mygolbs.stations
 
 
 def _goes(city_name, line, a, b):
@@ -1269,12 +1170,7 @@ def _hop_line(city_name, line, d, ia, ib):
     return f"，下一辆约 {max(1, round(eta[0]))} 分钟后到，坐过去 {max(1, round(_run(payload, ia, ib)))} 分钟"
 
 
-def _ask111(city_name, a, b):
-    d = _cached("plan", f"{city_name}|{a}|{b}", 60, lambda: _post({
-        "CMD": "111", "CITYNAME": city_name, "STARTPOINTNAME": a, "STARTPOINTLNG": "",
-        "STARTPOINTLAT": "", "ENDPOINTNAME": b, "ENDPOINTLNG": "", "ENDPOINTLAT": ""}))
-    info = d.get("info") if isinstance(d, dict) else None
-    return info if isinstance(info, list) else []
+_ask111 = mygolbs.transfer
 
 
 def render_plan(city_name, a, b):
@@ -1757,9 +1653,7 @@ COMPANY_RE = re.compile(r"哪家公司|哪个公司|哪家公交|所属公司|�
 
 def render_company(city_name, want):
     """114.routeBean 有 company（实测几乎全城都有）和 companyMobile（只有部分城市有）。"""
-    d = _cached("bean", (city_name, want), CATALOG_TTL,
-                lambda: _post({"CMD": "114", "CITYNAME": city_name, "KEYWORD": want}))
-    rows = [b.get("routeBean") or {} for b in (d.get("buslines") or [])]
+    rows = [b.get("routeBean") or {} for b in mygolbs.lines(city_name, want)]
     hit = _pick([(r["routeName"], r) for r in rows if r.get("routeName")], want)
     out, seen = [], set()
     for name, r in hit:
@@ -1782,10 +1676,8 @@ def render_city_company(city_name, msg=""):
     """
     if not city_name:
         return None
-    d = _cached("bean-all", city_name, CATALOG_TTL,
-                lambda: _post({"CMD": "114", "CITYNAME": city_name, "KEYWORD": ""}))
     co = {}
-    for b in d.get("buslines") or []:
+    for b in mygolbs.lines(city_name):
         r = b.get("routeBean") or {}
         c = (r.get("company") or "").strip()
         if not c:
