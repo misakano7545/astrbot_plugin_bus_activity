@@ -23,6 +23,9 @@ except ImportError:
 # 模型嘴里那句「只接了玉林的数据源」是旧插件的谎话，发出去之前整句删掉
 FALSE_CLAIM = re.compile(r"数据源|只接了|只有玉林|玉林的接口|"
                          r"查不了.{0,8}(公交|线路)|(公交|线路).{0,8}查不了")
+# 插件自己的硬结论（换乘方案查不到、站表没找全、让你补城市）。
+# 模型在群里见过这些说法，会把它们当成自己查过的结果复述出来——这一轮插件压根没给数据时就不许它说
+PLUGIN_SPEAK = re.compile(r"站表里没(?:有|找全|找到)|没查到从|的换乘方案|说个城市名我再查")
 SENT = re.compile(r"[^。！？\n]*[。！？\n]?")
 
 
@@ -49,6 +52,7 @@ class BusActivity(Star):
         if not text:
             return  # 没认出城市/站名/线路，交给 LLM 那一路
         logger.info(f"公交直答: {event.message_str[:30]} -> {text[:60]}")
+        event._bus_hit = True       # 这一轮的数据是插件给的，模型复述插件腔就不算编
         yield event.plain_result(text)
         event.stop_event()
 
@@ -58,6 +62,14 @@ class BusActivity(Star):
         res = event.get_result()
         if not res or not res.chain:
             return
+        # 没查过就别说查过：模型会把插件说过的「站表里没找全，说个城市名我再查」当成自己的结果复述
+        if not getattr(event, "_bus_hit", False):
+            for comp in res.chain:
+                text = getattr(comp, "text", "")
+                if text and PLUGIN_SPEAK.search(text):
+                    comp.text = "".join(
+                        s for s in SENT.findall(text) if not PLUGIN_SPEAK.search(s)
+                    ).strip()
         for comp in res.chain:
             text = getattr(comp, "text", "")
             if text and FALSE_CLAIM.search(text):
@@ -96,6 +108,7 @@ class BusActivity(Star):
             return "查询接口这会儿没响应，照实说没查到、过会儿再试。"
         logger.info(f"公交查询: {question[:30]} -> {(text or '没查到')[:60]}")
         if text:
+            event._bus_hit = True
             return text
         # 答不上来也必须给一句话：返 None 模型手里没料就直接沉默，群里看着像机器人死了。
         # 但别一律说「问一句是哪座城」——用户只是在吐槽刚才答得乱，模型会顺势编成
