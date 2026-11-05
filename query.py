@@ -15,6 +15,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import yulin          # 玉林导乘资料：只在上游给不出的地方补（换乘站表、上车点、联营线无实时）
+
 try:  # AstrBot 按包加载时走相对导入，单文件调试时退回顶层模块
     from . import chelaile
     from .plates import PLATE
@@ -607,7 +609,9 @@ def _mygolbs(city_name, want):
             # 不能当成「没车」报，那是假消息（实测玉林 0 车时 hasReal 仍是 1）
             # 但只回「不提供」等于什么都没答，把这条线能查到的（首末班、站数）补上
             unknown = True
-            note = f"上游不给{norm_city(city_name)}的实时车辆位置"
+            ln = hit[0][1]["lineName"]
+            # 联营线（玉林-樟木）本来就不给车辆定位，说成「上游不给」会被当成平台抽风
+            note = yulin.no_real(ln) or f"上游不给{norm_city(city_name)}的实时车辆位置"
             lname, ldir = hit[0][1]["lineName"], hit[0][1]["upperOrDown"]
             n = len(_station_seq(city_name, lname, ldir))
             # 「末班最晚 20:30」是上下行混在一起的一个数：过了末班还说「起、末班最晚」，
@@ -1280,6 +1284,14 @@ def render_plan(city_name, a, b):
     return f"从{a}到{b}：\n{rows[0]}\n或者{rows[1]}"
 
 
+def render_ways(line, table):
+    """一条线的主要换乘站（玉林导乘资料）——上游 104/115 只给站名和经停，没有这层。"""
+    rows = [f"{line} 主要换乘站："]
+    rows += [f"{st}：{s}" for st, s in table.items()]
+    n = yulin.note(line)
+    return "\n".join(rows) + (f"\n{n}" if n else "")
+
+
 def render_hop(city_key, city_name, raw, only_direct=False):
     """A 站到 B 站：拿两站的经停线路求交，再按站序验方向，验不过的不算直达。"""
     a, a_name = find_stop(city_name, raw[0])
@@ -1305,6 +1317,9 @@ def render_hop(city_key, city_name, raw, only_direct=False):
         plan = _hop_plan(city_name, a, a_name, b, b_name, ra, rb)
         if plan:
             return plan
+        g = yulin.plan(ra, rb)          # 站序算不出来时，用玉林导乘资料的换乘站表兜一次
+        if g:
+            return f"{head}没直达，换一次：坐 {g[0]} 到{g[1]}换 {g[2]}"
         short = lambda s: "、".join(sorted(s)[:6]) + ("…" if len(s) > 6 else "")
         return f"{head}没直达车，{a['stationName']} 有 {short(ra)}，{b['stationName']} 有 {short(rb)}"
     direct = []
@@ -1316,7 +1331,11 @@ def render_hop(city_key, city_name, raw, only_direct=False):
         if only_direct:
             return ""
         plan = _hop_plan(city_name, a, a_name, b, b_name, ra, rb)
-        return plan or f"{head}有同名线路但方向反了，得换乘"
+        if plan:
+            return plan
+        g = yulin.plan(ra, rb)
+        return (f"{head}没直达，换一次：坐 {g[0]} 到{g[1]}换 {g[2]}" if g
+                else f"{head}有同名线路但方向反了，得换乘")
     if len(direct) == 1:
         line, got = direct[0]
         return f"{head}坐 {line} 直达（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got)
@@ -1757,8 +1776,15 @@ def render_city_company(city_name, msg=""):
     return "\n".join(rows)
 
 
-def render_transfer(city_name, want):
-    """逐站能换哪几路：上下行站几乎一样，按站名去重只算一份。"""
+def render_transfer(city_name, want, msg=""):
+    """逐站能换哪几路：上下行站几乎一样，按站名去重只算一份。
+
+    问「主要换乘站」时用玉林这份导乘表——逐站扫出来是几十条，人问的是「在哪换最顺」。
+    """
+    if re.search(r"主要|最方便|在哪", msg):
+        w = yulin.ways(want)
+        if w:
+            return render_ways(*w)
     rows = _catalog(city_name).get("buslines") or []
     hit = _pick([(r["lineName"], r) for r in rows], want)
     out, done = [], set()
@@ -1965,6 +1991,8 @@ def render_stop(city_key, city_name, msg, src=None):
         lines = r.get("relatedRoutes") or []
         if lines:
             out += f"\n{n} 是地铁站，经停 {'、'.join(lines)}"
+    # 枢纽站的乘车点只有导乘资料里有（玉林北站：公交站场和站前广场两个站都能上）
+    out += ("\n" + yulin.note(name)) if yulin.note(name) else ""
     # 点名车来了却没扫到，别让掌上的结果冒充车来了的
     return out + ("\n（车来了没扫到这个站，上面是掌上的）" if src == "chelaile" else "")
 
@@ -2520,7 +2548,7 @@ def answer(msg, default_city, ctx="", key=""):
     if name and TRANSFER_RE.search(msg):
         # 「这条线路每站能换什么」没有线路号，用上一条答过的线路
         want = (prefix + line[0] if prefix and not explicit else line[0]) if line else last.get("line") or ""
-        out = render_transfer(name, want) if want else None
+        out = render_transfer(name, want, msg) if want else None
         if out:
             last["line"] = want
             return out

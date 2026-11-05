@@ -8,6 +8,7 @@ import sys
 import types
 
 import query
+import yulin
 
 # 归一化：掌上「G02路」与车来了「G02」要能对上
 assert query.norm_line("G02路") == query.norm_line("G02") == "G02"
@@ -1280,6 +1281,19 @@ _p9a, query._ask111 = query._ask111, lambda cn, a, b: [{
         {"routeName": "G01路", "upStationName": "文体人民路口"}]}]
 assert "文体人民路口" in query.render_plan("玉林市", "市体育中心", "玉林北站")
 query._ask111 = _p9a
+
+# 玉林导乘资料（玉林微途整理）：换乘站表、枢纽站上车点、联营线无实时
+assert yulin.ways("G01路")[1]["中药港"] == "8"
+assert yulin.ways("G01") == yulin.ways("G01路")          # 带不带「路」都是同一条
+assert yulin.note("北流105路").startswith("部分车次")
+assert yulin.no_real("玉樟线").startswith("玉林-樟木")
+assert yulin.plan(["9路"], ["23路"]) == ("9路", "工业品电器城", "23路")
+assert yulin.split("1/3/G02夜班车") == ["1", "3", "G02夜班车"]
+_w9 = query.render_ways(*yulin.ways("G01路"))
+assert "中药港：8" in _w9 and "技师学院" in _w9, _w9
+# 「主要换乘站」用导乘表，问「每站」仍逐站扫上游
+assert "主要换乘站" in query.render_transfer("玉林市", "G01路", "G01主要换乘站")
+assert "主要换乘站" not in (query.render_transfer("玉林市", "G01路", "G01每站能换乘啥") or "")
 
 print("selftest ok")
 if "--live" in sys.argv:
