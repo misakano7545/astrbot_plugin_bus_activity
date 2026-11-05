@@ -47,6 +47,10 @@ assert query.parse("查询一下 G02 路") == ("G02", "")
 assert query.parse("查一下西安环山二号线路线上几辆车") == ("西安环山二号", "")
 assert query._lines("西安环山二号线有几辆车") == [("西安环山二号", "")]
 assert query.BUS_RE.search("查一下西安环山二号线路线上几辆车")     # 否则 bus_query 返回 None，群里一个字都不回
+# 「苏州地铁一号线」：中文数字在目录里是阿拉伯（地铁1号线）
+assert query._exact_line("苏州市", "苏州地铁一号线", "地铁一号", "苏州") == "地铁1号线"
+# 「苏州地铁3/11号线」：一个后缀管两个号，两条都要答，且前缀「地铁」不能丢
+assert [n for n, _ in query._lines("苏州地铁3/11号线")] == ["地铁3", "地铁11号"]
 # 「512 车」「513 号车」是车号；「11 路车」中间隔着「路」，不是车号
 assert [g for g in query.VEH_RE.findall("现在 512 车到哪")[0]] == ["", "512"]
 assert query.VEH_RE.findall("11 路车") == [] and query.VEH_RE.findall("513 号车")[0][1] == "513"

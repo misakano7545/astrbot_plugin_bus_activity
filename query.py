@@ -232,6 +232,12 @@ def parse(msg):
     return norm_line(num), _snap(pre)
 
 
+def _digitize(s):
+    """线名里的中文数字换阿拉伯：「地铁一号」→「地铁1号」——目录里只有阿拉伯写法。"""
+    return re.sub(r"[零一二三四五六七八九十两]{1,3}",
+                  lambda m: str(_cn_num(m.group(0)) or m.group(0)), s)
+
+
 # 群友把脚本贴进来时别当公交查：`x0 = iroot(n, d)` 里的 x0 被 ALPHA_PAT 认成线路号，
 # 回一句「没查到「X0」这条线，南宁这边有的是 20路…」，还被群里人当笑话
 CODE_RE = re.compile(r"def\s+\w+\s*\(|import\s+\w+|return\s|print\(|range\(|lambda\s|\*\*|```|"
@@ -256,14 +262,30 @@ def _lines(msg):
             (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
              or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
         # 只认紧贴着的汉字前缀：多行里上一行的「樟」不算 12 路的前缀
-        pre = re.search(r"([\u4e00-\u9fa5]{1,4})$", JUNK_HEAD.sub("", msg[: m.start()]))
-        pre = "" if m.group("numline") else JUNK_TAIL.sub(
+        cut = msg[: m.start()]
+        # 「地铁3/11号线」：前面的「3/」不是前缀，剥掉才能取到「地铁」
+        slash = re.search(r"(\d{1,4})\s*/\s*$", cut)
+        cut = cut[: slash.start()] if slash else cut
+        pre = re.search(r"([\u4e00-\u9fa5]{1,4})$", JUNK_HEAD.sub("", cut))
+        # 「环山二号线」的线名自带汉字，别再当县名拼一次；「地铁3/11号线」除外，它真带「地铁」
+        pre = "" if m.group("numline") and not slash else JUNK_TAIL.sub(
             "", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
         # 「11路和12路」：前缀截到的是「路和」，不是县名
         pre = re.sub(r"公交$", "", pre)
         pre = re.sub(r"^(?:路|和|与|跟|及|、)+|(?:路|和|与|跟|及)+$", "", pre)
         if pre in ("那", "这", "该", "此", "本"):
             pre = ""
+        # 「苏州地铁3/11号线」：一个后缀管两个号，两条都要答；前缀一起带上，
+        # 不然前一个号会被当成「3 路」
+        if slash and pre and pre not in cities():
+            # 前缀可能是「苏州地铁」：城市名剥掉，留下的「地铁」才是线名的一部分
+            for ck in cities():
+                if pre.startswith(ck) and len(pre) > len(ck):
+                    pre = pre[len(ck):]
+                    break
+            out.append((norm_line(_digitize(pre + slash.group(1) + num[-1:])), ""))
+            out.append((norm_line(_digitize(pre + num)), ""))
+            continue
         out.append((norm_line(num), _snap(pre)))
     # 「樟13」这种县内线习惯不带「路」，整段就一个词时也认（福州目录里叫「樟13路」）
     for part in re.split(r"[\n，,。、;；]+", msg):
@@ -1159,6 +1181,7 @@ def _dest_after(city_name, msg, stop):
 def _exact_line(city_name, msg, want, city_key=""):
     """目录里有更长的真线名整段出现在句子里（「新乐专1路」）就用它，别只拿裸号去匹。"""
     flat, w = norm_line(msg), norm_line(want)
+    w2 = _digitize(w)          # 「地铁一号」在目录里叫「地铁1号线」
 
     def scan(names):
         hit = []
@@ -1167,8 +1190,9 @@ def _exact_line(city_name, msg, want, city_key=""):
             # 句子里把城市名也粘进了线名（「西安环山二号线」）：目录名是它的后缀也算。
             # 只认 head 就是这座城的名字——「安宁12」的「安宁」是线名本身（安宁K12），
             # 当成城市名剥掉会把昆明市区的 12 路答成安宁的车
-            head = w[:len(w) - len(n)] if w.endswith(n) and len(w) > len(n) else ""
-            if not (w and n.endswith(w) or (head and norm_city(head) == norm_city(city_name))):
+            tail = w2 if n.endswith(w2) else w
+            head = tail[:len(tail) - len(n)] if tail.endswith(n) and len(tail) > len(n) else ""
+            if not (n.endswith(tail) or (head and norm_city(head) == norm_city(city_name))):
                 continue
             # 「新乐专一路」的「一」也是数字，得和 1 等价地认
             cns = "零一二三四五六七八九"
