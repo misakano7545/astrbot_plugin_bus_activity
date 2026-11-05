@@ -335,6 +335,10 @@ query.stops = lambda cn, kw: (
 assert query.pick_stop("泉州市", "泉州丰州公交站现在有什么车") == "丰州"
 # 2 字兜底要跟截出来的那两字比，不能拿整串比——否则「丰州公交站」永远匹不到「丰州」
 assert query.find_stop("泉州市", "丰州公交站")[1] == "丰州"
+# 「北京345快」退到「北京3」会匹到「北京三十九中学」：城市名后面只剩数字的不是站名
+query.stops = lambda cn, kw: ([{"stationName": "北京三十九中学", "relatedRoutes": ["345路"]}]
+                             if kw in ("北京3", "北京三十九中学") else [])
+assert query.find_stop("北京市", "北京345快")[0] is None, query.find_stop("北京市", "北京345快")
 query.stops = _st
 # 「泉州公交 惠南工业区四期站」切出来的「泉州公交」只剩城市名，别拿去搜站（会匹到「中化泉州公司」）
 assert list(query._cands("泉州市", "泉州公交 惠南工业区四期站现在有什么车")) == ["惠南工业区四期站"]

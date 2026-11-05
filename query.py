@@ -850,7 +850,10 @@ def find_stop(city_name, raw):
     for n in (8, 6, 5, 4, 3, 2):
         if len(raw) >= n:
             # 「石家庄131区间有没有车」退到 3 字就是城市名本身，会把「石家庄站」搜出来
-            if norm_city(raw[:n]) == norm_city(city_name):
+            # 城市名后面只剩数字/字母的也不是站名：「北京345快」退到「北京3」会匹到「北京三十九中学」
+            tail = raw[:n].replace(norm_city(city_name), "", 1)
+            if norm_city(raw[:n]) == norm_city(city_name) or (
+                    tail != raw[:n] and not re.search(r"[\u4e00-\u9fa5]", tail)):
                 continue
             rows = [r for r in stops(city_name, raw[:n]) or [] if r.get("stationName")]
             # 2 字兜底只认同名的：「石家」会搜出石家庄东站/石家庄站（地铁站），跟问的站没关系。
