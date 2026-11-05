@@ -74,7 +74,9 @@ LINE_RE = re.compile(
     r"|(?P<alpha>" + ALPHA_PAT + r")(?:\s*路)?"
     # 带前导零的四位线号（重庆「0492」）口语里不加「路」字；裸的 492 不加路字就太宽（可能是数量）
     r"|(?<![0-9])(?P<zero>0\d{2,3})(?![0-9])"
-    r"|(?<![0-9])(?P<num>\d{1,4})\s*(?:夜宵|夜班|通宵)?\s*[路线](?P<qual>夜班|区间|支线|快线|专线)?"
+    r"|(?<![0-9])(?P<num>\d{1,4})\s*(?:夜宵|夜班|通宵)?\s*[路线](?P<qual>夜线|夜班线|夜宵线|夜班|区间|支线|快线|专线)?"
+    # 「济宁76夜线」不带「路」字：目录里叫「76路夜线」，少写一个字也得认成这条夜线，不能削成 76路
+    r"|(?<![0-9])(?P<nnum>\d{1,4})\s*(?P<nqual>夜线|夜班线|夜宵线)"
     # 「131区间」不带「路」也算线路——石家庄目录里就叫「131路区间」
     r"|(?<![0-9])(?P<inum>\d{1,4})\s*(?P<iqual>区间|支线|快线|专线)"
     r"|(?P<cnnum>[一二三四五六七八九十]{1,3})\s*路"
@@ -109,7 +111,7 @@ PLATE_PAT = (r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂�
              r"[A-Z][A-Z0-9]{4,6}(?![A-Za-z0-9])")
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|(?<![今昨天每这那晚])夜班车|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
+    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|夜线|(?<![今昨天每这那晚])夜班车|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
     r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + PLATE_PAT + r"|" + ALPHA_PAT +
     r"|[\u4e00-\u9fa5A-Za-z0-9]{2,10}(?:专线|快线|支线)|[\u4e00-\u9fa5]{2,6}[东南西北中]\d{1,4}(?![0-9])")
 # 纯文字线名（「妇幼专线」「宝钢专线」）不含数字，也不是公交词——靠这两个专有线名尾巴认
@@ -218,7 +220,8 @@ def parse(msg):
     # 「下东胜区」这种半截词，当成站名/线名前缀去查就成了一条不存在的线
     head = LEAD.sub("", ASKPAST.sub("", JUNK_HEAD.sub("", msg[: m.start()])))
     pre = "" if m.group("numline") else PREFIX_RE.search(head)
-    num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
+    num = (m.group("nnum") + m.group("nqual")) if m.group("nnum") else \
+        (m.group("inum") + m.group("iqual")) if m.group("inum") else \
         (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
          or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
@@ -260,7 +263,8 @@ def _lines(msg):
         if m.start() < end:            # 「131路区间」先匹到「131路」，别再算一条
             continue
         end = m.end()
-        num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
+        num = (m.group("nnum") + m.group("nqual")) if m.group("nnum") else \
+            (m.group("inum") + m.group("iqual")) if m.group("inum") else \
             (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
              or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
         # 只认紧贴着的汉字前缀：多行里上一行的「樟」不算 12 路的前缀

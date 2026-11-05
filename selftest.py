@@ -1093,6 +1093,11 @@ assert not query.CITY_CO_RE.search("济宁9路有几个站")
 for m in ("玉林市含有几家公交公司", "玉林有几家公交公司", "玉林市公交公司有几家"):
     assert query.CITY_CO_RE.search(m), m
 assert not query.CITY_CO_RE.search("司机和公交公司救援")
+# 「济宁76夜线」是掌上的真线「76路夜线」，不带「路」字也得认；削成 76路会答成白班首末班
+assert query.parse("济宁76夜线") == ("76夜", "济宁")
+assert query.parse("济宁76路夜线") == ("76夜", "济宁")
+assert query.parse("济宁76路") == ("76", "济宁")          # 白班别被夜线吃掉
+assert query.BUS_RE.search("济宁76夜线")
 _oc = query._catalog
 query._catalog = lambda cn: {"buslines": [{"lineName": "北流101路", "to": "西山"},
                                          {"lineName": "北流101路", "to": "北流客运中心"}]}
