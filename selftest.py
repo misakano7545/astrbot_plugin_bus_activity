@@ -180,6 +180,9 @@ assert query.hop("那会就看到司机和公交公司救援") is None
 assert query.hop("我刚才看到 3 路车过去了") is None
 assert query.hop("听说 9 路改线了") is None
 assert query.hop("走到公交站就看到车了") is None
+# 「查不到」的「到」不是路径的「到」：这句吐槽曾被切成「有一条线路查不」→「实时信息我就不写出来了（」
+assert query.hop("有一条线路查不到实时信息我就不写出来了（）") is None
+assert query.hop("这个站查不到了") is None
 assert query.hop("玉林火车站到北流汽车总站坐哪路") == ("玉林火车站", "北流汽车总站")
 assert query.hop("机场一号航站楼到元氏火车站怎么走") == ("机场一号航站楼", "元氏火车站")
 # 到站分钟用上游自己的预测（routeOnStationRTimeInfoList），每站最多 2 辆；

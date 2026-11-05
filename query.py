@@ -839,8 +839,8 @@ def _near(city_key, want, n=4):
 
 
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
-                    # 「看到/说到/想到/遇到」都是动词的「到」，不是「A 站到 B 站」——闲聊被当成换乘问过
-                    r"(?<![看说想做达遇收得感觉听找等拿买卖学记念料猜想跑走来回送带拉请叫问答碰见闻触意识考虑注意])到\s*"
+                    # 「看到/说到/想到/遇到/查不到」都是动词的「到」，不是「A 站到 B 站」——闲聊被当成换乘问过
+                    r"(?<![看说想做达遇收得感觉听找等拿买卖学记念料猜想跑走来回送带拉请叫问答碰见闻触意识考虑注意查不])到\s*"
                     r"([^，,。？?！!\s]{2,12})")
 # 「A 咋去 B」「A 怎么去 B」：没「到」字，靠疑问词认；只有「去」一个动词的说法太松，不认
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
@@ -2477,6 +2477,11 @@ def answer(msg, default_city, ctx="", key=""):
             return render_selfno(city_key, name, pm.group(1))
         return render_plate(name, pm.group(1))
     got = hop(msg)
+    # 「有一条线路查不到实时信息我就不写出来了（）」：HOP_RE 按「到」切出两个假站名，
+    # 整句没问法、两个端点也不在站表里——是吐槽，不是问路，别抢答（交给模型接话）
+    if (got and name and not re.search(r"[?？]|怎么|咋|如何|怎样|哪|多少|多久|几站|[坐乘搭]", msg)
+            and not (find_stop(name, got[0])[0] or find_stop(name, got[1])[0])):
+        got = None
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
     # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城
     # 掌上自己有换乘方案（CMD=111：两次换乘也排、按总时长排序），手算的只换一次、经常不是最快那条，
@@ -2608,8 +2613,10 @@ def answer(msg, default_city, ctx="", key=""):
                     if got:
                         return got
                 return f"{norm_city(name)}站表里没查到「{place}」这个站"
-        # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）
-        if not explicit and re.search(r"站|线路|几路", msg):
+        # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）。
+        # 「有一条线路查不到实时信息我就不写出来了（）」是吐槽，反问就抢话了
+        if not explicit and re.search(r"站|线路|几路", msg) \
+                and not re.search(r"查不到|不写|没查到|找不到", msg):
             hint = re.sub(r"公交$", "", STOPSUF.sub("", TAIL.sub("", msg))).strip()
             return (f"「{hint}」这个站没查到，是哪座城的？说个城市名我再查" if hint
                     else "这个站没查到，是哪座城的？说个城市名我再查")
