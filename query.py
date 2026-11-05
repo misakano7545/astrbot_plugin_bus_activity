@@ -2419,6 +2419,14 @@ def answer(msg, default_city, ctx="", key=""):
     # 这句自己点了线名就别沿用上一条的号：刚问完 12 路再问「用车来了查宝钢专线」会答成 12 路
     if name and (not line or inherited):
         hit = _msg_line(name, msg, city_key)
+        if not hit and not explicit and prev in cities() and prev != city_key:
+            # 「妇幼专线」这种纯文字线名只在车来了那边有：默认城目录里没有，
+            # 沿用上一条问过的城（刚问完湛江吴川二路，再问妇幼专线就是湛江的）
+            pname = (cities().get(prev) or {}).get("mygolbs")
+            hit = _msg_line(pname, msg, prev) if pname else None
+            if hit:
+                city_key, name = prev, pname
+                last["city"] = prev
         if hit:
             # _pick 拿归一化名做全等比，原始线名（带「（28路）」）一个都匹不上
             line, prefix = (norm_line(hit), ""), ""

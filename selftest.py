@@ -1193,6 +1193,18 @@ assert "error" in query.query("吴川", ["9"], "chelaile", ""), "裸号不该去
 query.cities = _c3
 query.cities, query.chelaile.lines, query._catalog = _c2, _cl2, _cat2
 
+# 「妇幼专线」这种纯文字线名只在车来了那边有：默认城没有就沿用上一条问过的城
+_c4, _ml4, _o4 = query.cities, query._msg_line, query._one
+query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "湛江": {"mygolbs": "湛江市", "chelaile": "157"}}
+query._msg_line = lambda cn, msg, ck="": ("妇幼专线" if cn == "湛江市" else None)
+_seen = {}
+query._one = lambda ck, nm, num, pre, msg, src, ex, last: _seen.update({"ck": ck}) or "ok"
+query.LAST["t_fu"] = {"city": "湛江"}
+assert query.answer("妇幼专线", "玉林市", key="t_fu") == "ok"
+assert _seen["ck"] == "湛江", "纯文字线名该沿用上一条问过的城"
+query.LAST.pop("t_fu", None)
+query.cities, query._msg_line, query._one = _c4, _ml4, _o4
+
 print("selftest ok")
 
 if "--live" in sys.argv:
