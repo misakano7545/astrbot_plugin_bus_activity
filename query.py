@@ -1303,10 +1303,7 @@ def render_at(city_key, city_name, want, msg):
             continue
         mins, left, plate = eta
         span = "马上到" if left <= 0 else f"还有 {left} 站"
-        # 终点站本身就是 to 时别念两遍「到玉林北站：往玉林北站」
-        lab = row.get("to") or "?"
-        out.append((f"往{lab}：" if lab != station_name else "") +
-                   f"{plate} 约 {_clock(mins)} 到（{max(1, round(mins))} 分钟），{span}")
+        out.append((row.get("to") or "", plate, max(1, round(mins)), span))
     if not out:
         # 这条线确实过我这一站、但这个方向这会儿没有车往这儿开（刚过站 / 还没发车）。
         # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
@@ -1316,7 +1313,14 @@ def render_at(city_key, city_name, want, msg):
         if not near:
             return f"{hit[0][1]['lineName']} 不经过{station_name}"
         return None
-    return f"{hit[0][1]['lineName']} 到{station_name}：" + "；".join(out)
+    # 「N 路离 X 站大约几分钟」：站在站台的人要的是这一句，别念「往X：桂K… 约 18:10 到」
+    line_name = hit[0][1]["lineName"]
+    if len(out) == 1:                       # 只有一个方向有车时不念方向名
+        _, plate, m, span = out[0]
+        return f"{line_name} 离{station_name} 大约 {m} 分钟（{plate}，{span}）"
+    return f"{line_name} 离{station_name}：" + "；".join(
+        (f"往{lab} " if lab else "") + f"大约 {m} 分钟（{plate}，{span}）"
+        for lab, plate, m, span in out)
 
 
 # 「9路站点」这种只说两个字的也要认；「到站点了没」「哪个站点」问的是实时位置，别抢

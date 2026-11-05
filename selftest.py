@@ -1019,6 +1019,23 @@ query._catalog = lambda cn: {"buslines": [{"lineName": "北流101路", "to": "�
 assert query.render_city_lines("北流市") == "北流这边 1 条线路：\n北流101路：西山 ↔ 北流客运中心"
 query._catalog = _oc
 
+# 「N路离X站大约几分钟」：一句话给结论；两个方向都有车时才带方向名
+_p, _c2, _s, _l, _e = query.pick_stop, query._catalog, query._station_seq, query._live_my, query._etas
+query.pick_stop = lambda cn, m: "十字街"
+_one_dir = {"buslines": [{"lineName": "9路", "upperOrDown": "1", "to": "甲"}]}
+_both = {"buslines": [{"lineName": "9路", "upperOrDown": "1", "to": "甲"},
+                      {"lineName": "9路", "upperOrDown": "2", "to": "乙"}]}
+query._catalog = lambda cn: _one_dir
+query._station_seq = lambda cn, ln, d: [{"stationName": "十字街"}]
+query._live_my = lambda cn, ln, d, i=1: {"n": d}
+query._etas = lambda p: (7.0, 2, "桂K1")
+assert query.render_at("玉林", "玉林市", "9", "十字街") == "9路 离十字街 大约 7 分钟（桂K1，还有 2 站）"
+query._catalog = lambda cn: _both
+query._etas = lambda p: ((20.0 if p["n"] == "2" else 7.0), 2, "桂K" + p["n"])
+assert query.render_at("玉林", "玉林市", "9", "十字街") == \
+    "9路 离十字街：往甲 大约 7 分钟（桂K1，还有 2 站）；往乙 大约 20 分钟（桂K2，还有 2 站）"
+query.pick_stop, query._catalog, query._station_seq, query._live_my, query._etas = _p, _c2, _s, _l, _e
+
 print("selftest ok")
 
 if "--live" in sys.argv:
