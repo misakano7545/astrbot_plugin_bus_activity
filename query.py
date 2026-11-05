@@ -2398,9 +2398,13 @@ def answer(msg, default_city, ctx="", key=""):
         # 但本句问的是全城（「还有没有在跑的线路」「每辆车的车牌」）时不能拿引用里那一路顶替——
         # 引用的是「还有 5 条在跑」，parse(ctx) 会随便挑一条线答成它的实时
         line = parse(ctx)
-    # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车
+    # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车。
+    # 但「用车来了查化州-湛江线」也带「查」，那是点名的另一条文字线名（parse 认不出带「-」的），
+    # 当成追问上一条就会答成上一轮的 506——只有指着上一条说（这个/那条）或整句只剩追问词时才续
+    _bare = re.sub(r"[看查询数据接口一下怎么样呢吗的了，。？?！!\s]", "", SRCPRE.sub("", raw))
     inherited = False
-    if src and not line and last.get("line") and re.search(r"看|查|数据|接口", raw):
+    if src and not line and last.get("line") and re.search(r"看|查|数据|接口", raw) and (
+            re.search(r"这个|那个|这条|那条|该线|这路|那路", raw) or len(_bare) <= 3):
         line = (last["line"], "")
         inherited = True
     prefix = line[1] if line else ""

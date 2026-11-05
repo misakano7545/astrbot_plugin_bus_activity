@@ -10,6 +10,11 @@ import types
 import query
 import yulin
 
+# 「用车来了查化州-湛江线」：带「-」的文字线名 parse 认不出，但它是点名的另一条线，
+# 不能当成「追问上一条」续成上一轮的 506（放最前面：后面的桩会污染）
+query.LAST["k-hz"] = {"city": "湛江", "line": "506"}
+assert "化州-湛江线" in (query.answer("用车来了查化州-湛江线", "湛江市", key="k-hz") or "")
+
 # 归一化：掌上「G02路」与车来了「G02」要能对上
 assert query.norm_line("G02路") == query.norm_line("G02") == "G02"
 assert query.norm_line("6路夜班") == "6夜班"
