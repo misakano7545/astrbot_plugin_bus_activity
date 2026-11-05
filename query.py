@@ -1440,6 +1440,18 @@ def render_stop(city_key, city_name, msg, src=None):
             if items:
                 blocks.append(f"{gname}（{len(items)} 条）：" + "".join("\n" + i for i in items))
         out = (f"{name}这一片分 {len(blocks)} 个站台，共 {len(seen)} 条线路：\n" + "\n".join(blocks))
+    # 「阿房宫线」问的其实是地铁：公交站那片若还有「（地铁站）」的记录，单独报一行。
+    # _same_rows 故意把地铁剔出公交清单，整句只报 10 条公交线，问地铁的人就白问
+    seen_metro = set()
+    key = re.sub(r"地铁站$", "", name)      # 「阿房宫南地铁站」搜不到旁边的「阿房宫南（地铁站）」
+    for r in (stops(city_name, key) if key != name else rows_):
+        n = r.get("stationName") or ""
+        if n == name or n in seen_metro or "地铁" not in n or not _near_same(row, r):
+            continue
+        seen_metro.add(n)
+        lines = r.get("relatedRoutes") or []
+        if lines:
+            out += f"\n{n} 是地铁站，经停 {'、'.join(lines)}"
     # 点名车来了却没扫到，别让掌上的结果冒充车来了的
     return out + ("\n（车来了没扫到这个站，上面是掌上的）" if src == "chelaile" else "")
 

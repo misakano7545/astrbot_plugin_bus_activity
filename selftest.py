@@ -490,6 +490,20 @@ assert not query.CITY_CO_RE.search("我们公司今年业绩咋样")      # 闲�
 assert query.CITY_CO_RE.search("玉林公交公司电话")
 query._post = _cc
 
+# 「西安阿房宫线」问的是地铁5号线/西户线：公交站旁边那条「（地铁站）」记录得单独报一行
+_st, _ct = query.stops, query._catalog
+query.stops = lambda c, k: [
+    {"stationName": "阿房宫南地铁站", "lat": "34.250833", "lng": "108.82542",
+     "relatedRoutes": ["1123路"]},
+    {"stationName": "阿房宫南（地铁站）", "lat": "34.250590", "lng": "108.824334",
+     "relatedRoutes": ["5号线", "西户线"]}]
+query._catalog = lambda c: {"buslines": [
+    {"lineName": "1123路", "upperOrDown": "1", "from": "甲", "to": "乙"}]}
+_z = query.render_stop("西安", "西安市", "阿房宫线")
+assert "是地铁站，经停 5号线、西户线" in _z, _z
+assert _z.count("阿房宫南（地铁站）") == 1, _z        # 平台会把同一站存两条，别念两遍
+query.stops, query._catalog = _st, _ct
+
 # 实例是 UTC：时钟要按北京时间报（23:37 那种是 UTC，实际 07:37）
 import time as _tm
 _utc = _tm.time
