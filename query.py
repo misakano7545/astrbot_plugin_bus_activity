@@ -819,12 +819,16 @@ def _same_rows(rows, hit):
     站名不同但都在 100 多米内，是同一片站台，不是隔壁站。
     """
     base = hit["stationName"]
+    # 「市一职校（玉林技师学院）」和「玉林技师学院（市一职中）」是同一所学校的两个门，
+    # 各挂各的线：括号里的别名也算这个名字
+    bases = [base] + re.findall(r"[（(]([^）)]+)[）)]", base)
     out, seen = [], {base}
     for r in [hit] + list(rows):
         n = r.get("stationName") or ""
         # 只有「汽车总站（二医院）」这种加括号的才是同一个站的另一条记录；
         # 「芳村花园」「芳村西塱」是隔壁站，「芳村（地铁站）」是另一种车
-        if n in seen or not n.startswith((base + "（", base + "(", base + "·")) \
+        if n in seen or not any(n == b or n.startswith((b + "（", b + "(", b + "·"))
+                                 for b in bases) \
                 or "地铁" in n or "轨道交通" in n or not _near_same(hit, r):
             continue
         seen.add(n)
@@ -1708,6 +1712,10 @@ def render_stop(city_key, city_name, msg, src=None):
         return None
     # 再搜一次站名会撞上同名地铁站（「芳村」和「芳村（地铁站）」），按站名精确挑
     rows_ = stops(city_name, name) or []
+    # 「市一职校（玉林技师学院）」和「玉林技师学院（市一职中）」是同一所学校的两个门，
+    # 各挂各的线：括号里的别名也搜一遍，交给 _same_rows 合并
+    for alias in re.findall(r"[（(]([^）)]+)[）)]", name):
+        rows_ = rows_ + (stops(city_name, alias) or [])
     if not rows_:
         return None
     row = next((r for r in rows_ if r.get("stationName") == name), rows_[0])
@@ -1738,7 +1746,12 @@ def render_stop(city_key, city_name, msg, src=None):
             seen |= set(routes)
             if items:
                 blocks.append(f"{gname}（{len(items)} 条）：" + "".join("\n" + i for i in items))
-        out = (f"{name}这一片分 {len(blocks)} 个站台，共 {len(seen)} 条线路：\n" + "\n".join(blocks))
+        # 只有一个站台有线路（别名的线路已被它覆盖）：不用分组说
+        if len(blocks) == 1:
+            out = f"{name}有 {len(seen)} 条线路：{blocks[0].split('：', 1)[1]}"
+        else:
+            out = (f"{name}这一片分 {len(blocks)} 个站台，共 {len(seen)} 条线路：\n"
+                   + "\n".join(blocks))
     # 「阿房宫线」问的其实是地铁：公交站那片若还有「（地铁站）」的记录，单独报一行。
     # _same_rows 故意把地铁剔出公交清单，整句只报 10 条公交线，问地铁的人就白问
     seen_metro = set()
