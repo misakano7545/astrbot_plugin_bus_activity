@@ -536,6 +536,20 @@ assert len(query._clock(0)) == 5 and query._clock(0) == \
 assert query._clock(1500) == _tm.strftime("%H:%M", _tm.gmtime(1745000000.0 + 8 * 3600 + 1500 * 60))
 query.time.time = _utc
 
+# 夜班车早上问：末班没过 ≠ 在路上。玉林 6路夜班 10:16 被答成「线路还在跑，只是车机没报位置」
+_nw = query._now
+_t = _tm.struct_time
+for _h, _m, _want in ((10, 18, "before"), (20, 0, "open"), (23, 50, "after")):
+    query._now = lambda h=_h, m=_m: _t((2026, 11, 5, h, m, 0, 3, 309, 0))
+    assert query._window("17:47", "22:40") == _want, (_h, _m, query._window("17:47", "22:40"))
+query._now = _nw
+# 一个线号两个方向各有首末班，都要报出来
+query._now = lambda: _t((2026, 11, 5, 10, 18, 0, 3, 309, 0))
+_wn = query._window_note([("马尔代夫水上乐园", "17:47", "22:40"), ("人民大北路口", "18:47", "23:10")])
+assert "首班还没到" in _wn and "17:47–22:40" in _wn and "18:47–23:10" in _wn, _wn
+assert query._window_note([("甲", "06:30", "18:20")]) == ""      # 窗口内不抢「车机没报位置」
+query._now = _nw
+
 # 「G02到高新产业园，去玉林北站」：上车站是产业园，玉林北站只是方向，不是上车站
 _fs = query.find_stop
 query.find_stop = lambda c, raw: ({"stationName": raw} if raw in ("高新产业园", "玉林北站") else None, raw)
@@ -583,10 +597,10 @@ for _now, _first, _last, _want in [((9, 0), "05:30", "23:44", False),
                                    ((0, 30), "22:00", "01:00", False)]:
     _at(*_now)
     assert query._past_last(_last, _first) is _want, (_now, _first, _last, query._past_last(_last, _first))
-# 距首班几分钟：判断「还没到首班」用，跨零点要取模
+# 距首班还剩多久改成用 _window 判，_mins_to 已删
 _at(13, 0)
-assert query._mins_to("17:47") == 287, query._mins_to("17:47")
-assert query._mins_to("ba") is None
+assert query._window("17:47", "22:40") == "before"      # 13:00 还没到 17:47 的首班
+assert query._window("06:30", "18:20") == "open"
 query.time = _lt
 
 # issue #11：香港「1」对应五家公司，按名字分组各查各的，别取前两条

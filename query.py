@@ -362,8 +362,10 @@ def _now():
     return time.gmtime(time.time() + TZ_OFF)
 
 
-def _past_last(last, first=""):
-    """末班过了没。字符串比较跨不了零点（'00:20' < '22:40'），按分钟算。"""
+def _window(first, last):
+    """(首班, 末班) 相对现在的位置：before 还没发首班 / open 在运营窗口内 / after 末班开走了。
+    空串表示不知道。只回答「末班过了没」是不够的——夜班车早上问，末班当然没过，
+    但车也不可能在路上（实测玉林 6路夜班 10:16 被答成「线路还在跑，只是车机没报位置」）。"""
     def mins(s):
         try:
             h, m = (s or "").split(":")[:2]
@@ -373,21 +375,40 @@ def _past_last(last, first=""):
 
     last_m = mins(last)
     if last_m is None:
-        return False
+        return ""
     t = _now()
     now_m = t.tm_hour * 60 + t.tm_min
     first_m = mins(first)
-    if first_m is not None:
-        # 按运营窗口判：末班 23:44 的线路，早上 9 点当然还没开走
-        if (now_m - first_m) % (24 * 60) <= (last_m - first_m) % (24 * 60):
-            return False
-        # 窗口外也是两种情况：末班 21:30 的夜班车中午问「离首班更近」，那是还没开，
-        # 不是已经收班——不分开就会回「末班已经开走了」
-        return (first_m - now_m) % (24 * 60) > (now_m - last_m) % (24 * 60)
-    # 没首班就按「末班离现在多久」算，跨零点自然成立：00:02 问 22:40 → 已开走，
-    # 23:00 问 00:10 → 还没到。
-    # shortcut: 以 12 小时为界判过去/将来，早班车式的末班（06:00）在下午会判错
-    return (last_m - now_m) % (24 * 60) > 12 * 60
+    if first_m is None:
+        # 没首班就按「末班离现在多久」算，跨零点自然成立：00:02 问 22:40 → 已开走，
+        # 23:00 问 00:10 → 还没到。
+        # shortcut: 以 12 小时为界判过去/将来，早班车式的末班（06:00）在下午会判错
+        return "after" if (last_m - now_m) % (24 * 60) > 12 * 60 else "open"
+    # 按运营窗口判：末班 23:44 的线路，早上 9 点当然还没开走
+    if (now_m - first_m) % (24 * 60) <= (last_m - first_m) % (24 * 60):
+        return "open"
+    # 窗口外也是两种情况：末班 21:30 的夜班车中午问「离首班更近」，那是还没开，
+    # 不是已经收班——不分开就会回「末班已经开走了」
+    return "before" if (first_m - now_m) % (24 * 60) < (now_m - last_m) % (24 * 60) else "after"
+
+
+def _past_last(last, first=""):
+    """末班过了没。字符串比较跨不了零点（'00:20' < '22:40'），按分钟算。"""
+    return _window(first, last) == "after"
+
+
+def _window_note(w):
+    """w = [(方向名, 首班, 末班)]，一个线号两个方向各有时刻。没车时说清现在是「没开」还是「收班」。
+    都还在运营窗口内就返回空串——让调用方按原来的「车机没报位置」说。"""
+    rows = [(lab, f, l, _window(f, l)) for lab, f, l in w if _window(f, l)]
+    if not rows or all(s == "open" for *_, s in rows):
+        return ""
+    now = _now()
+    st = {s for *_, s in rows}
+    when = ("现在 %d:%02d，首班还没到" % (now.tm_hour, now.tm_min) if st == {"before"}
+            else "末班已经开走" if st == {"after"} else "各方向运营时间不一样")
+    return when + "：" + "；".join((f"往{lab} " if lab else "") + f"{f}–{l}"
+                                   for lab, f, l, _ in rows)
 
 
 def _seq_payload(city_name, line, direction):
@@ -468,7 +489,7 @@ def _mygolbs(city_name, want):
         near = sorted({r["lineName"] for r in rows
                        if norm_line(r["lineName"]).startswith(want)})[:4]
         return {"error": "是 " + " / ".join(near) + " 吗"} if near else None
-    groups, live_known, first, last, live_flags = [], False, "", "", []
+    groups, live_known, first, last, live_flags, wins = [], False, "", "", [], []
     for name, row in hit:
         d = str(row.get("upperOrDown") or "")
         # 传 0/3/空串时服务端会静默退化成方向 1，回一列错方向的车，宁可不报
@@ -486,6 +507,9 @@ def _mygolbs(city_name, want):
         if not cars:
             f0, l0 = _first_last(city_name, name, d)
             first, last = first or f0, l0 or last
+            # 上下行各有自己的首末班，得按方向留着（玉林 6路夜班 17:47–22:40 / 18:47–23:10）
+            if f0 and l0:
+                wins.append((row.get("to") or "", f0, l0))
         groups.append((row.get("to") or "", [(c.get("busNumber"), c.get("stationName"),
                                               c.get("busToStationNiheDistance"), c.get("statusType"))
                                              for c in cars]))
@@ -504,9 +528,8 @@ def _mygolbs(city_name, want):
                 bits.append(f"{n} 站")
             if bits:
                 note += "，这条线 " + "、".join(bits)
-        elif last and _past_last(last, first):
-            # 连带说首班：凌晨问日间线时，用户要知道的是「几点再来」
-            note = f"末班 {last} 已经开走了" + (f"，首班 {first}" if first else "")
+        elif (_wn := _window_note(wins)):
+            note = _wn
         elif live_known:
             note = "线路还在跑，只是车机没报位置"
     return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
@@ -930,31 +953,20 @@ def _goes(city_name, line, a, b):
     return None
 
 
-def _mins_to(hhmm):
-    """距 hhmm 还有几分钟（按 24 小时取模，跨零点也对）。解析不了返回 None。"""
-    try:
-        h, m = (hhmm or "").split(":")[:2]
-        tgt = int(h) * 60 + int(m)
-    except ValueError:
-        return None
-    t = _now()
-    return (tgt - (t.tm_hour * 60 + t.tm_min)) % (24 * 60)
-
-
 def _hop_line(city_name, line, d, ia, ib):
     """这一路下一辆车几分钟到 A（上游预测），从 A 坐到 B 要几分钟（按每段均速累）。"""
     payload = _live_my(city_name, line, d, ia + 1)      # STATIONORDER 1 基
     eta = _etas(payload)
     if not eta:
         first, last = _first_last(city_name, line, d)
-        if last and _past_last(last, first):
+        w = _window(first, last)
+        if w == "before":
+            return f"，首班 {first} 还没到" + (f"（末班 {last}）" if last else "")
+        if w == "after":
             return f"，末班 {last} 已经开走了" + (f"，首班 {first}" if first else "")
         # 起点站没到站预测时上游会写 tips，「等待发车」比「没车」准
         if "等待发车" in [r.get("busToStationTips") for r in payload.get("routeOnStationRTimeInfoList") or []]:
             return "，起点站的车在等发车"
-        ahead = _mins_to(first)
-        if ahead is not None and ahead < 12 * 60:
-            return f"，首班 {first} 还没到"
         return "，这会儿没车报位置"
     return f"，下一辆约 {max(1, round(eta[0]))} 分钟后到，坐过去 {max(1, round(_run(payload, ia, ib)))} 分钟"
 
