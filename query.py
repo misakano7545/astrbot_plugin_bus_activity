@@ -248,6 +248,8 @@ def looks_like_ask(msg):
     """这句像在问公交吗。快路命中线路号后先用它过一道，别把闲聊抢走。"""
     if CODE_RE.search(msg):          # 代码里的标识符不是线号
         return False
+    if not re.search(r"[\u4e00-\u9fa5]", msg):
+        return False                 # 一句中文都没有（「baga yalu: k3 4.1 gtp」）不是问公交，是闲聊
     return bool(ASK.search(msg)) or not CHAT.search(msg)
 
 
