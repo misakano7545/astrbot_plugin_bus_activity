@@ -936,6 +936,14 @@ assert "没扫到" in query.render_selfno("玉林", "玉林市", "桂K99999")
 query._plate_index, query.cities, query.chelaile = _pi, _ci, _cl2
 query._cache.clear()
 
+# 「A 咋去 B」「A 怎么去 B」：没「到」字也要认成换乘问句；「我在X咋去Y」把「我在」剥掉
+assert query.hop("玉林火车站咋去北流万达") == ("玉林火车站", "北流万达")
+assert query.hop("玉林火车站怎么去北流万达") == ("玉林火车站", "北流万达")
+assert query.hop("我在十字街咋去火车站") == ("十字街", "火车站")
+assert query.hop("怎么去北流万达") is None              # 没出发站，不猜
+assert query.hop("玉林9路咋去") is None                # 左边是线路号
+assert query.hop("从玉林火车站到北流万达") == ("玉林火车站", "北流万达")   # 老的「到」式没坏
+
 print("selftest ok")
 
 if "--live" in sys.argv:
