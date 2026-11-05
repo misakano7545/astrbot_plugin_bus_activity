@@ -900,6 +900,14 @@ def find_stop(city_name, raw):
                 best = None
             if best and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
                 return _merge_same(rows, best), best["stationName"]
+    # 「玉林八中」平台写作「玉州区第八中学」：学校简称（八中/一小）按口语搜一次，
+    # 全城只有这一个才认，免得「南宁机场」这种整词被抹掉城市名后匹到不相干的站
+    core = raw.replace(norm_city(city_name), "", 1)
+    if len(core) >= 2 and core[-1] in "中小":
+        rows = [r for r in stops(city_name, core) or [] if r.get("stationName")]
+        names = {r["stationName"] for r in rows}
+        if len(names) == 1 and core in next(iter(names)):
+            return _merge_same(rows, rows[0]), core
     return None, raw
 
 
@@ -1471,6 +1479,14 @@ CITY_CO_RE = re.compile(r"[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运|交通|地
 
 
 CITYLINES_RE = re.compile(r"(?:有哪些|哪些|几条|多少条|所有|全部)[\u4e00-\u9fa5]{0,4}(?:线路|公交线|公交(?!公司))")
+
+
+def _city_wide(msg, city_name):
+    """这句问的是整座城吗：把城市名和问法都抹掉，还剩地名就是在问那个地方。"""
+    t = msg.replace(norm_city(city_name), "", 1)
+    t = re.sub(r"公交线路|公交线|线路|公交车|公交|有哪些|有没有|哪些|几条|多少条|所有|全部"
+               r"|这边|那里|这儿|那边|这里|这|那|该|市|县|有|的|呢|吗|啊|？|\?|\s", "", t)
+    return len(t) < 2
 
 
 def render_city_lines(city_name):
@@ -2193,8 +2209,9 @@ def answer(msg, default_city, ctx="", key=""):
     # 「北流有哪些公交线路」问的是线路清单，别被下面的 CITY_CO_RE 抢成公司清单。
     # 「伦教街道办事处公交线路」问的是那个地方的站，只有明写了城市名（北流/玉林）才算整城
     # 「从玉林汽车总站到玉林北站坐哪条公交线路呢」是问换乘，不是要整城清单
+    # 「玉林八中有没有什么公交线路」问的是那所学校的线路，不是整城 25 条
     if not line and name and not hop(msg) and not re.search(r"在跑|运营|还有", msg) and (
-            CITYLINES_RE.search(msg) or (explicit and "公交线路" in msg)):
+            CITYLINES_RE.search(msg) or (explicit and "公交线路" in msg)) and _city_wide(msg, name):
         out = render_city_lines(name)
         if out:
             return out

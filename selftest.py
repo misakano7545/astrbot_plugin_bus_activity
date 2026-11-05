@@ -339,6 +339,11 @@ assert query.find_stop("泉州市", "丰州公交站")[1] == "丰州"
 query.stops = lambda cn, kw: ([{"stationName": "北京三十九中学", "relatedRoutes": ["345路"]}]
                              if kw in ("北京3", "北京三十九中学") else [])
 assert query.find_stop("北京市", "北京345快")[0] is None, query.find_stop("北京市", "北京345快")
+# 「玉林八中」平台写作「玉州区第八中学」：简称搜到全城只有一个才认
+query.stops = lambda cn, kw: ([{"stationName": "玉州区第八中学", "relatedRoutes": ["G01路"]}]
+                             if kw == "八中" else [])
+assert query.find_stop("玉林市", "玉林八中")[0]["stationName"] == "玉州区第八中学"
+assert query.find_stop("玉林市", "玉林九中")[0] is None      # 搜不到就不认
 query.stops = _st
 # 「泉州公交 惠南工业区四期站」切出来的「泉州公交」只剩城市名，别拿去搜站（会匹到「中化泉州公司」）
 assert list(query._cands("泉州市", "泉州公交 惠南工业区四期站现在有什么车")) == ["惠南工业区四期站"]
@@ -941,6 +946,12 @@ qm = query.QUOTE_RE.search("[引用消息(: 有，G02路 现在 2 辆在路上)]
 assert qm and "G02路 现在 2 辆" in qm.group(1)
 assert query.SELFNO_RE.search("桂K12345自编号是啥") and not query.SELFNO_RE.search("桂K12345")
 assert query.parse("有，G02路 现在 2 辆在路上")          # 引用原文本身会被 parse 认成线，才需要先剥掉
+
+# 「玉林八中有没有什么公交线路」不是要整城 25 条：句里还剩地名就是在问那个地方
+assert query._city_wide("玉林有哪些公交线路？", "玉林市")
+assert query._city_wide("玉林这边有哪些公交线路", "玉林市")
+assert not query._city_wide("玉林八中有没有什么公交线路", "玉林市")
+assert not query._city_wide("玉林北站有哪几条公交线？", "玉林市")
 
 # 微信的引用是整段 XML：wxid_m9ngvm9jcku022 / <svrid>858091132112776141 里的数字会被当成线号，
 # 一条「查看X站方向还有没有」被回成「没查到「022」这条线」加四遍「没查到「V1」」
