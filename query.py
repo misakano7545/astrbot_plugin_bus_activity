@@ -1844,6 +1844,11 @@ def render_transfer(city_name, want, msg=""):
     return "\n\n".join(out) or None
 
 
+# 车来了整目录没翻完时文案里带这句，render_stop 靠它判断要不要补掌上的完整站表：
+# 两处共用一个常量，别再各写一份字面量（改一处漏一处已经踩过一次）
+SWEEP_CUT = "只能一条条翻"
+
+
 def _stop_chelaile(city_name, msg):
     """车来了没有站点搜索接口：只能把目录里每条线的站表扫一遍找这个站（docs/车来了API.md §5.2）。"""
     cid = next((c.get("chelaile") for c in cities().values()
@@ -1859,6 +1864,15 @@ def _stop_chelaile(city_name, msg):
     ws = [re.sub(rf"^{re.escape(norm_city(city_name))}", "", norm_city(x))
           for x in _cands(city_name, msg)]
     wants = [w for w in dict.fromkeys(ws) if w and not any(w != o and w in o for o in ws)]
+    # 大目录翻不完（深圳 2581 条方向 20 秒只翻得到四分之一）：掌上说得出这个站挂哪几路，
+    # 就拿这几个线名直接去车来了核对，比整目录翻快两个数量级。
+    # shortcut: 掌上拆站台时只拿到一部分线，大目录会少报几条；小目录仍整扫不受影响，
+    # 想 100% 覆盖得让车来了开放站点搜索
+    nm = pick_stop(city_name, msg) if len(rows) > 1000 else None
+    if nm:
+        hit = next((x for x in (stops(city_name, nm) or []) if x.get("stationName") == nm), {})
+        want = {norm_line(r) for r in hit.get("relatedRoutes") or []}
+        rows = [r for r in rows if norm_line(r[0]) in want] or rows
 
     def one(row):
         n, lid = row
@@ -1896,7 +1910,9 @@ def _stop_chelaile(city_name, msg):
         if norm_line(n) not in seen:      # 两个方向算一条线
             seen.add(norm_line(n))
             items.append(f"{n} {a} ↔ {b}" if a and b else n)
-    note = f"（只扫了前 {done} 条，全城 {len(rows)} 条方向）" if done < len(rows) else ""
+    # 车来了没有站点搜索，只能一条条翻站表；翻到哪算哪，别让人以为这就是全部
+    note = (f"（车来了{SWEEP_CUT}，这次翻了前 {done} 条，全城 {len(rows)} 条方向）"
+            if done < len(rows) else "")
     return f"{got[0][1]} 车来了这边有 {len(items)} 条线路{note}：" + "".join(f"\n{i}" for i in items)
 
 
@@ -1937,15 +1953,15 @@ def render_stop_best(city_name, name, routes):
 
 def render_stop(city_key, city_name, msg, src=None):
     """「X 站有哪几路」：站点经停线路，每条带首末站。"""
-    partial = ""
+    cl = ""
     if src == "chelaile":       # 点名车来了就真给车来了的：两家站表不合并，线的集合也不一样
         out = _stop_chelaile(city_name, msg)
-        if out and "只扫了前" not in out:
+        if out and SWEEP_CUT not in out:
             return out
-        # 扫不完时没扫到的线会被漏掉（深圳 2581 条方向 20 秒只到 600，关山月美术馆②的 M555 就漏了），
-        # 交给掌上的完整站表兜，末尾注明
-        elif out:
-            partial = "\n（车来了目录太大没扫完，上面是掌上的完整站表）"
+        # 大目录翻不完时后头的线路压根没到（深圳 2581 条方向 20 秒只到一千出头，
+        # 关山月美术馆②的 M555 就在后面）。点名要车来了的仍先给车来了那份，
+        # 掌上完整站表跟在后面补，别拿掌上的顶掉它
+        cl = out
     name = pick_stop(city_name, msg)
     if not name:
         # 站名只在车来了那边有（湛江文化中心：掌上 551 个站名里没有），别直接说没查到
@@ -2023,7 +2039,9 @@ def render_stop(city_key, city_name, msg, src=None):
     # 枢纽站的乘车点只有导乘资料里有（玉林北站：公交站场和站前广场两个站都能上）
     out += ("\n" + yulin.note(name)) if yulin.note(name) else ""
     # 点名车来了却没扫到，别让掌上的结果冒充车来了的
-    return out + (partial or ("\n（车来了没扫到这个站，上面是掌上的）" if src == "chelaile" else ""))
+    if cl:      # 车来了翻不完：那份先给，掌上的完整站表跟在后面
+        return f"{cl}\n\n掌上这边完整的站表：\n{out}"
+    return out + ("\n（车来了没扫到这个站，上面是掌上的）" if src == "chelaile" else "")
 
 
 # 「这站哪路车来得最快／等的最少」：站查询要按实时比，不报线路清单
