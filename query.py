@@ -160,6 +160,9 @@ def parse(msg):
             # 「牡丹江21」：城市名＋线号，口语里不带「路」字。整句只有「城市名＋数字」才认，
             # 多一个字就是句子（「玉林2023年GDP」），留给模型，别把年份当线路
             t = re.sub(r"[?？。!！,，\s]+$", "", AT_RE.sub("", msg).strip())
+            # 号后面跟一句问法（「绵阳25首末站」）先把问法剥掉，剩下的才拿来整句比
+            t = re.sub(r"(?:的)?(?:" + ENDS_RE.pattern + "|" + TIMES_RE.pattern + "|"
+                       + PRICE_RE.pattern + r").*$", "", t)
             m = re.fullmatch(r"([\u4e00-\u9fa5]{2,6})(\d{1,4})", t)
             if not m or m.group(1) not in cities():
                 return None
@@ -1267,7 +1270,28 @@ def render_times(city_name, want, msg=""):
     return "\n".join(dict.fromkeys(out)) or None
 
 
+def render_ends(city_name, want):
+    """起讫站。目录里每个方向一条记录，上行下行是反的，按站对去重。"""
+    rows = _catalog(city_name).get("buslines") or []
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
+    seen, out = set(), []
+    for name, row in hit:
+        # 只念上行：下行是反过来的同一条，站名写法还常带方向后缀（「富乐汽车站（仙海大道）」）
+        if str(row.get("upperOrDown") or "") != "1":
+            continue
+        f, t = row.get("from") or "", row.get("to") or ""
+        if not (f and t) or frozenset((f, t)) in seen:
+            continue
+        seen.add(frozenset((f, t)))
+        out.append(f"{name} 首末站：{f} ↔ {t}")
+    if len(out) > 6:                      # 绵阳 25 路那种十几条支线，别刷屏
+        out = out[:6] + [f"…还有 {len(out) - 6} 条支线"]
+    return "\n".join(out) or None
+
+
 PRICE_RE = re.compile(r"票价|多少钱|几块钱?|收费")
+# 「首末站」是公交迷的说法，问的是起讫站，不是首末班时间——「玉林6路的首末站是啥」被答成了实时车
+ENDS_RE = re.compile(r"首末站|起讫站|起点站|终点站|首站|末站|头末站|起终点")
 # 「玉林公交公司电话是多少」「广州巴士集团电话」没有线路号，问的是整座城。
 # 光认「公交公司」会抢闲聊（「司机和公交公司救援」），要带问联系方式的词或者「有哪些」才认
 CITY_CO_RE = re.compile(r"[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运|交通|地铁)[\u4e00-\u9fa5]{0,6}"
@@ -1638,7 +1662,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     last["line"] = wants[0]
     if name:
         for w in wants:
-            if PRICE_RE.search(msg):          # 问票价（掌上把价格写在 103 的 commonts 里）
+            if ENDS_RE.search(msg):           # 问起讫站（「首末站」不是首末班时间）
+                out = render_ends(name, w)
+            elif PRICE_RE.search(msg):        # 问票价（掌上把价格写在 103 的 commonts 里）
                 out = render_price(name, w, msg)
             elif TIMES_RE.search(msg):        # 问首末班时刻表
                 out = render_times(name, w, msg)

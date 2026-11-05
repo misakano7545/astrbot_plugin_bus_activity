@@ -490,6 +490,16 @@ assert not query.CITY_CO_RE.search("我们公司今年业绩咋样")      # 闲�
 assert query.CITY_CO_RE.search("玉林公交公司电话")
 query._post = _cc
 
+# 「首末站」问的是起讫站，不是首末班时间；下行是反过来的同一条，别念两遍
+_ce = query._catalog
+query._catalog = lambda c: {"buslines": [
+    {"lineName": "6路", "upperOrDown": "1", "from": "人民大北路口", "to": "成均镇卫生院"},
+    {"lineName": "6路", "upperOrDown": "2", "from": "成均镇卫生院", "to": "人民大北路口"}]}
+assert query.ENDS_RE.search("玉林6路的首末站是啥")
+assert not query.ENDS_RE.search("玉林6路首末班")
+assert query.render_ends("玉林市", "6") == "6路 首末站：人民大北路口 ↔ 成均镇卫生院"
+query._catalog = _ce
+
 # 群里 @机器人 的三种写法都要先抹掉，否则「@大肥鱼 绵阳25」整句进不了 parse
 assert query.AT_RE.sub("", "@大肥鱼 绵阳25").strip() == "绵阳25"
 assert query.AT_RE.sub("", "[At:E2795AB] 绵阳25").strip() == "绵阳25"
@@ -500,6 +510,7 @@ assert query.AT_RE.sub("", "玉林9路有车吗") == "玉林9路有车吗"   # �
 _cit = query.cities
 query.cities = lambda: {"牡丹江": {"chelaile": "131", "mygolbs": "牡丹江市"}, "玉林": {}}
 assert query.parse("牡丹江21") == ("21", "牡丹江")
+assert query.parse("牡丹江21首末站") == ("21", "牡丹江")   # 号后面跟一句问法也能认
 assert query.parse("[At:123] 牡丹江21？") == ("21", "牡丹江")
 assert query.parse("玉林2023年GDP") is None        # 年份不能被当成 2023 路
 assert query.parse("今天好热") is None
