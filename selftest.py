@@ -832,6 +832,12 @@ assert query.parse("9999x 8123等于多少") is None
 assert query.parse("9999x8123") is None
 assert query.parse("800×600") is None
 assert query.answer("9999x 8123等于多少", "玉林市") == ""   # 别回「没查到 9999X 这条线」
+# 「3D 打印」「5G 网络」：一位数字＋量纲字母不是线号；香港 10M/11D 是两位数的真线号
+for _u in ("3D打印", "4K视频", "5G网络慢", "2K屏", "4G信号差"):
+    assert query.parse(_u) is None, _u
+assert query.parse("10M") == ("10M", "")
+assert query.parse("11D") == ("11D", "")
+assert query.parse("现在用这个免费的hy4，慢的批爆") is None   # 旧版匹成 ('HY4','个免费')
 
 # 站名里带裸县名（「元氏火车站」→ 元氏县 → 石家庄）：别落回默认城玉林交白卷
 _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},

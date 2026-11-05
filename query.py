@@ -159,6 +159,10 @@ def parse(msg):
     if re.search(r"\d\s*[x×*]\s*\d", msg, re.I):
         return None
     m = LINE_RE.search(msg)
+    # 「3D 打印」「5G 网络」「4K 视频」：一位数字＋量纲字母不是线号。
+    # shortcut: 只看一位数，香港 10M/11D/11K 这种两位数线号照样认；哪天真有一位数线号再放宽
+    if m and m.group("alpha") and re.fullmatch(r"[1-9][GDMK]", m.group("alpha")):
+        return None
     if not m:
         # 「香港城巴1」香港人不带「路」字：算子名＋号也算一条线，前缀里留住算子名
         m = re.search(r"(" + "|".join(OPS) + r")\s*(\d{1,4})(?![0-9])", msg)
