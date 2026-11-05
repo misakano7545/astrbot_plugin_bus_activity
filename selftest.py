@@ -1085,6 +1085,10 @@ assert query._plate_core("桂K11860D") == "11860D"
 # 「北流有哪些公交线路」是线路清单，「有哪些公交公司」才是公司清单
 assert query.CITYLINES_RE.search("北流有哪些公交线路") and not query.CITY_CO_RE.search("北流有哪些公交线路")
 assert query.CITY_CO_RE.search("北流有哪些公交公司") and query.CITY_CO_RE.search("玉林公交公司电话是多少")
+# 「玉林市含有几家公交公司」原来落到站名兜底，答成「市含」这个站——问的是公司数，不是站点
+for m in ("玉林市含有几家公交公司", "玉林有几家公交公司", "玉林市公交公司有几家"):
+    assert query.CITY_CO_RE.search(m), m
+assert not query.CITY_CO_RE.search("司机和公交公司救援")
 _oc = query._catalog
 query._catalog = lambda cn: {"buslines": [{"lineName": "北流101路", "to": "西山"},
                                          {"lineName": "北流101路", "to": "北流客运中心"}]}
