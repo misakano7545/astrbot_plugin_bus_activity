@@ -1549,6 +1549,9 @@ def _city_wide(msg, city_name):
     return len(t) < 2
 
 
+CITYLINES_MAX = 40
+
+
 def render_city_lines(city_name):
     """全城线路清单。119 目录一个方向一条记录，按线名合并成「A ↔ B」。"""
     rows = _catalog(city_name).get("buslines") or []
@@ -1559,10 +1562,16 @@ def render_city_lines(city_name):
             ends.setdefault(n, []).append(r.get("to") or "")
     if not ends:
         return None
-    out = [f"{norm_city(city_name)}这边 {len(ends)} 条线路："]
-    for n, ts in ends.items():
-        ts = [t for t in dict.fromkeys(ts) if t]
+    names = list(ends)
+    # 650 条一次发不完，群消息会被平台截断：先列一截，剩下的让他直接报线号
+    more = len(names) > CITYLINES_MAX
+    out = [f"{norm_city(city_name)}这边 {len(ends)} 条线路"
+           + (f"，先列前 {CITYLINES_MAX} 条：" if more else "：")]
+    for n in names[:CITYLINES_MAX]:
+        ts = [t for t in dict.fromkeys(ends[n]) if t]
         out.append(f"{n}：{' ↔ '.join(ts)}" if ts else n)
+    if more:
+        out.append(f"还有 {len(names) - CITYLINES_MAX} 条没列，想看哪条直接报线路号")
     return "\n".join(out)
 
 

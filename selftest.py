@@ -1143,6 +1143,14 @@ assert query.TAIL.sub("", "饮马口站有几条线路") == "饮马口站", quer
 assert query.STOPASK_RE.search("饮马口站有几条线路")
 assert not query._subseq("东简", "吴川东升客运站"), "东简客运站不该匹到吴川东升客运站"
 
+# 整城清单要收口：郑州 650 条只列前 40，末尾说还剩多少
+_cap = query._catalog
+query._catalog = lambda cn: {"buslines": [{"lineName": f"{i}路", "to": f"站{i}"} for i in range(1, 651)]}
+_txt = query.render_city_lines("郑州市").split("\n")
+assert _txt[0] == "郑州这边 650 条线路，先列前 40 条：", _txt[0]
+assert len(_txt) == 42 and _txt[-1] == "还有 610 条没列，想看哪条直接报线路号", _txt[-1]
+query._catalog = _cap
+
 print("selftest ok")
 
 if "--live" in sys.argv:
