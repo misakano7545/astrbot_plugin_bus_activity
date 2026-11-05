@@ -496,6 +496,7 @@ query._catalog = lambda c: {"buslines": [
     {"lineName": "6路", "upperOrDown": "1", "from": "人民大北路口", "to": "成均镇卫生院"},
     {"lineName": "6路", "upperOrDown": "2", "from": "成均镇卫生院", "to": "人民大北路口"}]}
 assert query.ENDS_RE.search("玉林6路的首末站是啥")
+assert query.ENDS_RE.search("玉林6路的起点和终点") and query.ENDS_RE.search("玉林6路起终点")
 assert not query.ENDS_RE.search("玉林6路首末班")
 assert query.render_ends("玉林市", "6") == "6路 首末站：人民大北路口 ↔ 成均镇卫生院"
 query._catalog = _ce

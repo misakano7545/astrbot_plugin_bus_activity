@@ -1291,7 +1291,9 @@ def render_ends(city_name, want):
 
 PRICE_RE = re.compile(r"票价|多少钱|几块钱?|收费")
 # 「首末站」是公交迷的说法，问的是起讫站，不是首末班时间——「玉林6路的首末站是啥」被答成了实时车
-ENDS_RE = re.compile(r"首末站|起讫站|起点站|终点站|首站|末站|头末站|起终点")
+# 「起点和终点」「起终点」也算——「起点站」「终点站」匹不上不带「站」的写法；开头的「起」
+# 保证「到终点站还要多久」这种不可能误中
+ENDS_RE = re.compile(r"首末站|起讫站|起点站|终点站|首站|末站|头末站|起[点]?[和与跟、]?终点")
 # 「玉林公交公司电话是多少」「广州巴士集团电话」没有线路号，问的是整座城。
 # 光认「公交公司」会抢闲聊（「司机和公交公司救援」），要带问联系方式的词或者「有哪些」才认
 CITY_CO_RE = re.compile(r"[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运|交通|地铁)[\u4e00-\u9fa5]{0,6}"
@@ -1662,7 +1664,8 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     last["line"] = wants[0]
     if name:
         for w in wants:
-            if ENDS_RE.search(msg):           # 问起讫站（「首末站」不是首末班时间）
+            # 「到终点站还要多久」问的是时长，不是起讫站
+            if ENDS_RE.search(msg) and not re.search(r"多久|几分钟|几站|多远", msg):
                 out = render_ends(name, w)
             elif PRICE_RE.search(msg):        # 问票价（掌上把价格写在 103 的 commonts 里）
                 out = render_price(name, w, msg)
