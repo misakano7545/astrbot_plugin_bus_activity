@@ -972,11 +972,15 @@ def _msg_line(city_name, msg):
             return n
     # 简称：「大容山专线」少说了「旅游」。字基本都在、比例够、且全城只有一条对得上才认，
     # 认不出来宁可去查站名，也不能硬塞一条别的线
+    # 「现在有玉林北站夜班车吗」：TAIL 收了「现在」，长在最前面会把整句吃空，先砍掉
+    msg = re.sub(r"^(?:现在|目前|当前)有?", "", msg.strip())
     t = norm_line(TAIL.sub("", msg).replace(norm_city(city_name), ""))
     if len(t) < 4:
         return None
+    # 分母也剥掉城名：「玉林北站夜班车」丢的是「定制」，不该因为城名长短被算低
     hit = {n for n in names
-           if len(t) / max(len(norm_line(n)), 1) >= 0.6 and _subseq(t, norm_line(n))}
+           if len(t) / max(len(norm_line(n).replace(norm_city(city_name), "")), 1) >= 0.6
+           and _subseq(t, norm_line(n))}
     return hit.pop() if len(hit) == 1 else None
 
 

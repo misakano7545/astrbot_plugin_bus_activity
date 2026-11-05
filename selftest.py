@@ -815,6 +815,8 @@ _s4 = query.render_sweep("玉林市", False, ["G01路", "玉林北站定制夜�
 assert "玉林北站定制夜班车 1 辆" in _s4 and "G01路 没车报位置" in _s4, _s4
 assert query._msg_line("玉林市", "那玉林北站定制夜班车呢？") == "玉林北站定制夜班车"
 assert query._msg_line("玉林市", "玉林北站有哪几条公交线？") is None
+# 「现在有玉林北站夜班车吗」：少说了「定制」，且「现在」在句首——以前被 TAIL 吃空，回成反问
+assert query._msg_line("玉林市", "现在有玉林北站夜班车吗？") == "玉林北站定制夜班车"
 query._catalog, query._live_my = _cat4, _lm4
 
 # 重庆「0492」是夜班线，和白天线的「492路」是两条线：带前导零的四位号不加「路」也认
