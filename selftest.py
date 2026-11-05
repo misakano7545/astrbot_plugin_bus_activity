@@ -405,6 +405,9 @@ for _m in ("我在玉林火车站等9路", "玉林火车站9路还有几站", "�
     assert "玉林火车站" in list(query._cands("玉林市", _m)), _m
 # 「g02离玉林北站最近的公车要多久」：站名在号后面但隔个「离」，别退化成整条线清单
 assert "玉林北站" in list(query._cands("玉林市", "g02离玉林北站最近点的公车要多久"))
+# 「在市政广场要等多久等到17路」：站名和号中间夹着问法，站名不能被「等到」切没
+assert query.parse("在市政广场要等多久等到17路") == ("17", "市政广场")
+assert "市政广场" in list(query._cands("玉林市", "在市政广场要等多久等到17路"))
 # 群里贴的脚本不是公交问题：`x0 = iroot(n, d)` 里的 x0 被当线路号，回过「没查到「X0」这条线」
 _CODE = "import math\ndef iroot(n, k):\n    x0 = k\n    return x0\n"
 assert query.CODE_RE.search(_CODE) and not query.looks_like_ask(_CODE)

@@ -77,6 +77,8 @@ LINE_RE = re.compile(
     r"|(?P<cnnum>[一二三四五六七八九十]{1,3})\s*路"
 )
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
+# 「在市政广场要等多久等到17路」：问法黏在线号前面，先从句尾剥掉，剩下的才是站名
+ASKPAST = re.compile(r"(?:还要|要|想)?\s*等?\s*(?:多久|多长时间|几分钟|几站)?\s*(?:才[能会]?)?\s*(?:等到|等|到)?$")
 # 「八路」「十路」「二十三路」：口语报线路号不带阿拉伯数字
 CN_DIGIT = {c: i for i, c in enumerate("零一二三四五六七八九", 0)}
 
@@ -190,7 +192,7 @@ def parse(msg):
     # 「环山二号线」的线名自己就带汉字前缀，别再把它当县名重复拼一次
     # 先剥掉整段的动词再取尾巴：PREFIX_RE 只吃 4 个字，「帮我查一下东胜区」窗口里会剩
     # 「下东胜区」这种半截词，当成站名/线名前缀去查就成了一条不存在的线
-    head = JUNK_HEAD.sub("", msg[: m.start()])
+    head = LEAD.sub("", ASKPAST.sub("", JUNK_HEAD.sub("", msg[: m.start()])))
     pre = "" if m.group("numline") else PREFIX_RE.search(head)
     num = (m.group("inum") + m.group("iqual")) if m.group("inum") else \
         (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
@@ -912,7 +914,12 @@ def _cands(city_name, msg):
             # 「G02到高新产业园」「11路还有多久到双溪口」：线路号后面那个才是站，先切再砍
             # 「g02离玉林北站最近的公车要多久」也得认，离 也当前后景分隔
             # shortcut: 站名本身带「离」（山西离石）会被切坏，遇到了再收窄
-            cand = re.split(r"到|去|往|在|经停|离", cand)[-1]
+            cut = re.split(r"到|去|往|在|经停|离", cand)[-1]
+            if not re.sub(r"[A-Za-z]?\d{1,4}\s*[路线]", "", cut).strip():
+                # 「在市政广场要等多久等到17路」：站名在线号前面，中间还夹着问法，
+                # 光按「到」切会把站名切没——从号前面那截取，先把问法剥掉
+                cut = ASKPAST.sub("", re.sub(r"[A-Za-z]?\d{1,4}\s*[路线].*$", "", cand))
+            cand = cut
         # 站名在线路号前面（「我在玉林火车站等9路」「玉林火车站9路还有几站」）时号后面没站名，
         # 得把号本身刮掉再当站名试
         # shortcut: 不认站名里带阿拉伯数字的（「3号门」），遇到了再收窄
@@ -1298,9 +1305,14 @@ def render_at(city_key, city_name, want, msg):
             if not g or g[0] != d:
                 continue
         lab = row.get("to") or ""
-        eta = _etas(_live_my(city_name, line_name, d, idx))
+        pay = _live_my(city_name, line_name, d, idx)
+        eta = _etas(pay)
         if not eta:
-            dead.append(lab)
+            # 上游对没车的方向会给「非运营时间」这类说法（G02 晚上 19:30 就这样），
+            # 「没有车」和「不在运营时间」是两回事，站台上等的人要的是后者
+            tip = next((r.get("busToStationTips") for r in pay.get("routeOnStationRTimeInfoList") or []
+                        if r.get("busToStationTips")), "")
+            dead.append((lab, tip))
             got.setdefault(lab, None)     # 方向还在，只是这会儿没车报过来
             continue
         mins, left, plate = eta
@@ -1314,8 +1326,10 @@ def render_at(city_key, city_name, want, msg):
     if not live:
         # 这条线确实过我这一站、但两个方向这会儿都没有车往这儿开（刚过站 / 还没发车）。
         # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
-        return (f"{line_name} 这会儿没有开往{station_name}的车"
-                f"（往{'、'.join(dict.fromkeys(dead))}方向都没有）")
+        tip = next((t for _, t in dead if t), "")
+        dirs = "、".join(dict.fromkeys(k for k, _ in dead))
+        return (f"{line_name} 这会儿{tip}（往{dirs}方向都没有车）" if tip else
+                f"{line_name} 这会儿没有开往{station_name}的车（往{dirs}方向都没有）")
 
     # 「N 路离 X 站大约几分钟」：站在站台的人要的是这一句，别念「往X：桂K… 约 18:10 到」
     def one(lab, v):
@@ -1324,7 +1338,8 @@ def render_at(city_key, city_name, want, msg):
     if len(got) == 1:                     # 只有一个方向过这站（或点了方向），不用念方向名
         return f"{line_name} 离{station_name} " + one("", live[list(live)[0]])
     # 中途站两个方向都要报：只报一边会被当成哪边都能坐；哪个方向没车也如实说
-    parts = [one(k, v) for k, v in live.items()] + [f"往{k} 这会儿没有到站时间" for k in dead]
+    parts = [one(k, v) for k, v in live.items()] + [f"往{k} {t or '这会儿没有到站时间'}"
+                                                    for k, t in dead]
     return f"{line_name} 离{station_name}：" + "；".join(parts)
 
 
