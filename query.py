@@ -908,6 +908,11 @@ def _bus_row(rows):
     return next((r for r in rows if "地铁" not in (r.get("stationName") or "")), rows[0])
 
 
+# 站名从长到短试时，砍掉的尾巴只能是这类通用字（「饮马口站」→「饮马口」）；
+# 「北流汽车新城」砍掉「新城」匹上「北流汽车总站」，那是另一个站
+STOP_TRIM_OK = re.compile(r"[公交汽车火车客运总站台路口地铁]+")
+
+
 def find_stop(city_name, raw):
     """站名从长到短试，命中即止——用户嘴里不会带括号后缀，得让平台的站名去对。
 
@@ -918,6 +923,8 @@ def find_stop(city_name, raw):
         if len(raw) >= n:
             # 「石家庄131区间有没有车」退到 3 字就是城市名本身，会把「石家庄站」搜出来
             # 城市名后面只剩数字/字母的也不是站名：「北京345快」退到「北京3」会匹到「北京三十九中学」
+            if raw[n:] and not STOP_TRIM_OK.fullmatch(raw[n:]):
+                continue
             tail = raw[:n].replace(norm_city(city_name), "", 1)
             if norm_city(raw[:n]) == norm_city(city_name) or (
                     tail != raw[:n] and not re.search(r"[\u4e00-\u9fa5]", tail)):

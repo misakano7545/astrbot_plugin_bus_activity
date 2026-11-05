@@ -1151,6 +1151,10 @@ assert _txt[0] == "郑州这边 650 条线路，先列前 40 条：", _txt[0]
 assert len(_txt) == 42 and _txt[-1] == "还有 610 条没列，想看哪条直接报线路号", _txt[-1]
 query._catalog = _cap
 
+# 「北流汽车新城」不能砍掉「新城」匹上「北流汽车总站」：砍尾巴只许砍通用字
+assert query.STOP_TRIM_OK.fullmatch("站"), "「饮马口站」这种尾巴要放行"
+assert not query.STOP_TRIM_OK.fullmatch("新城"), "「汽车新城」的「新城」不是通用字"
+
 print("selftest ok")
 
 if "--live" in sys.argv:
