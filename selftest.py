@@ -1256,6 +1256,18 @@ assert query._full_stop("玉林市", {"stationName": "市一职校（玉林技�
                                  "relatedRoutes": ["城际线"]})["relatedRoutes"] == ["G01路", "城际线"]
 query.stops = _s8
 
+# 「麻章车站」问多少条线路：隔壁站牌「麻章汽车站」不算（「麻章」二字也够 0.8 相似度），
+# 短候选「麻章」更不能把「麻章一中」这类站带进来
+_c9c, _c9l, _c9s = query.cities, query.chelaile.lines, query.chelaile.stations
+query.cities = lambda: {"湛江": {"mygolbs": "湛江市", "chelaile": "157"}}
+query.chelaile.lines = lambda cid: [("6", "S"), ("52", "T"), ("太平-麻章A线", "U")]
+query.chelaile.stations = lambda cid, lid: {"S": ["海洋大学", "麻章车站"], "T": ["湛江北站", "麻章车站"],
+                                            "U": ["太平客运站", "麻章汽车站"]}[lid]
+query._cache.clear()          # 上面文化中心那块的 catalog-cl 157 还挂在缓存里
+_c9o = query._stop_chelaile("湛江市", "用车来了查湛江麻章车站有多少条公交线路")
+assert "2 条线路" in _c9o and "6 " in _c9o and "52 " in _c9o and "太平" not in _c9o, _c9o
+query.cities, query.chelaile.lines, query.chelaile.stations = _c9c, _c9l, _c9s
+
 print("selftest ok")
 if "--live" in sys.argv:
     import importlib

@@ -842,7 +842,7 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?线路|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?(?:公交车|公交|巴士|公车)?(?:线路|线)|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -1792,7 +1792,11 @@ def _stop_chelaile(city_name, msg):
         rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
     except Exception:
         return ""
-    wants = [norm_city(x) for x in _cands(city_name, msg)]
+    # 城市名已经在外面：「湛江麻章车站」和「麻章车站」是同一个站；「麻章」这种更短的候选
+    # 会把「麻章汽车站」「麻章一中」全带出来，只留最长的那个
+    ws = [re.sub(rf"^{re.escape(norm_city(city_name))}", "", norm_city(x))
+          for x in _cands(city_name, msg)]
+    wants = [w for w in dict.fromkeys(ws) if w and not any(w != o and w in o for o in ws)]
 
     def one(row):
         n, lid = row
@@ -1801,9 +1805,12 @@ def _stop_chelaile(city_name, msg):
                          lambda lid=lid: chelaile.stations(cid, lid))
         except Exception:
             return None
-        # 两家站名不完全一样（「广西医科大玉林校区」↔「医科大学玉林校区」），得模糊匹
+        # 两家站名不完全一样（「广西医科大玉林校区」↔「医科大学玉林校区」），得模糊匹；
+        # 但 4 字以内的短站名只认包含关系：「麻章车站」和「麻章汽车站」差一个字也算 0.89，
+        # 那是隔壁站牌，太平-麻章A线就这么混进了麻章车站的线路表
         hit = next((s for s in sn
-                    if any(w in norm_city(s) or difflib.SequenceMatcher(None, w, norm_city(s)).ratio() >= 0.8
+                    if any(w in norm_city(s)
+                           or (len(w) >= 5 and difflib.SequenceMatcher(None, w, norm_city(s)).ratio() >= 0.8)
                            for w in wants)), None)
         return (n, hit, sn[0], sn[-1]) if hit and sn else None
 
