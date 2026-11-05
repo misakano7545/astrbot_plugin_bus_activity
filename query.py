@@ -202,8 +202,16 @@ def parse(msg):
     return norm_line(num), _snap(pre)
 
 
+# 群友把脚本贴进来时别当公交查：`x0 = iroot(n, d)` 里的 x0 被 ALPHA_PAT 认成线路号，
+# 回一句「没查到「X0」这条线，南宁这边有的是 20路…」，还被群里人当笑话
+CODE_RE = re.compile(r"def\s+\w+\s*\(|import\s+\w+|return\s|print\(|range\(|lambda\s|\*\*|```|"
+                     r"while\s+\w|for\s+\w+\s+in\s|#include|console\.log|function\s*\(")
+
+
 def looks_like_ask(msg):
     """这句像在问公交吗。快路命中线路号后先用它过一道，别把闲聊抢走。"""
+    if CODE_RE.search(msg):          # 代码里的标识符不是线号
+        return False
     return bool(ASK.search(msg)) or not CHAT.search(msg)
 
 
@@ -2012,6 +2020,8 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
 
 def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
+    if CODE_RE.search(msg):      # 群里贴的脚本不查公交，交给模型
+        return ""
     last = _last(key)
     t0 = time.time()
     msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
