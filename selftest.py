@@ -1043,6 +1043,15 @@ assert query.render_at("玉林", "玉林市", "9", "十字街") == \
 query._etas = lambda p: (7.0, 2, "桂K1") if p["n"] == "1" else None
 assert query.render_at("玉林", "玉林市", "9", "十字街") == \
     "9路 离十字街：往甲 大约 7 分钟（桂K1，还有 2 站）；往乙 这会儿没有到站时间"
+# 上游点明「非运营时间」时要带上首末班，光说没有车等于没答
+query._etas = lambda p: None
+query._live_my = lambda cn, ln, d, i=1: {
+    "routeOnStationRTimeInfoList": [{"busNumber": "", "busToStationCount": -1, "busToStationTips": "非运营时间"}]}
+_f, _fl = query._first_last, query._first_last
+query._first_last = lambda cn, ln, d: ("20:35", "22:55")
+assert query.render_at("玉林", "玉林市", "9", "十字街") == \
+    "9路 这会儿非运营时间（往甲、乙方向都没有车），首班 20:35 末班 22:55"
+query._first_last = _fl
 query.pick_stop, query._catalog, query._station_seq, query._live_my, query._etas = _p, _c2, _s, _l, _e
 
 print("selftest ok")

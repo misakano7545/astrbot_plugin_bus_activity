@@ -1316,7 +1316,9 @@ def render_at(city_key, city_name, want, msg):
             # 「没有车」和「不在运营时间」是两回事，站台上等的人要的是后者
             tip = next((r.get("busToStationTips") for r in pay.get("routeOnStationRTimeInfoList") or []
                         if r.get("busToStationTips")), "")
-            dead.append((lab, tip))
+            # 说「非运营时间」还不够：站台上的人要知道几点再来。只在点了非运营时间时多问一次
+            f, l = _first_last(city_name, line_name, d) if tip else ("", "")
+            dead.append((lab, tip, f, l))
             got.setdefault(lab, None)     # 方向还在，只是这会儿没车报过来
             continue
         mins, left, plate = eta
@@ -1330,10 +1332,13 @@ def render_at(city_key, city_name, want, msg):
     if not live:
         # 这条线确实过我这一站、但两个方向这会儿都没有车往这儿开（刚过站 / 还没发车）。
         # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
-        tip = next((t for _, t in dead if t), "")
-        dirs = "、".join(dict.fromkeys(k for k, _ in dead))
-        return (f"{line_name} 这会儿{tip}（往{dirs}方向都没有车）" if tip else
-                f"{line_name} 这会儿没有开往{station_name}的车（往{dirs}方向都没有）")
+        tip = next((t for _, t, _, _ in dead if t), "")
+        dirs = "、".join(dict.fromkeys(k for k, _, _, _ in dead))
+        if not tip:
+            return f"{line_name} 这会儿没有开往{station_name}的车（往{dirs}方向都没有）"
+        f, l = next(((x, y) for _, _, x, y in dead if x or y), ("", ""))
+        win = f"，首班 {f or '?'} 末班 {l or '?'}" if f or l else ""
+        return f"{line_name} 这会儿{tip}（往{dirs}方向都没有车）{win}"
 
     # 「N 路离 X 站大约几分钟」：站在站台的人要的是这一句，别念「往X：桂K… 约 18:10 到」
     def one(lab, v):
@@ -1342,8 +1347,9 @@ def render_at(city_key, city_name, want, msg):
     if len(got) == 1:                     # 只有一个方向过这站（或点了方向），不用念方向名
         return f"{line_name} 离{station_name} " + one("", live[list(live)[0]])
     # 中途站两个方向都要报：只报一边会被当成哪边都能坐；哪个方向没车也如实说
-    parts = [one(k, v) for k, v in live.items()] + [f"往{k} {t or '这会儿没有到站时间'}"
-                                                    for k, t in dead]
+    parts = [one(k, v) for k, v in live.items()] + [
+        f"往{k} {t or '这会儿没有到站时间'}" + (f"（首班 {x or '?'} 末班 {y or '?'}）" if x or y else "")
+        for k, t, x, y in dead]
     return f"{line_name} 离{station_name}：" + "；".join(parts)
 
 
