@@ -1357,8 +1357,28 @@ ENDS_RE = re.compile(r"首末站|起讫站|起点站|终点站|首站|末站|头
 # 光认「公交公司」会抢闲聊（「司机和公交公司救援」），要带问联系方式的词或者「有哪些」才认
 CITY_CO_RE = re.compile(r"[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运|交通|地铁)[\u4e00-\u9fa5]{0,6}"
                         r"(?:电话|热线|客服|投诉)"
-                        r"|(?:有哪些|哪几家|几家公司)[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运)")
+                        r"|(?:有哪些|哪几家|几家公司)[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运)公司")
 # 「往X方向」在 render_price 里也得认，跟 render_times 一个口径
+
+
+CITYLINES_RE = re.compile(r"(?:有哪些|哪些|几条|多少条|所有|全部)[\u4e00-\u9fa5]{0,4}(?:线路|公交线|公交(?!公司))")
+
+
+def render_city_lines(city_name):
+    """全城线路清单。119 目录一个方向一条记录，按线名合并成「A ↔ B」。"""
+    rows = _catalog(city_name).get("buslines") or []
+    ends = {}
+    for r in rows:
+        n = r.get("lineName")
+        if n:
+            ends.setdefault(n, []).append(r.get("to") or "")
+    if not ends:
+        return None
+    out = [f"{norm_city(city_name)}这边 {len(ends)} 条线路："]
+    for n, ts in ends.items():
+        ts = [t for t in dict.fromkeys(ts) if t]
+        out.append(f"{n}：{' ↔ '.join(ts)}" if ts else n)
+    return "\n".join(out)
 
 
 def render_price(city_name, want, msg=""):
@@ -1980,6 +2000,13 @@ def answer(msg, default_city, ctx="", key=""):
     name = (cities().get(city_key) or {}).get("mygolbs") or (prefix if city_key not in cities() else None)
     prev = last.get("city")
     last["city"] = city_key
+    # 「北流有哪些公交线路」问的是线路清单，别被下面的 CITY_CO_RE 抢成公司清单。
+    # 「伦教街道办事处公交线路」问的是那个地方的站，只有明写了城市名（北流/玉林）才算整城
+    if not line and name and not re.search(r"在跑|运营|还有", msg) and (
+            CITYLINES_RE.search(msg) or (explicit and "公交线路" in msg)):
+        out = render_city_lines(name)
+        if out:
+            return out
     # 「玉林公交公司电话是多少」：没带线路号，问的是整座城的公司，别回空交给模型（它会编）
     if not line and CITY_CO_RE.search(msg):
         out = render_city_company(name, msg)

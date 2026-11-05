@@ -994,6 +994,14 @@ assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1), ("28路", 2)
 assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1)], "大容山旅游专")] == ["大容山旅游专线（28路）"]
 
 assert query.STOPS_RE.search("玉林9路站点") and not query.STOPS_RE.search("9路现在到哪个站点了")
+# 「北流有哪些公交线路」是线路清单，「有哪些公交公司」才是公司清单
+assert query.CITYLINES_RE.search("北流有哪些公交线路") and not query.CITY_CO_RE.search("北流有哪些公交线路")
+assert query.CITY_CO_RE.search("北流有哪些公交公司") and query.CITY_CO_RE.search("玉林公交公司电话是多少")
+_oc = query._catalog
+query._catalog = lambda cn: {"buslines": [{"lineName": "北流101路", "to": "西山"},
+                                         {"lineName": "北流101路", "to": "北流客运中心"}]}
+assert query.render_city_lines("北流市") == "北流这边 1 条线路：\n北流101路：西山 ↔ 北流客运中心"
+query._catalog = _oc
 
 print("selftest ok")
 
