@@ -9,9 +9,6 @@ import html
 import json
 import re
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
