@@ -959,6 +959,11 @@ def find_stop(city_name, raw):
     底线是 2 字（「丰州」这种站牌本名就这么短），但整段跟城市名同字的首字
     会被下面那句挡掉，所以「南宁机场」不会退成「南宁」搜出「南宁孔庙」。
     """
+    # 平台有的站带「市」有的不带：「市体育中心」站牌上叫「体育中心」
+    if raw[:1] in "市县区" and len(raw) > 3:
+        rows = [r for r in stops(city_name, raw[1:]) or [] if r.get("stationName")]
+        if rows:
+            return _merge_same(rows, _bus_row(rows)), raw[1:]
     for n in (8, 6, 5, 4, 3, 2):
         if len(raw) >= n:
             # 「石家庄131区间有没有车」退到 3 字就是城市名本身，会把「石家庄站」搜出来
@@ -1027,6 +1032,8 @@ def hop(msg):
         if not m or LINE_RE.search(m.group(1)):
             return None
     a = LEAD.sub("", m.group(1).lstrip("从"))   # 「我在十字街咋去火车站」
+    # 「从市体育中心坐到玉林北站」：HOP_RE 按「到」切，动词「坐」粘在出发站后面
+    a = re.sub(r"[坐走骑乘搭]$", "", a)
     # 「石家庄从谈固到…」：城名和「从」一起粘在出发站前面，剥掉；只认这个形状，
     # 「广州公园前」里的城名是站名的一部分（要不要跨城，交给后面认城市）
     for ck in cities():
@@ -1237,9 +1244,11 @@ def render_plan(city_name, a, b):
     shortcut: 只取前 2 个方案，群消息再长没人看；坐标留空，按站名查就够
     """
     info = _ask111(city_name, a, b)
+    # 起点站牌名和用户写法对不上时上游会自己换成附近站（「市体育中心」→「文体人民路口」），
+    # 那种一条线直达的方案不能交回 render_hop——那条线根本不从用户说的站发车
+    ra = (find_stop(city_name, a)[0] or {}).get("stationName")
     if not info:
         # 群里说的是「玉林汽车总站」，平台站牌就写「汽车总站」——名字对不上上游排不出方案
-        ra = (find_stop(city_name, a)[0] or {}).get("stationName")
         rb = (find_stop(city_name, b)[0] or {}).get("stationName")
         if ra or rb:
             info = _ask111(city_name, ra or a, rb or b)
@@ -1247,14 +1256,17 @@ def render_plan(city_name, a, b):
     for k, p in enumerate(info[:2]):
         legs = [lg for key in ("routeUpDownSimple1", "routeUpDownSimple2", "routeUpDownSimple3")
                 for lg in (p.get(key) or []) if lg.get("routeName")]
-        if k == 0 and len(legs) < 2:
+        if k == 0 and len(legs) < 2 and (legs[0].get("upStationName") or "") in (a, ra):
             return ""       # 能直达就让 render_hop 答——它带车在哪、首末班，这里排不出这些
         ride = ""
         for leg in legs:
             nm = leg["routeName"]
             if nm in ride:
                 continue
-            ride += f"，到{leg.get('upStationName')}换 {nm}" if ride else f"坐 {nm}"
+            up = leg.get("upStationName") or ""
+            # 第一条腿不从用户说的站发车（上游换成了附近站），得说清去哪上车
+            ride += (f"，到{up}换 {nm}" if ride else
+                     f"到{up}坐 {nm}" if up and up not in (a, ra) else f"坐 {nm}")
         if not ride:
             continue
         bits = [x for x in (p.get("stationNum"),
@@ -2477,7 +2489,9 @@ def answer(msg, default_city, ctx="", key=""):
     if got and name:
         # 有一边不是这座城的站（render_hop 的空串）：问一句，别返空让模型干等着没话说
         if explicit:
-            return f"没查到从「{got[0]}」到「{got[1]}」的换乘方案：{norm_city(name)}站表里没有这两个站"
+            miss = [x for x in (got[0], got[1]) if not find_stop(name, x)[0]]
+            return (f"没查到从「{got[0]}」到「{got[1]}」的换乘方案："
+                    f"{norm_city(name)}站表里没找到" + "、".join(f"「{m}」" for m in miss or got))
         return (f"「{got[0]}」到「{got[1]}」在{norm_city(name)}的站表里没找全，"
                     f"是哪座城的？说个城市名我再查")
     # 「那玉林北站定制夜班车呢？」线名不是数字+路，parse 认不出；目录里有就当场认。

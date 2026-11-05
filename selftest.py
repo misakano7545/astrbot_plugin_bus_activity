@@ -1268,6 +1268,19 @@ _c9o = query._stop_chelaile("湛江市", "用车来了查湛江麻章车站有�
 assert "2 条线路" in _c9o and "6 " in _c9o and "52 " in _c9o and "太平" not in _c9o, _c9o
 query.cities, query.chelaile.lines, query.chelaile.stations = _c9c, _c9l, _c9s
 
+# 「从市体育中心坐到玉林北站」：动词粘在站名后面，站牌上还少个「市」；
+# 上游会把起点换成附近的「文体人民路口」，这种一条腿的方案不能交回 render_hop
+assert query.hop("从市体育中心坐到玉林北站坐哪条公交线路呢") == ("市体育中心", "玉林北站")
+_p9s, query.stops = query.stops, lambda cn, kw: [{"stationName": "体育中心", "relatedRoutes": ["7路"],
+                                                 "lat": "22.6", "lng": "110.1"}] if kw == "体育中心" else []
+assert (query.find_stop("玉林市", "市体育中心")[0] or {}).get("stationName") == "体育中心"
+query.stops = _p9s
+_p9a, query._ask111 = query._ask111, lambda cn, a, b: [{
+    "stationNum": "15站", "routeUpDownSimple1": [
+        {"routeName": "G01路", "upStationName": "文体人民路口"}]}]
+assert "文体人民路口" in query.render_plan("玉林市", "市体育中心", "玉林北站")
+query._ask111 = _p9a
+
 print("selftest ok")
 if "--live" in sys.argv:
     import importlib
