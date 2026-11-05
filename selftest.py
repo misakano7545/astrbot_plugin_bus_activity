@@ -953,6 +953,17 @@ assert query.parse("柳州快9区间") == ("快9区间", "柳州")
 assert query.parse("快乐1天") is None           # 「快」前面不是城市名就不认
 query.cities = _cs
 
+# 「大容山专线」是目录名「大容山旅游专线（28路）」的简称：少说一个字也要认，别退去查站名
+_oc = query._catalog
+query._catalog = lambda n: {"buslines": [
+    {"lineName": "大容山旅游专线（28路）", "upperOrDown": "1", "to": "大容山景区"},
+    {"lineName": "大容山旅游专线（28路）", "upperOrDown": "2", "to": "玉林火车站"},
+    {"lineName": "9路", "upperOrDown": "1", "to": "汽车总站"}]}
+assert query._msg_line("玉林市", "玉林大容山专线") == "大容山旅游专线（28路）"
+assert query._msg_line("玉林市", "大容山旅游专线") == "大容山旅游专线（28路）"
+assert query._msg_line("玉林市", "大容山好远") is None      # 字不全，别硬塞一条线
+query._catalog = _oc
+
 print("selftest ok")
 
 if "--live" in sys.argv:

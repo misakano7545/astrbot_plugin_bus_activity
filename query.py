@@ -930,13 +930,26 @@ def _stop_lines(city_name, text):
     return name, [n for _, rs in _same_rows(rows, row) for n in rs]
 
 
+def _subseq(short, long):
+    """short 的每个字都能在 long 里按顺序找到（「大容山专」⊂「大容山旅游专」）。"""
+    it = iter(long)
+    return all(c in it for c in short)
+
+
 def _msg_line(city_name, msg):
     """句子里点名的真线名不是「数字+路」（「玉林北站定制夜班车」）：按目录认。"""
-    for r in _catalog(city_name).get("buslines") or []:
-        n = r.get("lineName") or ""
+    names = [r.get("lineName") or "" for r in _catalog(city_name).get("buslines") or []]
+    for n in names:
         if len(n) >= 4 and n in msg:
             return n
-    return None
+    # 简称：「大容山专线」少说了「旅游」。字基本都在、比例够、且全城只有一条对得上才认，
+    # 认不出来宁可去查站名，也不能硬塞一条别的线
+    t = norm_line(TAIL.sub("", msg).replace(norm_city(city_name), ""))
+    if len(t) < 4:
+        return None
+    hit = {n for n in names
+           if len(t) / max(len(norm_line(n)), 1) >= 0.6 and _subseq(t, norm_line(n))}
+    return hit.pop() if len(hit) == 1 else None
 
 
 def _dest_after(city_name, msg, stop):
@@ -1940,7 +1953,8 @@ def answer(msg, default_city, ctx="", key=""):
     if not line and name:
         hit = _msg_line(name, msg)
         if hit:
-            line, prefix = (hit, ""), ""
+            # _pick 拿归一化名做全等比，原始线名（带「（28路）」）一个都匹不上
+            line, prefix = (norm_line(hit), ""), ""
     if name and TRANSFER_RE.search(msg):
         # 「这条线路每站能换什么」没有线路号，用上一条答过的线路
         want = (prefix + line[0] if prefix and not explicit else line[0]) if line else last.get("line") or ""
