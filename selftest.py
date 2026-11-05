@@ -1210,6 +1210,18 @@ assert _seen["ck"] == "湛江", "纯文字线名该沿用上一条问过的城"
 query.LAST.pop("t_fu", None)
 query.cities, query._msg_line, query._one = _c4, _ml4, _o4
 
+# 车来了站名只在那边有（湛江文化中心，掌上 551 个站名里没有）：目录 120 个方向，
+# 写死扫前 60 条会漏——8 路在第 88 位
+_c5c, _c5l, _c5s = query.cities, query.chelaile.lines, query.chelaile.stations
+query.cities = lambda: {"湛江": {"mygolbs": "湛江市", "chelaile": "157"}}
+query.chelaile.lines = lambda cid: [(str(i), f"L{i}") for i in range(1, 90)] + [("8", "A"), ("8", "B")]
+query.chelaile.stations = lambda cid, lid: (["寸金公交站", "湛江文化中心", "四航局"] if lid in ("A", "B")
+                                            else ["甲站", "乙站"])
+_c5o = query._stop_chelaile("湛江市", "湛江文化中心")
+assert "8 寸金公交站 ↔ 四航局" in _c5o, _c5o
+assert "1 条线路" in _c5o and "只扫了前" not in _c5o
+query.cities, query.chelaile.lines, query.chelaile.stations = _c5c, _c5l, _c5s
+
 print("selftest ok")
 
 if "--live" in sys.argv:

@@ -1754,8 +1754,6 @@ def _stop_chelaile(city_name, msg):
         rows = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))
     except Exception:
         return ""
-    note = f"（扫了 {min(len(rows), SWEEP_MAX)} 条线路）" if len(rows) > SWEEP_MAX else ""
-
     wants = [norm_city(x) for x in _cands(city_name, msg)]
 
     def one(row):
@@ -1769,17 +1767,30 @@ def _stop_chelaile(city_name, msg):
         hit = next((s for s in sn
                     if any(w in norm_city(s) or difflib.SequenceMatcher(None, w, norm_city(s)).ratio() >= 0.8
                            for w in wants)), None)
-        return (n, hit) if hit else None
+        return (n, hit, sn[0], sn[-1]) if hit and sn else None
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        got = [g for g in pool.map(one, rows[:SWEEP_MAX]) if g]
+    # 按目录顺序整目录扫：写死扫前 60 条会漏（湛江 8 路在第 88 位）；
+    # 大目录按秒数收口，扫了多少就报多少
+    got, done, t0 = [], 0, time.time()
+    pool = ThreadPoolExecutor(max_workers=8)
+    try:
+        for i in range(0, len(rows), 40):
+            chunk = rows[i:i + 40]
+            got += [g for g in pool.map(one, chunk) if g]
+            done += len(chunk)
+            if time.time() - t0 > STOP_SWEEP_SECONDS:
+                break
+    finally:
+        pool.shutdown(wait=False)
     if not got:
         return ""
-    names = []
-    for n, _ in got:
-        if norm_line(n) not in [norm_line(x) for x in names]:
-            names.append(n)
-    return f"{got[0][1]} 车来了这边有 {len(names)} 条线路{note}：" + "".join(f"\n{i}" for i in names)
+    items, seen = [], set()
+    for n, _, a, b in got:
+        if norm_line(n) not in seen:      # 两个方向算一条线
+            seen.add(norm_line(n))
+            items.append(f"{n} {a} ↔ {b}" if a and b else n)
+    note = f"（只扫了前 {done} 条，全城 {len(rows)} 条方向）" if done < len(rows) else ""
+    return f"{got[0][1]} 车来了这边有 {len(items)} 条线路{note}：" + "".join(f"\n{i}" for i in items)
 
 
 def render_stop_best(city_name, name, routes):
@@ -1825,7 +1836,8 @@ def render_stop(city_key, city_name, msg, src=None):
             return out
     name = pick_stop(city_name, msg)
     if not name:
-        return None
+        # 站名只在车来了那边有（湛江文化中心：掌上 551 个站名里没有），别直接说没查到
+        return _stop_chelaile(city_name, msg) or None
     # 再搜一次站名会撞上同名地铁站（「芳村」和「芳村（地铁站）」），按站名精确挑
     # 拿用户写的那个词再搜一遍：pick_stop 只回一个站牌名（「新街口西」），拿它搜就只剩那一个
     # 站台，新街口北/东/·正洪街全丢了；stops 有缓存，这一遍不再发请求
@@ -1844,7 +1856,7 @@ def render_stop(city_key, city_name, msg, src=None):
     for alias in re.findall(r"[（(]([^）)]+)[）)]", name):
         rows_ = rows_ + (stops(city_name, alias) or [])
     if not rows_:
-        return None
+        return _stop_chelaile(city_name, msg) or None
     row = next((r for r in rows_ if r.get("stationName") == name), rows_[0])
     # 「新街口」在平台上拆成东/西/南/北四个站牌：问的是一整片，只报被挑中的那一角等于漏答
     gb = re.sub(r"[东南西北中]$", "", name)
@@ -1911,6 +1923,7 @@ STOPASK_RE = re.compile(r"(?:有哪些|有没有|有什么|有几条?|有多少�
 # 「南宁今晚还有没有公交」问的是这会儿有没有车，不是某个地方——留给 SWEEP_RE
 _NOTPLACE = re.compile(r"今晚|今天|现在|目前|几点|多久|什么时候|在跑|运营|还有")
 SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让用户点名，别硬扫
+STOP_SWEEP_SECONDS = 20  # 车来了没站点搜索只能逐线扫；大目录按秒数收口
 # 按车牌查只能逐线翻 104（两家都没这个接口）：一个城扫到此为止，再多群里等不起
 PLATE_MAX = 2600      # 深圳 2310 个方向，够了；北京 3477 / 上海 3262 仍只扫前 2600
 PLATE_TTL = 60
