@@ -1507,6 +1507,41 @@ def _stop_chelaile(city_name, msg):
     return f"{got[0][1]} 车来了这边有 {len(names)} 条线路{note}：" + "".join(f"\n{i}" for i in names)
 
 
+def render_stop_best(city_name, name, routes):
+    """「X 站哪辆车来得最快」：每条经停线每个方向问该站的到站预测（STATIONORDER），比分钟数。
+    没有预测的线路单独点名，不能当成「没车」——末班车、刚发车都会空。"""
+    to = {}
+    for r in _catalog(city_name).get("buslines") or []:
+        to[(r.get("lineName"), str(r.get("upperOrDown")))] = r.get("to") or ""
+    hits, blank = [], []
+    for ln in routes:
+        for d in ("1", "2"):
+            seq = _station_seq(city_name, ln, d)
+            i = next((k + 1 for k, s in enumerate(seq)
+                      if (s.get("stationName") or "") == name), None)
+            if not i:
+                continue
+            eta = _etas(_live_my(city_name, ln, d, i))
+            if eta:
+                hits.append((eta[0], ln, to.get((ln, d)) or "", eta[1], eta[2]))
+            elif ln not in blank:
+                blank.append(ln)
+    if not hits:
+        return None
+    hits.sort(key=lambda h: h[0])
+    out = (f"{name}来得最快的是 {hits[0][1]}"
+           + (f" 往{hits[0][2]}方向" if hits[0][2] else "")
+           + f"：{hits[0][4]} 约 {_clock(hits[0][0])} 到（{max(1, round(hits[0][0]))} 分钟，还有 {hits[0][3]} 站）")
+    for m, ln, dest, cnt, plate in hits[1:]:
+        out += (f"\n其次 {ln}" + (f" 往{dest}方向" if dest else "")
+                + f"：{plate} {max(1, round(m))} 分钟（还有 {cnt} 站）")
+    if blank:
+        blank = [b for b in blank if b not in {h[1] for h in hits}]
+    if blank:
+        out += f"\n{'、'.join(blank)} 这会儿没有到站预测（没发车或已过末班）"
+    return out
+
+
 def render_stop(city_key, city_name, msg, src=None):
     """「X 站有哪几路」：站点经停线路，每条带首末站。"""
     if src == "chelaile":       # 点名车来了就真给车来了的：两家站表不合并，线的集合也不一样
@@ -1524,6 +1559,11 @@ def render_stop(city_key, city_name, msg, src=None):
     groups = _same_rows(rows_, row)
     if not any(rs for _, rs in groups):
         return None
+    # 「这站哪辆车来得最快」问的是实时比较，不是有几条线：逐线查该站的到站预测再比
+    if BEST_RE.search(msg):
+        got = render_stop_best(city_name, name, list(dict.fromkeys(n for _, rs in groups for n in rs)))
+        if got:
+            return got
     rows = _catalog(city_name).get("buslines") or []
     ends = {}
     for r in rows:
@@ -1560,6 +1600,8 @@ def render_stop(city_key, city_name, msg, src=None):
     return out + ("\n（车来了没扫到这个站，上面是掌上的）" if src == "chelaile" else "")
 
 
+# 「这站哪路车来得最快／等的最少」：站查询要按实时比，不报线路清单
+BEST_RE = re.compile(r"最快|最少|哪[辆部个条]?先|先到|等得最少|等的最少")
 # 「玉林还有哪条线路有车」这类全城问题没法靠线路号答，得把目录扫一遍。
 # 放在站点判断之后：能认出站名就以站点为准，「十字街有几路车」不会被抢走。
 SWEEP_RE = re.compile(r"哪条|哪些|哪几|哪路|还有|在跑|运营")

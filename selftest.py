@@ -970,6 +970,22 @@ assert query._msg_line("玉林市", "大容山旅游专线") == "大容山旅游
 assert query._msg_line("玉林市", "大容山好远") is None      # 字不全，别硬塞一条线
 query._catalog = _oc
 
+# 「这站哪辆车来得最快」：逐线逐方向比到站预测，报最快那辆 + 没预测的线点名
+_cat2, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "1路", "upperOrDown": "1", "to": "甲站"},
+    {"lineName": "2路", "upperOrDown": "1", "to": "乙站"}]}
+_sq, query._station_seq = query._station_seq, lambda cn, ln, d: (
+    [{"stationName": "丙站"}] * 3 if (ln, d) == ("1路", "1")
+    else ([{"stationName": "丙站"}] if (ln, d) == ("2路", "1") else []))
+_lm2, query._live_my = query._live_my, lambda cn, ln, d, order=1: (
+    {"routeOnStationRTimeInfoList": [{"busNumber": "桂K1", "busToStationCount": 2,
+                                      "busToStationTime": 4}]} if ln == "1路" else {})
+query._cache.clear()
+_b = query.render_stop_best("玉林市", "丙站", ["1路", "2路"])
+assert "最快的是 1路" in _b and "桂K1" in _b and "4 分钟" in _b and "2路" in _b, _b
+query._catalog, query._station_seq, query._live_my = _cat2, _sq, _lm2
+query._cache.clear()
+
 print("selftest ok")
 
 if "--live" in sys.argv:
