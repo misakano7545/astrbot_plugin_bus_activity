@@ -338,6 +338,15 @@ def cities():
             if _host != _k and DISTRICTS.get(_host) not in (None, _v) and norm_city(_v) in idx:
                 idx[_b] = dict(idx[norm_city(_v)])
                 idx[_host] = {"mygolbs": DISTRICTS[_host]}   # 明写「安宁区」还查兰州，裸「安宁」才归昆明
+        # 县级市掌上认（吴川市），车来了只给地级市的 id：补一份父城的，否则只在车来了
+        # 目录里的线（吴川2路（梅菉-霞山旧线））永远查不到。只补掌上认得的城，区名不碰
+        for _k, _v in DISTRICTS.items():
+            _e = idx.get(norm_city(_k))
+            if not _e or _e.get("chelaile") or not _e.get("mygolbs"):
+                continue
+            _p = idx.get(norm_city(_v)) or {}
+            if _p.get("chelaile"):
+                _e["chelaile"] = _p["chelaile"]
         return idx
     return _cached("cities", "", CITY_TTL, build)
 
@@ -1101,25 +1110,38 @@ def _dest_after(city_name, msg, stop):
     return (got or {}).get("stationName")
 
 
-def _exact_line(city_name, msg, want):
+def _exact_line(city_name, msg, want, city_key=""):
     """目录里有更长的真线名整段出现在句子里（「新乐专1路」）就用它，别只拿裸号去匹。"""
     flat, w = norm_line(msg), norm_line(want)
-    rows = _catalog(city_name).get("buslines") or []
-    hit = []
-    for r in rows:
-        n = norm_line(r["lineName"])
-        # 句子里把城市名也粘进了线名（「西安环山二号线」）：目录名是它的后缀也算。
-        # 只认 head 就是这座城的名字——「安宁12」的「安宁」是线名本身（安宁K12），
-        # 当成城市名剥掉会把昆明市区的 12 路答成安宁的车
-        head = w[:len(w) - len(n)] if w.endswith(n) and len(w) > len(n) else ""
-        if not (w and n.endswith(w) or (head and norm_city(head) == norm_city(city_name))):
-            continue
-        # 「新乐专一路」的「一」也是数字，得和 1 等价地认
-        cns = "零一二三四五六七八九"
-        pat = "".join(f"[{d}{cns[int(d)]}]" if d.isdigit() else re.escape(d) for d in n)
-        if n in flat or re.search(pat, flat):
-            hit.append(r["lineName"])
-    return max(hit, key=lambda n: len(norm_line(n)), default=None)
+
+    def scan(names):
+        hit = []
+        for nm in names:
+            n = norm_line(nm)
+            # 句子里把城市名也粘进了线名（「西安环山二号线」）：目录名是它的后缀也算。
+            # 只认 head 就是这座城的名字——「安宁12」的「安宁」是线名本身（安宁K12），
+            # 当成城市名剥掉会把昆明市区的 12 路答成安宁的车
+            head = w[:len(w) - len(n)] if w.endswith(n) and len(w) > len(n) else ""
+            if not (w and n.endswith(w) or (head and norm_city(head) == norm_city(city_name))):
+                continue
+            # 「新乐专一路」的「一」也是数字，得和 1 等价地认
+            cns = "零一二三四五六七八九"
+            pat = "".join(f"[{d}{cns[int(d)]}]" if d.isdigit() else re.escape(d) for d in n)
+            if n in flat or re.search(pat, flat):
+                hit.append(nm)
+        return hit
+
+    hit = scan([r["lineName"] for r in _catalog(city_name).get("buslines") or [] if r.get("lineName")])
+    best = max(hit, key=lambda n: len(norm_line(n)), default=None)
+    # 掌上没这条、或只匹到裸号（「吴川二路」）：真线名可能只在车来了目录里（吴川2路）
+    cid = (cities().get(city_key or norm_city(city_name)) or {}).get("chelaile")
+    if cid and (not best or norm_line(best) == w):
+        try:
+            hit += scan([n for n, _ in chelaile.lines(cid) or []])
+        except Exception:
+            pass
+        best = max(hit, key=lambda n: len(norm_line(n)), default=None)
+    return best
 
 
 def _station_seq(city_name, line, direction):
@@ -2205,7 +2227,7 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
             return cat.get("msg") or ""
         # 前缀被 PREFIX_RE 截短过（「新乐专1路」→「庄新乐专」），目录里有真线名就用真的
         # 点名单（「城巴1」）时不能纠：香港掌上目录里只有一个 1 路（九巴的），纠过去就答错公司
-        full = None if op else _exact_line(name, msg, num)
+        full = None if op else _exact_line(name, msg, num, city_key)
         if full:
             wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
     last["line"] = wants[0]

@@ -1178,6 +1178,15 @@ query.cities, query.chelaile.lines = _c1, _cl1
 assert query.BUS_RE.search("玉林北站夜班车有没有车")
 assert not query.BUS_RE.search("昨晚夜班车真慢")
 
+# 县级市（吴川）掌上认、车来了只给地级市 id：线只在车来了目录里也要认出来
+_c2, _cl2, _cat2 = query.cities, query.chelaile.lines, query._catalog
+query.cities = lambda: {"吴川": {"mygolbs": "吴川市", "chelaile": "157"}}
+query._catalog = lambda cn: {"buslines": [{"lineName": "1路（梅菉-霞山新线）"}]}
+query.chelaile.lines = lambda cid: [("吴川2路（梅菉-霞山旧线）", "1"), ("2路", "2")]
+assert query._exact_line("吴川市", "湛江吴川二路（梅菉-霞山旧线）", "2", "吴川") == "吴川2路（梅菉-霞山旧线）"
+assert query._exact_line("吴川市", "湛江2路", "2", "吴川") == "2路"
+query.cities, query.chelaile.lines, query._catalog = _c2, _cl2, _cat2
+
 print("selftest ok")
 
 if "--live" in sys.argv:
