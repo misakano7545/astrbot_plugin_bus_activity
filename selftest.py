@@ -994,6 +994,9 @@ assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1), ("28路", 2)
 assert [c[0] for c in _pk([("大容山旅游专线（28路）", 1)], "大容山旅游专")] == ["大容山旅游专线（28路）"]
 
 assert query.STOPS_RE.search("玉林9路站点") and not query.STOPS_RE.search("9路现在到哪个站点了")
+# 有些城两家的号只在数字那截一样（掌上 BS09863D / 车来了 粤B09863D），core 是第二把钥匙
+assert query._plate_core("粤B09863D") == query._plate_core("BS09863D") == "09863D"
+assert query._plate_core("桂K11860D") == "11860D"
 # 「北流有哪些公交线路」是线路清单，「有哪些公交公司」才是公司清单
 assert query.CITYLINES_RE.search("北流有哪些公交线路") and not query.CITY_CO_RE.search("北流有哪些公交线路")
 assert query.CITY_CO_RE.search("北流有哪些公交公司") and query.CITY_CO_RE.search("玉林公交公司电话是多少")
