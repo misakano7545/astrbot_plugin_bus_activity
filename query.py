@@ -104,7 +104,7 @@ PLATE_PAT = (r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂�
              r"[A-Z][A-Z0-9]{4,6}(?![A-Za-z0-9])")
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
-    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|"
+    r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|"
     r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + PLATE_PAT + r"|" + ALPHA_PAT)
 # 快路抢答前的最后一道：带问法就答；像叙述（「11路那车真挤」「今天坐9路回家累死了」）
 # 就交给模型。默认答，只挡明显的叙述句——挡多了会把「谈固站有什么线路」也挡掉。
@@ -1823,6 +1823,74 @@ def render_plate(city_name, plate, dir_msg=""):
             f"，刚过 {station}")
 
 
+def _selfno_mate(city_key, city_name, name):
+    """一条线上，掌上的车牌和车来了的自编号按同一刻 GPS 一对一配上。
+    返回 ({车牌key: (对面号, 距离米)}, {车牌key: 车})。"""
+    cid = (cities().get(city_key) or {}).get("chelaile")
+    rows = []
+    for d in ("1", "2"):
+        rows += [c for c in (_live_my(city_name, name, d).get("list") or [])
+                 if float(c.get("bus_lat") or 0) and float(c.get("bus_lng") or 0)]
+    # 车来了同名的线全拿进来：两家的方向名写法不一样（掌上「汽车总站（二医院）」vs 车来了
+    # 「玉林汽车总站」），按 to 过滤会把整个方向滤掉；反方向的车隔着几公里，靠距离就能分开
+    cand = []
+    if cid and rows:
+        try:
+            for nm, lid in chelaile.lines(cid):
+                if norm_line(nm) == norm_line(name):
+                    cand += list((chelaile.live(cid, lid).get("pos") or {}).items())
+        except Exception:
+            cand = []
+    pairs = sorted((m, c["busNumber"], no) for c in rows for no, p in cand
+                   if (m := _dist_m({"lat": c["bus_lat"], "lng": c["bus_lng"]}, p)) is not None)
+    # shortcut: 两家 GPS 刷新节奏不同，同一辆车常差 500 米上下，1.5km 是实测上限；
+    # 车队密集到两辆离同一辆都很近时会配错，那种情况命中不了就走「对不上」
+    used_p, used_n, mate = set(), set(), {}
+    for m, pn, no in pairs:
+        if m > 1500:
+            break
+        if pn in used_p or no in used_n:
+            continue
+        used_p.add(pn), used_n.add(no)
+        mate[_plate_key(pn)] = (no, m)
+    return mate, {_plate_key(c["busNumber"]): c for c in rows}
+
+
+def _selfno_of(own, other):
+    """两边哪个像车牌，另一个就是自编号。深圳反过来：掌上给 BS05070D，车来了给粤B05070D。
+    两边都是车牌（车来了也有直接挂车牌的）就没有自编号可报，返空串。"""
+    if PLATE_RE.fullmatch(other or ""):
+        return own if not PLATE_RE.fullmatch(own or "") else ""
+    return other or ""
+
+
+def render_line_selfno(city_key, city_name, want):
+    """「这几辆车的自编号分别是多少」：整条线的车一次问完，不用一辆一辆来。"""
+    rows = _catalog(city_name).get("buslines") or []
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
+    if not hit:
+        return None
+    name = hit[0][0]
+    mate, cars = _selfno_mate(city_key, city_name, name)
+    if not cars:
+        return f"{name} 这会儿没有车报位置，自编号也就没有对照"
+    out = [f"{name} 这会儿 {len(cars)} 辆，自编号："]
+    miss = 0
+    for k, c in cars.items():
+        got = mate.get(k)
+        own = c.get("busNumber")
+        sn = _selfno_of(own, got[0]) if got else ""
+        if sn:
+            out.append(f"{own} → {sn}")
+        else:
+            miss += 1
+            out.append(f"{own} → 没配上（车来了那边给它挂的也是车牌）" if got
+                       else f"{own} → 没配上（车来了那边对不上位置）")
+    if miss:
+        out.append(f"没配上的 {miss} 辆多半是车来了那条线没报这辆车，隔一分钟再问会变")
+    return "\n".join(out)
+
+
 def render_selfno(city_key, city_name, plate):
     """「XX 的自编号是啥」：掌上只给车牌（104 的 busNumber），车来了只给自编号（licence），
     两家没有共同的键。唯一能对上的东西是这一刻的 GPS —— 同方向里取离它最近的那辆，
@@ -1838,57 +1906,19 @@ def render_selfno(city_key, city_name, plate):
     hit = idx.get(key)
     if not hit:
         return f"没扫到 {plate} 这辆车，自编号更对不上"
-    name, d = hit[0], hit[1]
-    cid = (cities().get(city_key) or {}).get("chelaile")
-    mine = [c for c in (_live_my(city_name, name, d).get("list") or [])
-            if _plate_core(_plate_key(c.get("busNumber"))) == core
-            and float(c.get("bus_lat") or 0) and float(c.get("bus_lng") or 0)]
-    # 车来了同名的线全拿进来：两家的方向名写法不一样（掌上「汽车总站（二医院）」vs 车来了
-    # 「玉林汽车总站」），按 to 过滤会把整个方向滤掉；反方向的车隔着几公里，靠距离就能分开
-    cand = []
-    if cid and mine:
-        try:
-            for nm, lid in chelaile.lines(cid):
-                if norm_line(nm) != norm_line(name):
-                    continue
-                cand += list((chelaile.live(cid, lid).get("pos") or {}).items())
-        except Exception:
-            cand = []
-    if mine and cand:
-        # 同方向所有掌上车和车来了所有车做一次一对一（按距离升序贪心），
-        # 一辆车来了号只能配一辆掌上车——这样「两辆掌上都最近邻到同一辆」不会串
-        rows = [c for c in (_live_my(city_name, name, d).get("list") or [])
-                if float(c.get("bus_lat") or 0) and float(c.get("bus_lng") or 0)]
-        pairs = sorted((m, c["busNumber"], no) for c in rows for no, p in cand
-                       if (m := _dist_m({"lat": c["bus_lat"], "lng": c["bus_lng"]}, p)) is not None)
-        # shortcut: 两家 GPS 刷新节奏不同，同一辆车常差 500 米上下，1.5km 是实测上限；
-        # 车队密集到两辆离同一辆都很近时会配错，那种情况命中不了就走「对不上」
-        used_p, used_n, mate = set(), set(), {}
-        for m, pn, no in pairs:
-            if m > 1500:
-                break
-            if pn in used_p or no in used_n:
-                continue
-            used_p.add(pn), used_n.add(no)
-            mate[_plate_key(pn)] = (no, m)
-        # 两边的号写法可能只差在数字那截（粤B09863D / BS09863D），一律按 core 找
-        got = next((v for pn, v in mate.items() if _plate_core(pn) == core), None)
-        if got:
-            no = got[0]
-            # 车来了挂的本来就是车牌（深圳就是这样，掌上反过来只给「BS05070D」）：
-            # 那时候用户要的自编号在掌上那一侧
-            if PLATE_RE.fullmatch(no or ""):
-                return (f"{plate} 在 {name}上，这会儿的位置对着呢："
-                        f"车来了挂的是车牌，自编号在掌上那边是 "
-                        f"{next((pn for pn, v in mate.items() if v[0] == no), no)}"
-                        f"（两家 GPS 差 {got[1]} 米）")
-            return (f"{plate} 在 {name}上，这会儿的位置对着呢：车来了那边它是 {no}"
+    name = hit[0]
+    mate, cars = _selfno_mate(city_key, city_name, name)
+    got = next((v for pn, v in mate.items() if _plate_core(pn) == core), None)
+    if got:
+        own = next((c.get("busNumber") for pn, c in cars.items()
+                    if _plate_core(pn) == core), plate)
+        sn = _selfno_of(own, got[0])
+        if sn:
+            return (f"{plate} 在 {name}上，这会儿的位置对着呢：自编号是 {sn}"
                     f"（两家 GPS 差 {got[1]} 米，这条路上离它最近的一辆）")
-    nos = [no for no, _p in cand if no]
+        return f"{plate} 在 {name}上，车来了那边给它挂的也是车牌，没另给自编号"
     head = f"{plate} 在 {name} 上，两家的号没对上哪辆"
-    tail = (f"；车来了这条线现在挂的是 {'、'.join(nos)}，位置差得远"
-            if nos else "；车来了这边也没给出车号")
-    return head + tail
+    return head + "；这条线的车号这会儿配不齐，隔一分钟再问"
 
 
 LAST = {}          # 会话 → 上一条答过的城市/线路；追问「每站能换乘啥」不带车次，靠它
@@ -1931,8 +1961,11 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     last["line"] = wants[0]
     if name:
         for w in wants:
+            # 「G02 这几辆的自编号」：整条线一次列完，别只答一辆
+            if SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
+                out = render_line_selfno(city_key, name, w)
             # 「到终点站还要多久」问的是时长，不是起讫站
-            if ENDS_RE.search(msg) and not re.search(r"多久|几分钟|几站|多远", msg):
+            elif ENDS_RE.search(msg) and not re.search(r"多久|几分钟|几站|多远", msg):
                 out = render_ends(name, w)
             elif PRICE_RE.search(msg):        # 问票价（掌上把价格写在 103 的 commonts 里）
                 out = render_price(name, w, msg)
@@ -2099,6 +2132,12 @@ def answer(msg, default_city, ctx="", key=""):
         out = render_transfer(name, want) if want else None
         if out:
             last["line"] = want
+            return out
+    # 「这三辆车的自编号分别是多少」：没写线路号时沿用上一条问过的线，整条线一次列完
+    if not line and name and SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
+        want = last.get("line") or ""
+        out = render_line_selfno(city_key, name, want) if want else None
+        if out:
             return out
     if line:
         # 「车来了查XX校区的线路」带站点，别因为上一条问过 9 路就答成 9 路

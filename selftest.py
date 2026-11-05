@@ -934,8 +934,11 @@ _lm, query._live_my = query._live_my, lambda cn, ln, d: {"list": [
 query._plate_index = lambda cn: ({"K12345": ("9路", "1", "火车站"),
                                   "K54321": ("9路", "1", "甲站")}, 2, 80)
 query._cache.clear()
-assert "它是 514" in query.render_selfno("玉林", "玉林市", "桂K12345")
-assert "它是 397" in query.render_selfno("玉林", "玉林市", "桂K54321")
+assert "自编号是 514" in query.render_selfno("玉林", "玉林市", "桂K12345")
+assert "自编号是 397" in query.render_selfno("玉林", "玉林市", "桂K54321")
+# 「这几辆车自编号分别是多少」整条线一次列完，一辆一行
+_bl = query.render_line_selfno("玉林", "玉林市", "9")
+assert "桂K12345 → 514" in _bl and "桂K54321 → 397" in _bl
 query._plate_index = lambda cn: ({}, 80, 80)
 query._cache.clear()
 assert "没扫到" in query.render_selfno("玉林", "玉林市", "桂K99999")
