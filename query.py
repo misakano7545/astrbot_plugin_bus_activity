@@ -1149,6 +1149,47 @@ def _goes(city_name, line, a, b):
     return None
 
 
+def _dir_end(city_name, line, d):
+    """目录里这个方向的 (起点, 终点)。"""
+    for r in _catalog(city_name).get("buslines") or []:
+        if r.get("lineName") == line and str(r.get("upperOrDown")) == str(d):
+            return r.get("from") or "", r.get("to") or ""
+    return "", ""
+
+
+def _seq_has(city_name, line, d, stop):
+    """这条线这个方向上有没有这一站：同名、包含、括号别名都算一个站。"""
+    for s in _station_seq(city_name, line, d):
+        n = s.get("stationName") or ""
+        if n == stop or _alias(stop) & _alias(n) or (len(n) >= 2 and (n in stop or stop in n)):
+            return True
+    return False
+
+
+def _oneway_note(city_name, at, line, d):
+    """这站只停一个方向时必须说明：用户看不出「回程不经过这站」，会一直等。
+    111 和直达都按方向排，反方向到底停不停这站只有 103 站序知道。"""
+    oth = "2" if str(d) == "1" else "1"
+    if not _seq_has(city_name, line, d, at) or _seq_has(city_name, line, oth, at):
+        return ""
+    f, t = _dir_end(city_name, line, d)
+    return (f"{line} 在{at}只有往{t}方向停（{f} → {t}），反方向不经过这站" if f and t
+            else f"{line} 在{at}只有单向停靠")
+
+
+def _oneway_lines(city_name, at, lines):
+    """这站在这些线上只停一个方向的 → {线: 方向}。
+    CMD=115 的 ALL=1 实测不可用（9路两个方向都停却只报一个），只能拿 103 逐方向比对；
+    八线程并发，冷站一次一两秒，之后走 103 的一小时缓存。"""
+    def one(ln):
+        ds = [d for d in ("1", "2") if _seq_has(city_name, ln, d, at)]
+        return ln, (ds[0] if len(ds) == 1 else "")
+    if not lines:
+        return {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return {ln: d for ln, d in ex.map(one, lines) if d}
+
+
 def _hop_line(city_name, line, d, ia, ib):
     """这一路下一辆车几分钟到 A（上游预测），从 A 坐到 B 要几分钟（按每段均速累）。"""
     payload = _live_my(city_name, line, d, ia + 1)      # STATIONORDER 1 基
@@ -1225,7 +1266,11 @@ def render_plan(city_name, a, b):
             if picks:
                 note = (f"{head}是 {ln} 的首发站，想坐着去："
                         + "、".join(f"{x} {n}站" for x, n in picks) + f" 到{head}再上车")
-    tail = f"\n{note}" if note else ""
+    # 上车站只有单向停靠的也要说：换乘方案本身有方向，但人容易以为反着走同样换得回来
+    ow = [n for lg in first_legs
+          if (n := _oneway_note(city_name, lg.get("upStationName") or "",
+                                lg["routeName"], lg.get("uod") or "1"))]
+    tail = "".join(("\n" + x) for x in ([note] if note else []) + ow)
     if not rows:
         return ""
     if len(rows) == 1:
@@ -1285,13 +1330,17 @@ def render_hop(city_key, city_name, raw, only_direct=False):
         g = yulin.plan(ra, rb)
         return (f"{head}没直达，换一次：坐 {g[0]} 到{g[1]}换 {g[2]}" if g
                 else f"{head}有同名线路但方向反了，得换乘")
+    # 上车站是单边站时得说清：这几条只往这个方向停，回程不经过这站
+    ow = [n for line, got in direct
+          if (n := _oneway_note(city_name, a["stationName"], line, got[0]))]
+    tail = f"\n{'；'.join(ow)}" if ow else ""
     if len(direct) == 1:
         line, got = direct[0]
-        return f"{head}坐 {line} 直达（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got)
+        return f"{head}坐 {line} 直达（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got) + tail
     rows = [f"{head}能直达："]
     for line, got in direct:
         rows.append(f"{line}（{got[2] - got[1]} 站）" + _hop_line(city_name, line, *got))
-    return "\n".join(rows)
+    return "\n".join(rows) + tail
 
 
 def _place_stop(city_name, raw, other):
@@ -1445,7 +1494,7 @@ def render_at(city_key, city_name, want, msg):
     dest = _dest_after(city_name, msg, station_name)
     rows = _catalog(city_name).get("buslines") or []
     hit = _pick([(r["lineName"], r) for r in rows], want)
-    got, dead = {}, []                # 方向名 -> (分钟, 车牌, 站数)；没预测的进 dead
+    got, dead, have = {}, [], []      # 方向名 -> (分钟, 车牌, 站数)；没预测的进 dead
     near = False                      # 这条线到底过不过我这个站
     for line_name, row in hit:
         d = row["upperOrDown"]
@@ -1456,6 +1505,7 @@ def render_at(city_key, city_name, want, msg):
         if not idx:
             continue
         near = True
+        have.append(d)
         # 「G02 到高新产业园，去玉林北站」问的是在产业园上车、往玉林北站那个方向，别把终点当上车站
         if dest and dest != station_name:
             g = _goes(city_name, line_name, station_name, dest)   # 只留能开到 dest 的方向
@@ -1482,6 +1532,11 @@ def render_at(city_key, city_name, want, msg):
             return f"{hit[0][1]['lineName']} 不经过{station_name}"
         return None
     line_name = hit[0][1]["lineName"]
+    # 目录里这条线有两个方向、但这站只有一个方向停（单边站）：另一个方向永远不会来，
+    # 不加这句的话「往X 首班还没到」会被当成再等等就有了
+    ow = (_oneway_note(city_name, station_name, line_name, have[0])
+          if len(hit) > 1 and len(set(have)) == 1 else "")
+    ow = f"；{ow}" if ow else ""
     live = {k: v for k, v in got.items() if v}
     if not live:
         # 这条线确实过我这一站、但两个方向这会儿都没有车往这儿开（刚过站 / 还没发车）。
@@ -1494,17 +1549,17 @@ def render_at(city_key, city_name, want, msg):
         where = ({"after": "末班已经开走", "before": "首班还没到"}.get(next(iter(st)), "")
                  if len(st) == 1 else "各方向运营时间不一样" if st else "")
         if not where:
-            return f"{line_name} 这会儿没有开往{station_name}的车（往{dirs}方向都没有）"
+            return f"{line_name} 这会儿没有开往{station_name}的车（往{dirs}方向都没有）{ow}"
         span = (f"{wins[0][1] or '?'}–{wins[0][2] or '?'}" if len({(x, y) for _, x, y in wins}) == 1
                 else "；".join(f"往{k} {x or '?'}–{y or '?'}" for k, x, y in wins))
-        return f"{line_name} 这会儿没车报过来，{where}：{span}"
+        return f"{line_name} 这会儿没车报过来，{where}：{span}{ow}"
 
     # 「N 路离 X 站大约几分钟」：站在站台的人要的是这一句，别念「往X：桂K… 约 18:10 到」
     def one(lab, v):
         return (f"往{lab} " if lab else "") + f"大约 {v[0]} 分钟（{v[1]}，{v[2]}）"
 
     if len(got) == 1:                     # 只有一个方向过这站（或点了方向），不用念方向名
-        return f"{line_name} 离{station_name} " + one("", live[list(live)[0]])
+        return f"{line_name} 离{station_name} " + one("", live[list(live)[0]]) + ow
     # 中途站两个方向都要报：只报一边会被当成哪边都能坐；哪个方向没车也如实说
     def dead_txt(lab, x, y):
         s = _window(x, y)
@@ -1515,7 +1570,7 @@ def render_at(city_key, city_name, want, msg):
         return f"往{lab} 这会儿没车报过来"
 
     parts = [one(k, v) for k, v in live.items()] + [dead_txt(*d) for d in dead]
-    return f"{line_name} 离{station_name}：" + "；".join(parts)
+    return f"{line_name} 离{station_name}：" + "；".join(parts) + ow
 
 
 # 「9路站点」这种只说两个字的也要认；「到站点了没」「哪个站点」问的是实时位置，别抢
@@ -1926,18 +1981,29 @@ def render_stop(city_key, city_name, msg, src=None):
     ends = {}
     for r in rows:
         ends.setdefault(r["lineName"], []).append(f"{r.get('from')} ↔ {r.get('to')}")
+    # 这站只停一个方向的线要单独标出来：站在反方向站台的人看不到「这站这方向没有」
+    ow = _oneway_lines(city_name, name, list({n for _, rs in groups for n in rs}))
+
+    def _item(n):
+        if not ends.get(n):
+            return n
+        d = ow.get(n)
+        f, t = _dir_end(city_name, n, d) if d else ("", "")
+        if f and t:
+            return f"{n} {f} → {t}（单向停靠，只往{t}方向）"
+        return f"{n} {ends[n][0]}" + ("（单向停靠）" if d else "")
+
     # 别截 12 条：用户要的是全部，截了还得再问一轮「剩下的呢」，而那轮多半认不出站名
     out = ""
     if len(groups) == 1:
         routes = groups[0][1]
-        items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes if ends.get(n)] or list(routes)
+        items = [_item(n) for n in routes if ends.get(n)] or list(routes)
         out = f"{name}有 {len(items)} 条线路：" + "".join("\n" + i for i in items)
     else:
         # 同一片站台被拆成几条记录（汽车总站 / （二医院）/ （大北路）），说清哪路车在哪个站台等
         seen, blocks = set(), []
         for gname, routes in sorted(groups, key=lambda g: -len(g[1])):
-            items = [f"{n} {ends[n][0]}" if ends.get(n) else n for n in routes
-                     if n not in seen and ends.get(n)]
+            items = [_item(n) for n in routes if n not in seen and ends.get(n)]
             seen |= set(routes)
             if items:
                 blocks.append(f"{gname}（{len(items)} 条）：" + "".join("\n" + i for i in items))

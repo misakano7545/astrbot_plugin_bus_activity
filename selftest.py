@@ -400,19 +400,38 @@ assert query._merge_same(_rows, _rows[0])["relatedRoutes"] == ["9路", "G02路"]
 _cat3, query._catalog = query._catalog, lambda cn: {"buslines": [
     {"lineName": "9路", "from": "甲", "to": "乙"}, {"lineName": "G02路", "from": "丙", "to": "丁"}]}
 _st3, query.stops = query.stops, lambda cn, kw: _rows if kw == "汽车总站" else []
+_ow3, query._oneway_lines = query._oneway_lines, lambda *a: {}
 _out = query.render_stop("玉林", "玉林市", "汽车总站有哪几路车")
 assert "汽车总站（二医院）（1 条）" in _out and "汽车总站（1 条）" in _out \
     and "陆川1路" not in _out, _out
-query._catalog, query.stops = _cat3, _st3
+query._catalog, query.stops, query._oneway_lines = _cat3, _st3, _ow3
 # 平台没给坐标时退回按名字匹，不能因为缺字段就把线路全丢了
 assert query._merge_same([_rows[0], dict(_rows[1], lat=None)], _rows[0])["relatedRoutes"] == ["9路", "G02路"]
 # 站表不许截断：23 条就报 23 条，否则用户再问「剩下的呢」认不出站名
-_cat, _stops = query._catalog, query.stops
+_cat, _stops, _ow4 = query._catalog, query.stops, query._oneway_lines
+query._oneway_lines = lambda *a: {}
 query._catalog = lambda cn: {"buslines": [{"lineName": f"{i}路", "from": "甲", "to": "乙"} for i in range(23)]}
 query.stops = lambda cn, kw: [{"stationName": "谈固站", "relatedRoutes": [f"{i}路" for i in range(23)]}]
 _out = query.render_stop("石家庄市", "石家庄市", "谈固站有哪几路公交车")
 assert _out.count("\n") == 23 and "还有" not in _out, _out
-query._catalog, query.stops = _cat, _stops
+query._catalog, query.stops, query._oneway_lines = _cat, _stops, _ow4
+# 单向停靠：这站只有一个方向停时，站表/等车/换乘都得说清「只往哪边」，不然人会一直等反方向
+_seq9, query._station_seq = query._station_seq, lambda cn, ln, d: (
+    [{"stationName": "玉林火车站"}, {"stationName": "汽车总站"}] if ln == "2路" and d == "1"
+    else [{"stationName": "苗园中秀路口（火车站）"}, {"stationName": "汽车总站"}] if ln == "2路"
+    else [{"stationName": "玉林火车站"} for _ in range(2)])
+_cat9, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "2路", "upperOrDown": "1", "from": "万象城", "to": "客运中心"},
+    {"lineName": "2路", "upperOrDown": "2", "from": "客运中心", "to": "万象城"},
+    {"lineName": "9路", "upperOrDown": "1", "from": "甲", "to": "乙"},
+    {"lineName": "9路", "upperOrDown": "2", "from": "乙", "to": "甲"}]}
+assert query._oneway_lines("玉林市", "玉林火车站", ["2路", "9路"]) == {"2路": "1"}
+assert "只有往客运中心方向停（万象城 → 客运中心），反方向不经过这站" \
+    in query._oneway_note("玉林市", "玉林火车站", "2路", "1")
+assert query._oneway_note("玉林市", "玉林火车站", "9路", "1") == ""
+# 站序里写成「苗园中秀路口（火车站）」的那个方向不算停这站
+assert not query._seq_has("玉林市", "2路", "2", "玉林火车站")
+query._station_seq, query._catalog = _seq9, _cat9
 # 「G02-513 现在在哪」问的是一辆车，不是整条线
 assert [g for g in query.VEH_RE.search("G02-513现在在哪里了").groups() if g] == ["513"]
 assert [g for g in query.VEH_RE.search("G02 513号车在哪").groups() if g] == ["513"]
