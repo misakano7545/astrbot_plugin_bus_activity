@@ -565,11 +565,16 @@ def _mygolbs(city_name, want):
             note = f"上游不给{norm_city(city_name)}的实时车辆位置"
             lname, ldir = hit[0][1]["lineName"], hit[0][1]["upperOrDown"]
             n = len(_station_seq(city_name, lname, ldir))
-            bits = [f"{first} 起、末班最晚 {last}"] if first and last else []
+            # 「末班最晚 20:30」是上下行混在一起的一个数：过了末班还说「起、末班最晚」，
+            # 等于没说清这两个方向都收车了。有这个就按方向报，并说明现在是不是出窗口了
+            wl = _window_note(wins)
+            bits = [f"{first} 起、末班最晚 {last}"] if first and last and not wl else []
             if n:
                 bits.append(f"{n} 站")
             if bits:
                 note += "，这条线 " + "、".join(bits)
+            if wl:
+                note += "，" + wl
         elif (_wn := _window_note(wins)):
             note = _wn
         elif live_known:

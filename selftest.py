@@ -249,8 +249,20 @@ query._first_last = lambda c, l, d: ("05:40", "21:00")
 query._station_seq = lambda c, l, d: [{"stationName": f"s{i}"} for i in range(27)]
 query._catalog = lambda c: {"buslines": [{"lineName": "浦东51路", "upperOrDown": "1",
                                           "from": "人民东路学海路", "to": "迪士尼地铁站"}]}
+_w0, query._window = query._window, lambda f, l: "open"      # 这条只验首末班+站数，运营窗口另测
 _got = query._mygolbs("上海市", "浦东51")
 assert _got["unknown"] and "05:40 起、末班最晚 21:00" in _got["note"] and "27 站" in _got["note"], _got
+query._window = _w0
+# 但过了末班不能还说「起、末班最晚」：两个方向各有时刻，得按方向报，并说清收车了
+query._window = lambda f, l: "after"
+query._first_last = lambda c, l, d: ("06:30", "19:30") if d == "1" else ("07:30", "20:30")
+query._catalog = lambda c: {"buslines": [
+    {"lineName": "9路", "upperOrDown": d, "from": "A" if d == "1" else "B", "to": to}
+    for d, to in (("1", "市委党校"), ("2", "东堤车站"))]}
+_g9 = query._mygolbs("湛江市", "9")
+assert "末班已经开走：往市委党校 06:30–19:30；往东堤车站 07:30–20:30" in _g9["note"], _g9
+assert "末班最晚" not in _g9["note"], _g9
+query._window = _w0
 query._live_my, query._first_last, query._station_seq, query._catalog = _lm, _fl, _seq, _cat
 
 # issue #8：前缀是线路名的一部分，明写城市也不丢；前缀自己就是城市时以它为准
