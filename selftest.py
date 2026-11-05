@@ -1042,16 +1042,20 @@ assert query.render_at("玉林", "玉林市", "9", "十字街") == \
 # 哪个方向没有到站时间也要如实报出来，不能只念有车的那一边
 query._etas = lambda p: (7.0, 2, "桂K1") if p["n"] == "1" else None
 assert query.render_at("玉林", "玉林市", "9", "十字街") == \
-    "9路 离十字街：往甲 大约 7 分钟（桂K1，还有 2 站）；往乙 这会儿没有到站时间"
-# 上游点明「非运营时间」时要带上首末班，光说没有车等于没答
+    "9路 离十字街：往甲 大约 7 分钟（桂K1，还有 2 站）；往乙 这会儿没车报过来"
+# 上游点明没车时要对一下首末班：真收班了说收班，运营窗口里只说这一站没预测（别抄上游的「非运营时间」）
 query._etas = lambda p: None
 query._live_my = lambda cn, ln, d, i=1: {
     "routeOnStationRTimeInfoList": [{"busNumber": "", "busToStationCount": -1, "busToStationTips": "非运营时间"}]}
-_f, _fl = query._first_last, query._first_last
+_fl, _w = query._first_last, query._window
 query._first_last = lambda cn, ln, d: ("20:35", "22:55")
+query._window = lambda f, l: "after"
 assert query.render_at("玉林", "玉林市", "9", "十字街") == \
-    "9路 这会儿非运营时间（往甲、乙方向都没有车），首班 20:35 末班 22:55"
-query._first_last = _fl
+    "9路 这会儿没车报过来，末班已经开走：20:35–22:55"
+query._window = lambda f, l: "open"      # 窗口里还开着：上游那句「非运营时间」不能照抄
+assert query.render_at("玉林", "玉林市", "9", "十字街") == \
+    "9路 这会儿没有开往十字街的车（往甲、乙方向都没有）"
+query._first_last, query._window = _fl, _w
 query.pick_stop, query._catalog, query._station_seq, query._live_my, query._etas = _p, _c2, _s, _l, _e
 
 print("selftest ok")

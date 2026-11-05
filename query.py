@@ -1312,13 +1312,12 @@ def render_at(city_key, city_name, want, msg):
         pay = _live_my(city_name, line_name, d, idx)
         eta = _etas(pay)
         if not eta:
-            # 上游对没车的方向会给「非运营时间」这类说法（G02 晚上 19:30 就这样），
-            # 「没有车」和「不在运营时间」是两回事，站台上等的人要的是后者
+            # 上游对没车的方向一律给 busToStationTips（「非运营时间」也算），
+            # 光抄它不行：运营窗口里它照样这么写。得对首末班才知道是真收班还是这一站没预测
             tip = next((r.get("busToStationTips") for r in pay.get("routeOnStationRTimeInfoList") or []
                         if r.get("busToStationTips")), "")
-            # 说「非运营时间」还不够：站台上的人要知道几点再来。只在点了非运营时间时多问一次
             f, l = _first_last(city_name, line_name, d) if tip else ("", "")
-            dead.append((lab, tip, f, l))
+            dead.append((lab, f, l))
             got.setdefault(lab, None)     # 方向还在，只是这会儿没车报过来
             continue
         mins, left, plate = eta
@@ -1332,13 +1331,18 @@ def render_at(city_key, city_name, want, msg):
     if not live:
         # 这条线确实过我这一站、但两个方向这会儿都没有车往这儿开（刚过站 / 还没发车）。
         # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
-        tip = next((t for _, t, _, _ in dead if t), "")
-        dirs = "、".join(dict.fromkeys(k for k, _, _, _ in dead))
-        if not tip:
+        dirs = "、".join(dict.fromkeys(k for k, _, _ in dead))
+        wins = [(k, x, y) for k, x, y in dead if x or y]
+        st = {s for k, x, y in wins if (s := _window(x, y))}
+        # 「非运营时间」是上游对「这一站没有到站预测」的说法，运营窗口里也这么说，不能照抄：
+        # 定制夜班车 20:00 往北站方向明明在跑（18:50–21:30），抄下来就成了「别等了」
+        where = ({"after": "末班已经开走", "before": "首班还没到"}.get(next(iter(st)), "")
+                 if len(st) == 1 else "各方向运营时间不一样" if st else "")
+        if not where:
             return f"{line_name} 这会儿没有开往{station_name}的车（往{dirs}方向都没有）"
-        f, l = next(((x, y) for _, _, x, y in dead if x or y), ("", ""))
-        win = f"，首班 {f or '?'} 末班 {l or '?'}" if f or l else ""
-        return f"{line_name} 这会儿{tip}（往{dirs}方向都没有车）{win}"
+        span = (f"{wins[0][1] or '?'}–{wins[0][2] or '?'}" if len({(x, y) for _, x, y in wins}) == 1
+                else "；".join(f"往{k} {x or '?'}–{y or '?'}" for k, x, y in wins))
+        return f"{line_name} 这会儿没车报过来，{where}：{span}"
 
     # 「N 路离 X 站大约几分钟」：站在站台的人要的是这一句，别念「往X：桂K… 约 18:10 到」
     def one(lab, v):
@@ -1347,9 +1351,15 @@ def render_at(city_key, city_name, want, msg):
     if len(got) == 1:                     # 只有一个方向过这站（或点了方向），不用念方向名
         return f"{line_name} 离{station_name} " + one("", live[list(live)[0]])
     # 中途站两个方向都要报：只报一边会被当成哪边都能坐；哪个方向没车也如实说
-    parts = [one(k, v) for k, v in live.items()] + [
-        f"往{k} {t or '这会儿没有到站时间'}" + (f"（首班 {x or '?'} 末班 {y or '?'}）" if x or y else "")
-        for k, t, x, y in dead]
+    def dead_txt(lab, x, y):
+        s = _window(x, y)
+        if s == "before":
+            return f"往{lab} 首班 {x} 还没到"
+        if s == "after":
+            return f"往{lab} 末班 {y} 已经开走"
+        return f"往{lab} 这会儿没车报过来"
+
+    parts = [one(k, v) for k, v in live.items()] + [dead_txt(*d) for d in dead]
     return f"{line_name} 离{station_name}：" + "；".join(parts)
 
 
