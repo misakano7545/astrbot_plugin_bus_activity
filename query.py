@@ -2463,7 +2463,11 @@ def answer(msg, default_city, ctx="", key=""):
     prefix = re.sub(r"公交$", "", prefix)
     if prefix in ("那", "这", "该", "此", "本"):      # 指示词不是县名，别拼进线路名
         prefix = ""
-    city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
+    # 本句先单独判：一直问深圳、下一句突然问湛江，ctx 里那句深圳也会被 detect_city 匹到，
+    # 两个城名一样长，取谁全看字典顺序——湛江就被顶成深圳查了
+    city_key, explicit = detect_city(msg, prefix, default_city)
+    if not explicit:
+        city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
     base = norm_city(default_city)
     # 「闽AYC505」没写城市：车牌头两位就是车管所，能定到哪座城（否则会落回默认城白扫一遍）
     pm = PLATE_RE.search(msg)
