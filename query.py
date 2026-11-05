@@ -681,7 +681,10 @@ def _near(city_key, want, n=4):
     return "、".join(hit) if hit and difflib.SequenceMatcher(None, norm_line(hit[0]), w).ratio() >= 0.5 else ""
 
 
-HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*到\s*([^，,。？?！!\s]{2,12})")
+HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
+                    # 「看到/说到/想到/遇到」都是动词的「到」，不是「A 站到 B 站」——闲聊被当成换乘问过
+                    r"(?<![看说想做达遇收得感觉听找等拿买卖学记念料猜想跑走来回送带拉请叫问答碰见闻触意识考虑注意])到\s*"
+                    r"([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
 TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|吗|呢|啊).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
@@ -1236,9 +1239,11 @@ def render_times(city_name, want, msg=""):
 
 
 PRICE_RE = re.compile(r"票价|多少钱|几块钱?|收费")
-# 「玉林公交公司电话是多少」「广州巴士集团电话」没有线路号，问的是整座城
+# 「玉林公交公司电话是多少」「广州巴士集团电话」没有线路号，问的是整座城。
+# 光认「公交公司」会抢闲聊（「司机和公交公司救援」），要带问联系方式的词或者「有哪些」才认
 CITY_CO_RE = re.compile(r"[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运|交通|地铁)[\u4e00-\u9fa5]{0,6}"
-                        r"(?:公司|集团|电话|热线|客服|投诉)")
+                        r"(?:电话|热线|客服|投诉)"
+                        r"|(?:有哪些|哪几家|几家公司)[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运)")
 # 「往X方向」在 render_price 里也得认，跟 render_times 一个口径
 
 
@@ -1662,13 +1667,15 @@ def answer(msg, default_city, ctx="", key=""):
         if not city_key and (hop(msg) or not prefix):      # 「从A到B」「X站有哪几路」不许城市名也能答
             city_key = base if base in cities() else None
         # 表里只有 320 城，县级市常缺（义乌、慈溪、晋江掌上都有）：拿原名直接问掌上
-        if not city_key and len(prefix) >= 2:
+        # 「刚才看到」「听说」也是两个汉字的前缀，但不问公交，别拿它去问上游、更别回「这座城没数据」
+        if not city_key and len(prefix) >= 2 and looks_like_ask(msg):
             if not _covered(prefix):
                 # 别写「查不了」：main.py 的 FALSE_CLAIM 会把这句当假话整句吞掉，用户啥也收不到
                 return f"{prefix}这座城暂时没有公交数据，掌上和车来了都没覆盖"
             city_key = norm_city(prefix)
     if not city_key:
-        return f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试"
+        return ("" if not looks_like_ask(msg) else
+                f"「{prefix or '这个城市'}」是哪儿的公交？没认出来，写「{prefix} {line[0] if line else '1'} 路」这种试试")
     # 表外城市直接用用户写的中文名当 CITYNAME（掌上就吃中文名）
     name = (cities().get(city_key) or {}).get("mygolbs") or (prefix if city_key not in cities() else None)
     prev = last.get("city")

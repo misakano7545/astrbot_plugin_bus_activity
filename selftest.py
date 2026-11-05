@@ -172,6 +172,14 @@ assert query.hop("从金城商厦到玉林北站有直达吗") == ("金城商厦
 assert query.hop("十字街到火车站") == ("十字街", "火车站")
 assert query.hop("玉林北站到玉林旅游客运站的路线") == ("玉林北站", "玉林旅游客运站")
 assert query.hop("坐1路到火车站") is None           # 左边是线路号，不是站名
+# 「看到/说到/想到」是动词的「到」，不是「A 站到 B 站」——群里聊「看到司机和公交公司救援」
+# 曾被截成「那会就看」→「司机和公交公司救援」，还回了一句「是哪座城的」
+assert query.hop("那会就看到司机和公交公司救援") is None
+assert query.hop("我刚才看到 3 路车过去了") is None
+assert query.hop("听说 9 路改线了") is None
+assert query.hop("走到公交站就看到车了") is None
+assert query.hop("玉林火车站到北流汽车总站坐哪路") == ("玉林火车站", "北流汽车总站")
+assert query.hop("机场一号航站楼到元氏火车站怎么走") == ("机场一号航站楼", "元氏火车站")
 # 到站分钟用上游自己的预测（routeOnStationRTimeInfoList），每站最多 2 辆；
 # 站已过时上游回 busToStationCount=-1、busNumber 空，不能拿来当「即将到站」
 p = {"routeOnStationRTimeInfoList": [
