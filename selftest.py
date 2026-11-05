@@ -490,6 +490,12 @@ assert not query.CITY_CO_RE.search("我们公司今年业绩咋样")      # 闲�
 assert query.CITY_CO_RE.search("玉林公交公司电话")
 query._post = _cc
 
+# 群里 @机器人 的三种写法都要先抹掉，否则「@大肥鱼 绵阳25」整句进不了 parse
+assert query.AT_RE.sub("", "@大肥鱼 绵阳25").strip() == "绵阳25"
+assert query.AT_RE.sub("", "[At:E2795AB] 绵阳25").strip() == "绵阳25"
+assert query.AT_RE.sub("", "<@E8CBB1> 绵阳25").strip() == "绵阳25"
+assert query.AT_RE.sub("", "玉林9路有车吗") == "玉林9路有车吗"   # 正文里的空格不动
+
 # 「牡丹江21」：城市名＋线号不带「路」，整句只有城市名和数字才认；多一个字就是句子
 _cit = query.cities
 query.cities = lambda: {"牡丹江": {"chelaile": "131", "mygolbs": "牡丹江市"}, "玉林": {}}
@@ -498,6 +504,14 @@ assert query.parse("[At:123] 牡丹江21？") == ("21", "牡丹江")
 assert query.parse("玉林2023年GDP") is None        # 年份不能被当成 2023 路
 assert query.parse("今天好热") is None
 query.cities = _cit
+
+# 一条线号十几个支线（绵阳 25 路）：同终点合并，方向过多时只念有车的，抬头不带括号
+_g = [("观太", []), ("富乐汽车站", [("3049", "观太街口", "360")]),
+      ("广兴村", []), ("信义镇", []), ("段家桥", []), ("桅杆垭", [("3034", "云华山", "1400")])]
+_z = query.render("绵阳", "25", {"line": "25路(五大队观太)", "groups": _g})
+assert "25路 现在 2 辆在路上" in _z, _z
+assert "还没车" not in _z, _z                    # 13 个支线不能整屏「往X还没车」
+assert "(五大队观太)" not in _z, _z
 
 # 「西安阿房宫线」问的是地铁5号线/西户线：公交站旁边那条「（地铁站）」记录得单独报一行
 _st, _ct = query.stops, query._catalog

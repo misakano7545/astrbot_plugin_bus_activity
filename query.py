@@ -659,6 +659,13 @@ def render(city_key, want, res, veh="", dir=""):
                 # 这个方向没车报位置 ≠ 停运；昆明这类城上游不给到站预测，只能看车在哪
                 return f"{line} 往{dir}方向这会儿没车报位置（这城上游不给到站时间，只能看车在哪）"
     total = sum(len(b) for _, b in groups)
+    if total:
+        # 绵阳 25 路这种一条线号十三个支线：同一个终点名合并，方向多过 4 个时只说有车的，
+        # 否则整屏都是「往X还没车」
+        merged = {}
+        for lab, bs in groups:
+            merged.setdefault(lab or "", []).extend(bs)
+        groups = list(merged.items())
     if not total:
         # 「没车」和「上游没给车辆位置」是两件事，后者会被乘客读成停运（见 issue #2）
         if "地铁" in norm_line(line):           # 地铁进得了目录，但全程 hasReal=0
@@ -667,10 +674,13 @@ def render(city_key, want, res, veh="", dir=""):
         head = f"{line} 查不到实时车" if res.get("unknown") else f"{line} 这会儿没车"
         return head + ("，" + tail if tail else "")
     multi = sum(1 for _, b in groups if b) > 1      # 只有一个方向有车时不念空方向
+    many = len(groups) > 4                          # 支线网络，空方向属于噪音
+    if many:                                        # 「25路(五大队观太)」不代表别的支线，抬头去掉括号
+        line = re.sub(r"[（(].*?[)）]", "", line)
     rows = [f"有，{line} 现在 {total} 辆在路上" if not veh else f"{veh} 在 {line} 上："]
     for label, buses in groups:
         if not buses:
-            if multi and label:
+            if multi and label and not many:
                 rows.append(f"往{label}还没车")
             continue
         rows.append((f"往{label}：" if label else "") + "，".join(_car(*b) for b in buses))
@@ -699,7 +709,8 @@ STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「11 路车」中间隔着「路」，不会被当成车号
 VEH_RE = re.compile(r"-\s*(\d{2,5})(?!\d)|(?<![\dA-Za-z])(\d{2,5})\s*[号]?车")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
-AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>")
+# 群里 @机器人 的三种写法：OneBot 的 CQ 码、QQ 官方的 [At:xxx]、以及没转换掉的「@大肥鱼 」
+AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>|(?<!\S)@\S+\s*")
 # 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
 MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐)")
