@@ -998,7 +998,7 @@ _cwx, query._catalog = query._catalog, lambda cn: {"buslines": [
     {"lineName": "北流105路", "upperOrDown": "2", "from": "北流城南站", "to": "玉林北站"}]}
 _fwx, query._first_last = query._first_last, lambda cn, ln, d: ("07:30", "19:50")
 _wxo = query.answer(_wx, "玉林市", key="wx1")
-assert "北流105路 往北流城南站方向" in _wxo and "022" not in _wxo, _wxo
+assert "往北流城南站" in _wxo and "「022」" not in _wxo, _wxo  # 这行会真的读 104（在途/到站两种措辞都过）；车牌 桂K00220D 本身就含 022，只许查「被当成线号」
 assert query._dir("查看北流城南站方向还有没有，不是那个方向还在跑吗") == "北流城南站"
 assert query._dir("往呈贡广场方向有几辆车") == "呈贡广场"
 assert query._dir("哪个方向没车") == ""
@@ -1313,6 +1313,17 @@ _p9a, query._ask111 = query._ask111, lambda cn, a, b: [{
     "stationNum": "15站", "routeUpDownSimple1": [
         {"routeName": "G01路", "upStationName": "文体人民路口"}]}]
 assert "文体人民路口" in query.render_plan("玉林市", "市体育中心", "玉林北站")
+# 换乘段要标只坐几站：「玉林总站-福绵新滔工业园」这种区间线名念出来像「要坐去福绵」，
+# 群里就有人问「你怎么让我坐福绵那条」，其实只反向坐 2 站到换乘站
+_p9b, query._ask111 = query._ask111, lambda cn, a, b: [{
+    "stationNum": "32站", "routeUpDownSimple1": [
+        {"routeName": "玉林总站-福绵新滔工业园", "upStationName": "电脑城（新民路）",
+         "upStationIndex": 26, "downStationIndex": 28},
+        {"routeName": "玉林至北流城际公交线路", "upStationName": "市二医院西院（一环北路）",
+         "upStationIndex": 2, "downStationIndex": 31}]}]
+_p9c = query.render_plan("玉林市", "玉林电脑城", "北流汽车总站")
+assert "玉林总站-福绵新滔工业园（2站）" in _p9c, _p9c
+assert "玉林至北流城际公交线路（29站）" in _p9c, _p9c
 query._ask111 = _p9a
 
 # 玉林导乘资料（玉林微途整理）：换乘站表、枢纽站上车点、联营线无实时

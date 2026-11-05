@@ -1196,9 +1196,13 @@ def render_plan(city_name, a, b):
             if nm in ride:
                 continue
             up = leg.get("upStationName") or ""
+            # 线名是「玉林总站-福绵新滔工业园」这种区间写法时，念出来像「要坐去福绵的车」——
+            # 补上只坐几站，才看得出它只是短驳（方案2 是反向坐 2 站到换乘站）
+            n = abs((leg.get("downStationIndex") or 0) - (leg.get("upStationIndex") or 0))
+            seg = f"{nm}（{n}站）" if n else nm
             # 第一条腿不从用户说的站发车（上游换成了附近站），得说清去哪上车
-            ride += (f"，到{up}换 {nm}" if ride else
-                     f"到{up}坐 {nm}" if up and up not in (a, ra) else f"坐 {nm}")
+            ride += (f"，到{up}换 {seg}" if ride else
+                     f"到{up}坐 {seg}" if up and up not in (a, ra) else f"坐 {seg}")
         if not ride:
             continue
         bits = [x for x in (p.get("stationNum"),
