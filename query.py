@@ -2439,7 +2439,10 @@ def answer(msg, default_city, ctx="", key=""):
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
     line = parse(msg)
-    if not line and ctx and not re.search(r"在跑|运营|哪条|哪些|有几|几条|条线路|全部|车牌|号牌", msg) \
+    # 本句自己写了文字线名（「用车来了查湛江宝钢专线」）时 parse 认不出，但那就是用户要的那条；
+    # 别拿 ctx 里的线号顶掉它——先问过 M308 再问这句，会答成「湛江没查到 M308」
+    if not line and ctx and not TEXT_LINE.search(msg) \
+            and not re.search(r"在跑|运营|哪条|哪些|有几|几条|条线路|全部|车牌|号牌", msg) \
             and not PLATE_RE.search(msg):
         # 引用别人那句追问「这路还有几辆」，线路号在被引用的话里。
         # 但本句问的是全城（「还有没有在跑的线路」「每辆车的车牌」）时不能拿引用里那一路顶替——

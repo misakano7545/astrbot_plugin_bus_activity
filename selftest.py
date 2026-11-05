@@ -1156,6 +1156,10 @@ assert query.TAIL.sub("", "饮马口站有几条线路") == "饮马口站", quer
 # 「X 的公交线路」：TAIL 只剥「线路」会剩「的公交」，站名就搜不到了
 assert query.TAIL.sub("", "关山月美术馆②的公交线路") == "关山月美术馆②", \
     query.TAIL.sub("", "关山月美术馆②的公交线路")
+# 文字线名 parse 认不出（靠 TEXT_LINE 兜）：这句话不能去看 ctx 里的线号，
+# 否则先问过 M308 再问这句会答成「湛江没查到 M308」
+assert query.parse("用车来了查湛江宝钢专线") is None
+assert query.TEXT_LINE.search("用车来了查湛江宝钢专线")
 assert query.STOPASK_RE.search("饮马口站有几条线路")
 assert not query._subseq("东简", "吴川东升客运站"), "东简客运站不该匹到吴川东升客运站"
 
