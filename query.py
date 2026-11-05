@@ -1236,6 +1236,9 @@ def render_times(city_name, want, msg=""):
 
 
 PRICE_RE = re.compile(r"票价|多少钱|几块钱?|收费")
+# 「玉林公交公司电话是多少」「广州巴士集团电话」没有线路号，问的是整座城
+CITY_CO_RE = re.compile(r"[\u4e00-\u9fa5]{0,4}(?:公交|巴士|客运|交通|地铁)[\u4e00-\u9fa5]{0,6}"
+                        r"(?:公司|集团|电话|热线|客服|投诉)")
 # 「往X方向」在 render_price 里也得认，跟 render_times 一个口径
 
 
@@ -1281,6 +1284,43 @@ def render_company(city_name, want):
     if not any("电话" in o for o in out):
         out.append("平台没挂咨询电话，丢东西直接打 12345 或去线路终点站的调度室问")
     return "\n".join(out)
+
+
+def render_city_company(city_name, msg=""):
+    """一座城有哪些公交公司、电话多少——没带线路号时问的就是这个，别回空。
+    shortcut: 大城要拉全目录（北京 3 秒 8MB），只在明确问公司时才调，挂 1 小时缓存。
+    """
+    if not city_name:
+        return None
+    d = _cached("bean-all", city_name, CATALOG_TTL,
+                lambda: _post({"CMD": "114", "CITYNAME": city_name, "KEYWORD": ""}))
+    co = {}
+    for b in d.get("buslines") or []:
+        r = b.get("routeBean") or {}
+        c = (r.get("company") or "").strip()
+        if not c:
+            continue
+        co.setdefault(c, "")
+        m = (r.get("companyMobile") or "").strip()
+        if m and not co[c]:
+            co[c] = m.rsplit(":", 1)[-1].strip()      # 「骏马客运（接听时间：06:00-21:00）:010-…」
+    if not co:
+        return None
+    # 「广州巴士集团电话」点了名就只报这家；泛指（「玉林公交公司」）照旧全列
+    kw = CITY_CO_RE.search(msg or "")
+    if kw:
+        core = re.sub(r"(?:公司|集团|电话|热线|客服|投诉)$", "", kw.group())
+        # 先整段试（「广州地铁」本身就是公司名），再去掉城名试（「广州一汽巴士」→「一汽巴士」）
+        for k in (core, core.replace(norm_city(city_name), "")):
+            same = {c: t for c, t in co.items() if len(k) >= 3 and k in c}
+            if same:
+                co = same
+                break
+    rows = [f"{city_name}这边 {len(co)} 家公交公司：{'、'.join(co)}"]
+    tel = [f"{c} {t}" for c, t in co.items() if t]
+    rows.append("电话：" + "；".join(tel) if tel else
+                "平台没挂这几家的咨询电话，打 12345 问公交服务热线")
+    return "\n".join(rows)
 
 
 def render_transfer(city_name, want):
@@ -1633,6 +1673,11 @@ def answer(msg, default_city, ctx="", key=""):
     name = (cities().get(city_key) or {}).get("mygolbs") or (prefix if city_key not in cities() else None)
     prev = last.get("city")
     last["city"] = city_key
+    # 「玉林公交公司电话是多少」：没带线路号，问的是整座城的公司，别回空交给模型（它会编）
+    if not line and CITY_CO_RE.search(msg):
+        out = render_city_company(name, msg)
+        if out:
+            return out
     got = hop(msg)
     # 先按当前城市的目录真查一遍：北流是县级市、自己有一条「北流汽车总站→玉林北站」的
     # 北流105路，只看两个站名属于哪座城会把这条线误判成跨城

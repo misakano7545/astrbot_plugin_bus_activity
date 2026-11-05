@@ -468,6 +468,20 @@ query._price = lambda c, n: ""
 assert "没标票价" in query.render_price("玉林市", "G02")
 query._catalog, query._first_last, query._price = _cat, _fl, _pl
 
+# 没带线路号问公司/电话：「玉林公交公司电话是多少」以前返空，模型拿到空就自己编
+_cc = query._post
+query._post = lambda p, timeout=8: {"buslines": [
+    {"routeBean": {"routeName": "1路", "company": "甲公交", "companyMobile": ""}},
+    {"routeBean": {"routeName": "2路", "company": "乙巴士", "companyMobile": "乙巴士:020-12345678"}}]}
+_x = query.render_city_company("某市")
+assert "2 家公交公司" in _x and "乙巴士 020-12345678" in _x and "甲公交" in _x, _x
+_y = query.render_city_company("某市", "某市乙巴士电话")     # 点了名只报这家
+assert "1 家" in _y and _y.count("020-12345678") == 1, _y
+assert query.render_city_company(None) is None
+assert not query.CITY_CO_RE.search("我们公司今年业绩咋样")      # 闲聊不能被公司查询抢走
+assert query.CITY_CO_RE.search("玉林公交公司电话")
+query._post = _cc
+
 # 实例是 UTC：时钟要按北京时间报（23:37 那种是 UTC，实际 07:37）
 import time as _tm
 _utc = _tm.time
