@@ -1185,9 +1185,12 @@ def render_plan(city_name, a, b):
         if ra or rb:
             info = _ask111(city_name, ra or a, rb or b)
     rows = []
+    first_legs = []
     for k, p in enumerate(info[:2]):
         legs = [lg for key in ("routeUpDownSimple1", "routeUpDownSimple2", "routeUpDownSimple3")
                 for lg in (p.get(key) or []) if lg.get("routeName")]
+        if k == 0:
+            first_legs = legs
         if k == 0 and len(legs) < 2 and (legs[0].get("upStationName") or "") in (a, ra):
             return ""       # 能直达就让 render_hop 答——它带车在哪、首末班，这里排不出这些
         ride = ""
@@ -1209,11 +1212,25 @@ def render_plan(city_name, a, b):
                             p.get("totalTime") and f"约{p['totalTime']}",
                             p.get("totalWalkDistance") and f"走路{p['totalWalkDistance']}") if x]
         rows.append(ride + (f"，{'、'.join(bits)}" if bits else ""))
+    # 换乘那条线若从中途站上，111 永远不给「先去首站」的方案（它只按总时长排），
+    # 但很多人就是要座位、或者行李多——补一句怎么先到首站，别让用户自己问
+    note = ""
+    if first_legs and (first_legs[-1].get("upStationIndex") or 1) > 1:
+        ln = first_legs[-1]["routeName"]
+        seq = mygolbs.stations(city_name, ln, "1") or []
+        head = (seq[0].get("stationName") or "") if seq else ""
+        if head and head not in (a, ra, b):
+            way = render_hop(norm_city(city_name), city_name, (a, head)) or ""
+            picks = re.findall(r"^(.+?)（(\d+) 站）", way, re.M)[:2]
+            if picks:
+                note = (f"{head}是 {ln} 的首发站，想坐着去："
+                        + "、".join(f"{x} {n}站" for x, n in picks) + f" 到{head}再上车")
+    tail = f"\n{note}" if note else ""
     if not rows:
         return ""
     if len(rows) == 1:
-        return f"从{a}到{b}：{rows[0]}"
-    return f"从{a}到{b}：\n{rows[0]}\n或者{rows[1]}"
+        return f"从{a}到{b}：{rows[0]}{tail}"
+    return f"从{a}到{b}：\n{rows[0]}\n或者{rows[1]}{tail}"
 
 
 def render_ways(line, table):
@@ -2378,6 +2395,14 @@ def answer(msg, default_city, ctx="", key=""):
     if not explicit:
         city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
     base = norm_city(default_city)
+    # 「316路山南张庄接驳车」：「山南张庄」是石家庄的站名，西藏山南市被当成城市，
+    # 答出「山南这边有的是 6路、1路」。城市名只是更长一段话的前半截、而且那座城压根没这条线时不算明写
+    if explicit and line and re.search(re.escape(city_key) + r"[\u4e00-\u9fa5]", msg):
+        try:
+            if not mygolbs.lines((cities().get(city_key) or {}).get("mygolbs") or city_key, line[0]):
+                city_key, explicit = (base if base in cities() else None), False
+        except Exception:
+            pass
     # 「闽AYC505」没写城市：车牌头两位就是车管所，能定到哪座城（否则会落回默认城白扫一遍）
     pm = PLATE_RE.search(msg)
     if pm and not explicit:

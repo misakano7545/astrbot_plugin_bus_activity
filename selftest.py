@@ -1321,9 +1321,16 @@ _p9b, query._ask111 = query._ask111, lambda cn, a, b: [{
          "upStationIndex": 26, "downStationIndex": 28},
         {"routeName": "玉林至北流城际公交线路", "upStationName": "市二医院西院（一环北路）",
          "upStationIndex": 2, "downStationIndex": 31}]}]
+# 111 只按总时长排，永远让你在城际半路（第 2 站）上；用户实际想先坐 26/6 路到首发站坐着去
+_p9d, query.mygolbs.stations = query.mygolbs.stations, lambda cn, ln, d: [{"stationName": "汽车总站"}]
+_p9e, query.render_hop = query.render_hop, lambda ck, cn, got, only_direct=False: (
+    "从电脑城到汽车总站能直达：\n26路（2 站），首班 07:10 还没到\n6路（3 站），首班 07:00 还没到")
 _p9c = query.render_plan("玉林市", "玉林电脑城", "北流汽车总站")
 assert "玉林总站-福绵新滔工业园（2站）" in _p9c, _p9c
 assert "玉林至北流城际公交线路（29站）" in _p9c, _p9c
+assert "汽车总站是 玉林至北流城际公交线路 的首发站" in _p9c, _p9c
+assert "26路 2站、6路 3站" in _p9c, _p9c
+query.mygolbs.stations, query.render_hop = _p9d, _p9e
 query._ask111 = _p9a
 
 # 玉林导乘资料（玉林微途整理）：换乘站表、枢纽站上车点、联营线无实时
