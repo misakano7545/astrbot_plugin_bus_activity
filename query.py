@@ -2374,12 +2374,14 @@ def answer(msg, default_city, ctx="", key=""):
             return f"没查到从「{got[0]}」到「{got[1]}」的换乘方案：{norm_city(name)}站表里没有这两个站"
         return (f"「{got[0]}」到「{got[1]}」在{norm_city(name)}的站表里没找全，"
                     f"是哪座城的？说个城市名我再查")
-    # 「那玉林北站定制夜班车呢？」线名不是数字+路，parse 认不出；目录里有就当场认
-    if not line and name:
+    # 「那玉林北站定制夜班车呢？」线名不是数字+路，parse 认不出；目录里有就当场认。
+    # 这句自己点了线名就别沿用上一条的号：刚问完 12 路再问「用车来了查宝钢专线」会答成 12 路
+    if name and (not line or inherited):
         hit = _msg_line(name, msg)
         if hit:
             # _pick 拿归一化名做全等比，原始线名（带「（28路）」）一个都匹不上
             line, prefix = (norm_line(hit), ""), ""
+            inherited = False
     # 「北流城南站方向还有没有」：这句没写线号，问的是上一条那路车的某一个方向
     if name and _dir(msg) and (not line or not line[0]):
         cl = parse(ctx)                      # 微信引用里那句话带着线号

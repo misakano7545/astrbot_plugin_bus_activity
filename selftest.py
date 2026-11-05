@@ -1155,6 +1155,17 @@ query._catalog = _cap
 assert query.STOP_TRIM_OK.fullmatch("站"), "「饮马口站」这种尾巴要放行"
 assert not query.STOP_TRIM_OK.fullmatch("新城"), "「汽车新城」的「新城」不是通用字"
 
+# 点名的线名不是数字时（宝钢专线/大容山专线）不能沿用上一条问过的 12 路
+_lk0, _lq0, _ra0, _cat1 = query._last, query.query, query.render_at, query._catalog
+query._last = lambda k: {"line": "12"}
+query._catalog = lambda cn: {"buslines": [{"lineName": "大容山旅游专线（28路）", "to": "大容山景区"}]}
+query.render_at = lambda *a, **k: None
+query.query = lambda ck, wants, src=None, veh="": {
+    "line": "大容山旅游专线（28路）", "groups": [("大容山景区", [("桂K1", "站", "100米")])]}
+_txt = query.answer("用车来了查玉林大容山专线", "玉林市")
+assert "大容山" in _txt and "12 现在" not in _txt, _txt
+query._last, query.query, query.render_at, query._catalog = _lk0, _lq0, _ra0, _cat1
+
 print("selftest ok")
 
 if "--live" in sys.argv:
