@@ -179,6 +179,9 @@ def parse(msg):
             t = re.sub(r"(?:的)?(?:" + ENDS_RE.pattern + "|" + TIMES_RE.pattern + "|"
                        + PRICE_RE.pattern + r").*$", "", t)
             m = re.fullmatch(r"([\u4e00-\u9fa5]{2,6})(\d{1,4})", t)
+            if m and m.group(1)[-1] in "快慢" and m.group(1)[:-1] in cities():
+                # 「柳州快1」：快/慢 是线名的一部分（目录里叫「快1号线」），不是城市名的尾巴
+                return norm_line(m.group(1)[-1] + m.group(2)), m.group(1)[:-1]
             if not m or m.group(1) not in cities():
                 return None
             return m.group(2), m.group(1)
@@ -193,6 +196,9 @@ def parse(msg):
         (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
          or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
+    # 「柳州快1路」：快/慢 粘在线号前，被当成了前缀的尾巴——挪回线名里
+    if pre[-1:] in ("快", "慢") and (not pre[:-1] or pre[:-1] in cities()):
+        num, pre = pre[-1] + num, pre[:-1]
     return norm_line(num), _snap(pre)
 
 
@@ -954,9 +960,10 @@ def _exact_line(city_name, msg, want):
     for r in rows:
         n = norm_line(r["lineName"])
         # 句子里把城市名也粘进了线名（「西安环山二号线」）：目录名是它的后缀也算。
-        # 只认差 1–4 个汉字的情况（城市名被粘进线名），否则「G01」会被认成「1」
+        # 只认差 2–4 个汉字的情况（城市名被粘进线名），否则「G01」会被认成「1」；
+        # 差一个字的多半是「快1」里的「快」——那是线名的一部分，不是城市名，认了会退成 1 路
         head = w[:len(w) - len(n)] if w.endswith(n) and len(w) > len(n) else ""
-        if not (w and n.endswith(w) or re.fullmatch(r"[\u4e00-\u9fa5]{1,4}", head or "")):
+        if not (w and n.endswith(w) or re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", head or "")):
             continue
         # 「新乐专一路」的「一」也是数字，得和 1 等价地认
         cns = "零一二三四五六七八九"

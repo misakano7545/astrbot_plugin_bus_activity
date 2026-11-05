@@ -944,6 +944,15 @@ assert query.hop("怎么去北流万达") is None              # 没出发站，
 assert query.hop("玉林9路咋去") is None                # 左边是线路号
 assert query.hop("从玉林火车站到北流万达") == ("玉林火车站", "北流万达")   # 老的「到」式没坏
 
+# 「柳州快1」：快/慢 是线名的一部分（目录里叫「快1号线」），不是城市名的尾巴
+_cs = query.cities
+query.cities = lambda: {"柳州": {"mygolbs": "柳州市"}, "玉林": {}}
+assert query.parse("柳州快1") == ("快1", "柳州")
+assert query.parse("柳州快1路") == ("快1", "柳州")
+assert query.parse("柳州快9区间") == ("快9区间", "柳州")
+assert query.parse("快乐1天") is None           # 「快」前面不是城市名就不认
+query.cities = _cs
+
 print("selftest ok")
 
 if "--live" in sys.argv:
