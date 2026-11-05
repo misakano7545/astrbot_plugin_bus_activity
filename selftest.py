@@ -1126,6 +1126,13 @@ query.chelaile.lines = lambda c: [("安宁K7", "1")]
 assert query._near("昆明", "安宁12") == "安宁K1、安宁K7", query._near("昆明", "安宁12")
 query._catalog, query.chelaile.lines, query.cities = _cat0, _cl0, _c0
 
+# 「南京新街口有哪些公交」被当成了「哪条线在跑」，整城 818 条倒进群里
+assert query.TAIL.sub("", "新街口有哪些公交") == "新街口", query.TAIL.sub("", "新街口有哪些公交")
+assert not query.SWEEP_RE.search("南京新街口有哪些公交"), "哪些不该进 SWEEP_RE"
+assert query.SWEEP_RE.search("南宁今晚还有没有公交"), "时间词那句还得走 sweep"
+assert query.STOPASK_RE.search("新乡胖东来三胖有哪些公交")
+assert not query.STOPASK_RE.search("玉林汽车总站有什么公交车不是站")
+
 print("selftest ok")
 
 if "--live" in sys.argv:

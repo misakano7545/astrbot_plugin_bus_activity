@@ -820,7 +820,7 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -855,11 +855,11 @@ def stops(city_name, keyword):
                                   "KEYWORD": keyword}).get("busstations") or [])
 
 
-def _same_rows(rows, hit):
+def _same_rows(rows, hit, base=None):
     """同一个站被平台拆成的几条记录：「汽车总站」「（二医院）」「（大北路）」。
     站名不同但都在 100 多米内，是同一片站台，不是隔壁站。
     """
-    base = hit["stationName"]
+    base = base or hit["stationName"]
     # 「市一职校（玉林技师学院）」和「玉林技师学院（市一职中）」是同一所学校的两个门，
     # 各挂各的线：括号里的别名也算这个名字
     bases = [base] + re.findall(r"[（(]([^）)]+)[）)]", base)
@@ -868,7 +868,9 @@ def _same_rows(rows, hit):
         n = r.get("stationName") or ""
         # 只有「汽车总站（二医院）」这种加括号的才是同一个站的另一条记录；
         # 「芳村花园」「芳村西塱」是隔壁站，「芳村（地铁站）」是另一种车
+        # 路口的四个站牌（「新街口东/西/南/北」）也是一片站台，问「新街口有哪些公交」得一起报
         if n in seen or not any(n == b or n.startswith((b + "（", b + "(", b + "·"))
+                                 or re.fullmatch(re.escape(b) + r"[东南西北中](（\d站台）|\(\d站台\))?", n)
                                  for b in bases) \
                 or "地铁" in n or "轨道交通" in n or not _near_same(hit, r):
             continue
@@ -901,6 +903,11 @@ def _near_same(a, b):
         return True        # 平台没给坐标就退回按名字匹，跟以前一样
 
 
+def _bus_row(rows):
+    """站表把同名地铁站排在前面（「新街口（地铁站）」），问公交时别拿它当那片站台的主名。"""
+    return next((r for r in rows if "地铁" not in (r.get("stationName") or "")), rows[0])
+
+
 def find_stop(city_name, raw):
     """站名从长到短试，命中即止——用户嘴里不会带括号后缀，得让平台的站名去对。
 
@@ -921,7 +928,7 @@ def find_stop(city_name, raw):
             if n == 2:
                 rows = [r for r in rows if r["stationName"] in (raw[:n], raw[:n] + "站", raw[:n] + "口")]
             if rows:
-                return _merge_same(rows, rows[0]), raw[:n]
+                return _merge_same(rows, _bus_row(rows)), raw[:n]
     # 「陆川汽车总站」平台写作「汽车总站（陆川）」：县名被挪到括号里，顺序反过来了，
     # 拿尾巴当关键词搜、再用前缀认是哪一条（「北流汽车总站」这种真带前缀的也一起认）
     for n in (4, 3):
@@ -1754,7 +1761,15 @@ def render_stop(city_key, city_name, msg, src=None):
     if not name:
         return None
     # 再搜一次站名会撞上同名地铁站（「芳村」和「芳村（地铁站）」），按站名精确挑
-    rows_ = stops(city_name, name) or []
+    # 拿用户写的那个词再搜一遍：pick_stop 只回一个站牌名（「新街口西」），拿它搜就只剩那一个
+    # 站台，新街口北/东/·正洪街全丢了；stops 有缓存，这一遍不再发请求
+    rows_ = []
+    for cand in _cands(city_name, msg):
+        got, _ = find_stop(city_name, cand)
+        if got and got.get("stationName") == name:
+            rows_ = [r for r in stops(city_name, cand) or [] if r.get("stationName")]
+            break
+    rows_ = rows_ or stops(city_name, name) or []
     # 「市一职校（玉林技师学院）」和「玉林技师学院（市一职中）」是同一所学校的两个门，
     # 各挂各的线：括号里的别名也搜一遍，交给 _same_rows 合并
     for alias in re.findall(r"[（(]([^）)]+)[）)]", name):
@@ -1762,7 +1777,12 @@ def render_stop(city_key, city_name, msg, src=None):
     if not rows_:
         return None
     row = next((r for r in rows_ if r.get("stationName") == name), rows_[0])
-    groups = _same_rows(rows_, row)
+    # 「新街口」在平台上拆成东/西/南/北四个站牌：问的是一整片，只报被挑中的那一角等于漏答
+    gb = re.sub(r"[东南西北中]$", "", name)
+    if (gb != name and len(gb) >= 2 and norm_city(gb) != norm_city(city_name)
+            and sum(1 for r in rows_ if (r.get("stationName") or "").startswith(gb)) > 1):
+        name = gb
+    groups = _same_rows(rows_, row, name)
     if not any(rs for _, rs in groups):
         return None
     # 「这站哪辆车来得最快」问的是实时比较，不是有几条线：逐线查该站的到站预测再比
@@ -1815,7 +1835,11 @@ def render_stop(city_key, city_name, msg, src=None):
 BEST_RE = re.compile(r"最快|最少|哪[辆部个条]?先|先到|等得最少|等的最少")
 # 「玉林还有哪条线路有车」这类全城问题没法靠线路号答，得把目录扫一遍。
 # 放在站点判断之后：能认出站名就以站点为准，「十字街有几路车」不会被抢走。
-SWEEP_RE = re.compile(r"哪条|哪些|哪几|哪路|还有|在跑|运营")
+SWEEP_RE = re.compile(r"哪条|哪几|哪路|还有|在跑|运营")
+# 「新乡胖东来三胖有哪些公交」：问的是那个地方有哪些线，不是整城清单、也不是哪条在跑
+STOPASK_RE = re.compile(r"(?:有哪些|有没有|有什么)[\u4e00-\u9fa5]{0,5}(?:公交车|公交|巴士|公车|线路)?[？?吗呢啊]*$")
+# 「南宁今晚还有没有公交」问的是这会儿有没有车，不是某个地方——留给 SWEEP_RE
+_NOTPLACE = re.compile(r"今晚|今天|现在|目前|几点|多久|什么时候|在跑|运营|还有")
 SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让用户点名，别硬扫
 # 按车牌查只能逐线翻 104（两家都没这个接口）：一个城扫到此为止，再多群里等不起
 PLATE_MAX = 2600      # 深圳 2310 个方向，够了；北京 3477 / 上海 3262 仍只扫前 2600
@@ -2388,6 +2412,12 @@ def answer(msg, default_city, ctx="", key=""):
             # 记一句是哪个站，「这四条线路哪条在跑」要靠它收窄，不能拿全城目录答
             last["stop"] = pick_stop(name, msg) or last.get("stop")
             return out
+        # 「新乡胖东来三胖有哪些公交」：站表里没这个站就直说。回空的话模型会自己改口去问
+        # 「新乡有哪些公交线路」，把全城 93 条倒进群里
+        if STOPASK_RE.search(msg) and not _NOTPLACE.search(msg):
+            place = STOPASK_RE.sub("", msg).replace(norm_city(name), "", 1).strip()
+            if len(place) >= 2:
+                return f"{norm_city(name)}站表里没查到「{place}」这个站"
         # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）
         if not explicit and re.search(r"站|线路|几路", msg):
             hint = re.sub(r"公交$", "", STOPSUF.sub("", TAIL.sub("", msg))).strip()
