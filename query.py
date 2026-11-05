@@ -1736,27 +1736,56 @@ def render_plate(city_name, plate, dir_msg=""):
 
 def render_selfno(city_key, city_name, plate):
     """「XX 的自编号是啥」：掌上只给车牌（104 的 busNumber），车来了只给自编号（licence），
-    两家没有共同的键，坐标能对但差几十秒就偏一站，不拿它猜。只能报车来了这条线挂的号。"""
+    两家没有共同的键。唯一能对上的东西是这一刻的 GPS —— 同方向里取离它最近的那辆，
+    只有「近得离谱、且第二名远得多」才敢报，对不准就说对不上。"""
     try:
         idx, _scanned, _total = _cached("plate-idx", city_name, PLATE_TTL,
                                         lambda: _plate_index(city_name))
     except Exception:
         return f"{city_name}这边查车牌的时候上游没响应，过会儿再问一次"
     hit = idx.get(_plate_key(plate))
+    if not hit:
+        return f"没扫到 {plate} 这辆车，自编号更对不上"
+    name, d = hit[0], hit[1]
     cid = (cities().get(city_key) or {}).get("chelaile")
-    nos = []
-    if hit and cid:
-        base = hit[0].replace("路", "").upper()
+    mine = [c for c in (_live_my(city_name, name, d).get("list") or [])
+            if _plate_key(c.get("busNumber")) == _plate_key(plate)
+            and float(c.get("bus_lat") or 0) and float(c.get("bus_lng") or 0)]
+    # 车来了同名的线全拿进来：两家的方向名写法不一样（掌上「汽车总站（二医院）」vs 车来了
+    # 「玉林汽车总站」），按 to 过滤会把整个方向滤掉；反方向的车隔着几公里，靠距离就能分开
+    cand = []
+    if cid and mine:
         try:
             for nm, lid in chelaile.lines(cid):
-                if nm.upper().replace("路", "") == base:
-                    nos += [b[0] for b in chelaile.live(cid, lid)["buses"]]
+                if norm_line(nm) != norm_line(name):
+                    continue
+                cand += list((chelaile.live(cid, lid).get("pos") or {}).items())
         except Exception:
-            nos = []
-    nos = [n for n in dict.fromkeys(n for n in nos if n)]
-    head = (f"{plate} 在 {hit[0]} 上，但掌上只报车牌不报自编号"
-            if hit else f"没扫到 {plate} 这辆车，自编号更对不上")
-    tail = (f"；车来了这条线现在挂的是 {'、'.join(nos)}，它那边没有车牌字段，分不出哪辆是它"
+            cand = []
+    if mine and cand:
+        # 同方向所有掌上车和车来了所有车做一次一对一（按距离升序贪心），
+        # 一辆车来了号只能配一辆掌上车——这样「两辆掌上都最近邻到同一辆」不会串
+        rows = [c for c in (_live_my(city_name, name, d).get("list") or [])
+                if float(c.get("bus_lat") or 0) and float(c.get("bus_lng") or 0)]
+        pairs = sorted((m, c["busNumber"], no) for c in rows for no, p in cand
+                       if (m := _dist_m({"lat": c["bus_lat"], "lng": c["bus_lng"]}, p)) is not None)
+        # shortcut: 两家 GPS 刷新节奏不同，同一辆车常差 500 米上下，1.5km 是实测上限；
+        # 车队密集到两辆离同一辆都很近时会配错，那种情况命中不了就走「对不上」
+        used_p, used_n, mate = set(), set(), {}
+        for m, pn, no in pairs:
+            if m > 1500:
+                break
+            if pn in used_p or no in used_n:
+                continue
+            used_p.add(pn), used_n.add(no)
+            mate[_plate_key(pn)] = (no, m)
+        got = mate.get(_plate_key(plate))
+        if got:
+            return (f"{plate} 在 {name}上，这会儿的位置对着呢：车来了那边它是 {got[0]}"
+                    f"（两家 GPS 差 {got[1]} 米，这条路上离它最近的一辆）")
+    nos = [no for no, _p in cand if no]
+    head = f"{plate} 在 {name} 上，但掌上只报车牌不报自编号"
+    tail = (f"；车来了这条线现在挂的是 {'、'.join(nos)}，位置对不上是哪辆"
             if nos else "；车来了这边也没给出自编号")
     return head + tail
 

@@ -921,19 +921,25 @@ assert qm and "G02路 现在 2 辆" in qm.group(1)
 assert query.SELFNO_RE.search("桂K12345自编号是啥") and not query.SELFNO_RE.search("桂K12345")
 assert query.parse("有，G02路 现在 2 辆在路上")          # 引用原文本身会被 parse 认成线，才需要先剥掉
 
-# 自编号：掌上没这个字段，只能报车来了挂的号，且说清对不上
+# 自编号：掌上只报车牌、车来了只报自编号，靠同一刻的 GPS 一对一配（一辆只能配一个号）
 _cl2, query.chelaile = query.chelaile, types.SimpleNamespace(
     lines=lambda cid: [("9", "L1")],
-    live=lambda cid, lid: {"buses": [("514", "甲站", 100), ("397", "乙站", 900)]})
+    live=lambda cid, lid: {"buses": [("514", "甲站", 100), ("397", "乙站", 900)],
+                           "pos": {"514": {"lat": 22.6500, "lng": 110.1700},
+                                   "397": {"lat": 22.7100, "lng": 110.2300}}})
 _ci, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
-query._plate_index = lambda cn: ({"K12345": ("9路", "1", "火车站")}, 50, 80)
+_lm, query._live_my = query._live_my, lambda cn, ln, d: {"list": [
+    {"busNumber": "桂K12345", "bus_lat": 22.6545, "bus_lng": 110.1736},
+    {"busNumber": "桂K54321", "bus_lat": 22.7066, "bus_lng": 110.2260}]}
+query._plate_index = lambda cn: ({"K12345": ("9路", "1", "火车站"),
+                                  "K54321": ("9路", "1", "甲站")}, 2, 80)
 query._cache.clear()
-_sn = query.render_selfno("玉林", "玉林市", "桂K12345")
-assert "只报车牌不报自编号" in _sn and "514、397" in _sn, _sn
+assert "它是 514" in query.render_selfno("玉林", "玉林市", "桂K12345")
+assert "它是 397" in query.render_selfno("玉林", "玉林市", "桂K54321")
 query._plate_index = lambda cn: ({}, 80, 80)
 query._cache.clear()
 assert "没扫到" in query.render_selfno("玉林", "玉林市", "桂K99999")
-query._plate_index, query.cities, query.chelaile = _pi, _ci, _cl2
+query._live_my, query._plate_index, query.cities, query.chelaile = _lm, _pi, _ci, _cl2
 query._cache.clear()
 
 # 「A 咋去 B」「A 怎么去 B」：没「到」字也要认成换乘问句；「我在X咋去Y」把「我在」剥掉

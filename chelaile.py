@@ -89,6 +89,7 @@ def live(city_id, line_id):
     line = d.get("line") or {}
     stops = d.get("stations") or []
     buses = []
+    pos = {}
     for b in d.get("buses") or []:
         order = b.get("order")
         # 车来了的 order 是 1 基站序，超出站表时就不报站名，只给距离
@@ -97,5 +98,8 @@ def live(city_id, line_id):
         plate = (b.get("licence") or "").split("_")[0] or str(b.get("busId") or "?").split("_")[0]
         buses.append((plate, station,
                       b.get("distanceToWaitStn")))
+        # 掌上只报车牌、车来了只报自编号，两家唯一的公共键就是这一刻的 GPS 位置
+        if b.get("lat") and b.get("lng"):
+            pos[plate] = {"lat": b["lat"], "lng": b["lng"]}
     return {"state": line.get("state"), "desc": line.get("desc") or "",
-            "to": line.get("endSn") or "", "buses": buses}
+            "to": line.get("endSn") or "", "buses": buses, "pos": pos}
