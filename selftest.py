@@ -821,6 +821,12 @@ assert query.parse("广州121A路有车吗") == ("121A", "广州")
 assert query.parse("深圳B601路") == ("B601", "深圳")
 assert query.parse("苏州1001M路") == ("1001M", "苏州")
 assert query.parse("2026年怎么坐车") is None          # 纯数字不带路，不是线号
+# 「9KB」是文件大小，不是线号：字母前后各最多一个（真实线号没有「数字+两个字母」的）
+assert query.parse("9KB") is None
+assert query.parse("500MB") is None
+assert query.parse("99KB") is None
+assert not query.BUS_RE.search("9KB")
+assert query.parse("玉林9路") == ("9", "玉林")          # 放宽字母数别把普通线号带坏
 
 # 站名里带裸县名（「元氏火车站」→ 元氏县 → 石家庄）：别落回默认城玉林交白卷
 _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
