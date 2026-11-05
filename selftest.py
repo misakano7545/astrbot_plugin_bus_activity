@@ -1230,6 +1230,17 @@ assert "玉林公共汽车公司" in list(query._cands("玉林市", "玉林公�
 assert query.pick_stop("玉林市", "公交公司有哪几路") == "公共汽车公司"
 query.cities, query.stops = _a6, _s6
 
+# 「成都东16」= 成都 + 东16：方位字是线名的一部分（成都目录里叫东16路），不是「成都东」站
+_cd7, query.cities = query.cities, lambda: {"成都": {"mygolbs": "成都市"},
+                                            "玉林": {"mygolbs": "玉林市"},
+                                            "牡丹江": {"mygolbs": "牡丹江市"},
+                                            "柳州": {"mygolbs": "柳州市"}}
+assert query.parse("成都东16") == ("东16", "成都")
+assert query.parse("成都东16现在有车吗") == ("东16", "成都")
+assert query.parse("玉林2023年GDP") is None
+assert query.BUS_RE.search("成都东16")
+query.cities = _cd7
+
 print("selftest ok")
 if "--live" in sys.argv:
     import importlib
