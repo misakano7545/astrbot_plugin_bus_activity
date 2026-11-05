@@ -1177,6 +1177,11 @@ query.cities, query.chelaile.lines = _c1, _cl1
 # 「夜班车」进快路，但「昨晚夜班车真慢」这种叙述不算
 assert query.BUS_RE.search("玉林北站夜班车有没有车")
 assert not query.BUS_RE.search("昨晚夜班车真慢")
+# 纯文字线名（「妇幼专线」）不带数字也不带公交词，也要进快路；叙述句仍交给模型
+assert query.BUS_RE.search("妇幼专线")
+assert query.TEXT_LINE.fullmatch("妇幼专线")
+assert not query.TEXT_LINE.fullmatch("这条专线真长")
+assert not query.looks_like_ask("这条专线真长")
 
 # 县级市（吴川）掌上认、车来了只给地级市 id：线只在车来了目录里也要认出来
 _c2, _cl2, _cat2 = query.cities, query.chelaile.lines, query._catalog
