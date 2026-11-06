@@ -816,6 +816,15 @@ _st5, query.stops = query.stops, lambda cn, kw: [
     {"stationName": "玉林火车站（出站口）", "relatedRoutes": ["1路"]},
 ] if kw in ("车站", "火车站") else []
 assert query.find_stop("玉林市", "玉林汽车站")[0] is None
+# 「玉高附中等多久才能等到7路」：口语叫法「玉高附中」得换成站牌上的「玉林高中初中部」，
+# 换不出来时也不许说「这座城暂时没有公交数据」——那是站名，不是城市
+assert query.STOP_ALIAS["玉高附中"] == "玉林高中初中部"
+_stops = query.stops
+query.stops = lambda c, w: ([{"stationName": "玉林高中初中部", "relatedRoutes": ["7路"]}]
+                            if "初中部" in w else [])
+assert query.find_stop("玉林市", "玉高附中")[0]["stationName"] == "玉林高中初中部"
+query.stops = _stops
+assert "这座城暂时没有公交数据" not in str(query.answer("玉高附中等多久才能等到7路", "玉林市"))
 assert query.find_stop("玉林市", "玉林火车站")[0]["stationName"].startswith("玉林火车站")
 # 「G02路还差多久到玉林汽车站」：站牌上叫「汽车总站」，掌上搜「汽车站」一个字都搜不到
 assert "玉林汽车总站" in list(query._cands("玉林市", "G02路还差多久到玉林汽车站"))# 「玉林北站要等几分钟才能等到 g02」：问法里的「要等」「往」粘在站名上，站名就认不出

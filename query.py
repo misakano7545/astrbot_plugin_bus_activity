@@ -997,7 +997,9 @@ STOP_TRIM_OK = re.compile(r"[公交汽车火车客运总站台路口地铁]+")
 # 口语站名和平台站名对不上的常用别名（「玉林公交公司」平台上叫「公共汽车公司」）
 STOP_ALIAS = {"公交公司": "公共汽车公司",
               # 嘴里说「玉林汽车站」，站牌和目录里叫「汽车总站」（shtx 搜「汽车站」一个字都搜不到）
-              "汽车站": "汽车总站"}
+              "汽车站": "汽车总站",
+              # 「玉高附中」是玉林高中初中部的口语叫法，站牌上写全称，搜「玉高」0 条
+              "玉高附中": "玉林高中初中部"}
 
 
 def find_stop(city_name, raw):
@@ -1006,6 +1008,12 @@ def find_stop(city_name, raw):
     底线是 2 字（「丰州」这种站牌本名就这么短），但整段跟城市名同字的首字
     会被下面那句挡掉，所以「南宁机场」不会退成「南宁」搜出「南宁孔庙」。
     """
+    # 口语叫法先换成站牌上的写法再搜（「玉高附中」→「玉林高中初中部」）；换完搜不到就按原样试
+    alias = next((raw.replace(k, v) for k, v in STOP_ALIAS.items() if k in raw), None)
+    if alias:
+        hit = find_stop(city_name, alias)
+        if hit[0]:
+            return hit
     # 平台有的站带「市」有的不带：「市体育中心」站牌上叫「体育中心」
     if raw[:1] in "市县区" and len(raw) > 3:
         rows = [r for r in stops(city_name, raw[1:]) or [] if r.get("stationName")]
@@ -2736,6 +2744,9 @@ def answer(msg, default_city, ctx="", key=""):
             elif looks_like_ask(msg):
                 if not _covered(prefix):
                     # 别写「查不了」：main.py 的 FALSE_CLAIM 会把这句当假话整句吞掉，用户啥也收不到
+                    # 前缀不是地名（「玉高附中」这种口语站名）时说人家整座城没数据是撒谎，点名是哪个站没找到
+                    if not re.search(r"[市县区州旗盟]$", prefix):
+                        return f"{bn or base}站表里没查到「{prefix}」这个站"
                     return f"{prefix}这座城暂时没有公交数据，掌上和车来了都没覆盖"
                 city_key = norm_city(prefix)
     if not city_key:
