@@ -870,6 +870,10 @@ assert query.SELFNO_RE.search("桂 K12682D 是哪个字编号呢")
 assert query.SRC_RE.search("用巴士派迪查南宁D276").group("bp")
 assert query.SRC_RE.search("派迪查G02").group("bp")
 assert query.SRCPRE.sub("", "用巴士派迪查南宁D276").strip() == "南宁D276"
+# 「lck6116evga2 在玉林配属哪条线路」：车型代号不是线号（尾数 2 会匹成 2 路），进型号那条分支
+assert query.MODEL_RE.search("lck6116evga2 在玉林配属哪条公交线路").group(1).upper() == "LCK6116EVGA2"
+assert query.MODEL_Q.search("lck6116evga2 在玉林配属哪条公交线路")
+assert query.MODEL_RE.search("查南宁D276") is None          # D276 是线号，不是型号
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities

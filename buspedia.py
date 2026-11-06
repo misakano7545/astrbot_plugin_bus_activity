@@ -9,6 +9,7 @@
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 import urllib.request
 import zlib
 
@@ -116,3 +117,26 @@ def comps(city_id):
     d = _api("region/%s" % city_id)
     names = d.get("cmap") or {}
     return [(c["id"], (names.get(c["id"]) or {}).get("name") or c["id"]) for c in d.get("comps") or []]
+
+
+def model_lines(city_id, code, workers=24):
+    """这个地区里哪些线路登记了这个型号：[(线名, [型号登记名...])]。
+
+    型号页只记全国的保有量、不带线路，只能逐条线翻「常用车型」反着找——一城几十条，
+    每条一次请求（_api 有 6 小时缓存，同一城反复问不重复打）。
+    shortcut: 24 并发是玉林 71 条线实测的折中（8 并发 22 秒、24 并发 6.7 秒），
+    上千条线的城市要加本地落盘缓存。"""
+    key = re.sub(r"[^0-9A-Za-z]", "", code).upper()
+    lines = [l for g in _api("region/%s/lines" % city_id)
+             for b in g.get("buckets") or [] for l in b.get("lines") or []]
+
+    def one(l):
+        try:
+            ms = models(l["uid"])
+        except Exception:
+            return None              # 一条线取不到就当它没登记，别让整城失败
+        hit = [n for n, _ in ms if key in re.sub(r"[^0-9A-Za-z]", "", n).upper()]
+        return (l["name"], hit) if hit else None
+
+    with ThreadPoolExecutor(workers) as ex:
+        return [r for r in ex.map(one, lines) if r]

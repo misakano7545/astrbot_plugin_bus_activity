@@ -2659,6 +2659,29 @@ def render_fleet(city_key, city_name, want):
             + f"\n（巴士派迪只记车型，不记每条线配几辆——要看这会儿跑着几辆，问「{line}现在几辆」）")
 
 
+# 「LCK6116EVGA2 在玉林配属哪条线路」：型号代号不是线号（尾数 2 会被当成 2 路）
+MODEL_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{2,4}\d{3,}[A-Za-z0-9]{0,8})(?![A-Za-z0-9])")
+MODEL_Q = re.compile(r"配属|配给|配哪|哪条线|哪些线路|哪条路|跑哪条|用在哪|上了哪些")
+
+
+def render_model(city_name, code):
+    """型号 → 哪几条线在用：建档里只有「线 → 车型」，反过来得一城逐线翻（buspedia.model_lines）。"""
+    region = (cities().get(_district_city(norm_city(city_name))) or {}).get("mygolbs") or city_name
+    try:
+        cid = buspedia.region_id(region)
+        rows = buspedia.model_lines(cid, code) if cid else []
+    except Exception:
+        return f"巴士派迪那边没响应，过会儿再问一次"
+    if not rows:
+        return (f"巴士派迪建档里，{region}这边没有哪条线路登记了 {code} 这个型号"
+                f"（建档是人工填的，也可能这型号压根没在这儿跑）")
+    out = [f"{region} 建档里用 {code} 的线路 {len(rows)} 条："]
+    for name, names in rows:
+        out.append(f"  {name}（{names[0]}）")
+    out.append("（建档资料，不是这会儿在跑的；要看实时就报线路名问）")
+    return "\n".join(out)
+
+
 def render_bp(city_name, want):
     """「用巴士派迪查 D276」：点名了建档站，就只给建档那份——起讫、公司、车型，不给实时。"""
     try:
@@ -2840,6 +2863,12 @@ def answer(msg, default_city, ctx="", key=""):
     src = ("chelaile" if sm.group("cl") else "buspedia" if sm.group("bp") else "mygolbs") if sm else None
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
+    # 「LCK6116EVGA2 在玉林配属哪条线路」：型号代号当线号会匹到 2 路，先按型号问法接走
+    mm = MODEL_RE.search(msg)
+    # 型号代号后面还得挂字母（LCK6116EVGA2 / ZK6821NG5）：D276 这种纯「字母+数字」是线号不是型号
+    if mm and MODEL_Q.search(msg) and re.search(r"[A-Za-z]{2}", re.sub(r"^[A-Za-z]{2,4}\d{3,}", "", mm.group(1))):
+        cy, _ex = detect_city(msg, "", default_city)
+        return render_model(cy or norm_city(default_city), mm.group(1))
     line = parse(msg)
     # 本句自己写了文字线名（「用车来了查湛江宝钢专线」）时 parse 认不出，但那就是用户要的那条；
     # 别拿 ctx 里的线号顶掉它——先问过 M308 再问这句，会答成「湛江没查到 M308」
