@@ -824,6 +824,12 @@ query.stops = lambda c, w: ([{"stationName": "玉林高中初中部", "relatedRo
                             if "初中部" in w else [])
 assert query.find_stop("玉林市", "玉高附中")[0]["stationName"] == "玉林高中初中部"
 query.stops = _stops
+# 「玉林九中的3路等多久」：「的」粘在站名尾巴上，站表里搜「玉林九中的」搜不到
+assert "玉林九中" in list(query._cands("玉林市", "玉林九中的3路等多久"))
+assert "玉林火车站" in list(query._cands("玉林市", "玉林火车站的9路等多久"))
+# 站在站台问等多久、站名又没认出来：反问哪一站，别退化成整车清单
+assert query.TIMEQ_RE.search("3路等多久") and not query.INTERVAL_RE.search("3路等多久")
+assert not query.TIMEQ_RE.search("9路多久一班") or query.INTERVAL_RE.search("9路多久一班")
 assert "这座城暂时没有公交数据" not in str(query.answer("玉高附中等多久才能等到7路", "玉林市"))
 assert query.find_stop("玉林市", "玉林火车站")[0]["stationName"].startswith("玉林火车站")
 # 「G02路还差多久到玉林汽车站」：站牌上叫「汽车总站」，掌上搜「汽车站」一个字都搜不到
@@ -905,7 +911,7 @@ _da5, _go5 = query._dest_after, query._goes
 query._dest_after = lambda c, m, s: "别处"        # 「G02 到高新产业园，去玉林北站」那种 dest
 query._goes = lambda c, l, s, d: None             # 两个方向都开不到 dest
 _g5 = query.render_at("玉林", "玉林市", "9", "玉林汽车总站等多久才能等到9路")
-assert _g5 and "没有开往别处" in _g5, _g5
+assert _g5 and "没有开往别处的预测" in _g5, _g5
 query._live_my, query._station_seq, query._catalog, query.pick_stop = _lm5, _sq5, _ct5, _ps5
 query._dest_after, query._goes = _da5, _go5
 
@@ -1282,7 +1288,7 @@ assert query.render_at("玉林", "玉林市", "9", "十字街") == \
     "9路 这会儿没车报过来，末班已经开走：20:35–22:55"
 query._window = lambda f, l: "open"      # 窗口里还开着：上游那句「非运营时间」不能照抄
 assert query.render_at("玉林", "玉林市", "9", "十字街") == \
-    "9路 这会儿没有开往十字街的车（往甲、乙方向都没有）"
+    "9路 这会儿没有到十字街的预测（往甲、乙方向都没报过来，刚过站或还没发车）"
 query._first_last, query._window = _fl, _w
 query.pick_stop, query._catalog, query._station_seq, query._live_my, query._etas = _p, _c2, _s, _l, _e
 

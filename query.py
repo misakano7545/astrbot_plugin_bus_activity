@@ -892,6 +892,10 @@ HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
 TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?(?:公交车|公交|巴士|公车)?(?:线路|线)|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋走|咋坐|咋去|换乘|有直达|直达|路线|的?(?:公交)?线路|的话|附近|周边|周围|(?:还)?要(?:等|坐|乘|多久|几[分站台])|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
+# 问的是「到这一站还要几分钟」：站名没认出来时宁可反问，也别退化成整车清单
+TIMEQ_RE = re.compile(r"等多久|等几分钟|几分钟|还有多久|多久到|还差多久|等几站|几分钟到")
+# 「多久一班」问的是发车间隔，不是到站钟点
+INTERVAL_RE = re.compile(r"多久一[班趟台]|间隔|多久一趟")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -1138,7 +1142,8 @@ def _cands(city_name, msg):
         # 得把号本身刮掉再当站名试
         # shortcut: 不认站名里带阿拉伯数字的（「3号门」），遇到了再收窄
         cand = re.sub(r"[A-Za-z]?\d{1,4}\s*[路线]", "", cand)
-        cand = LEAD.sub("", TAIL.sub("", cand))
+        # 「玉林九中的3路等多久」：「的」粘在站名尾巴上，站表里搜「玉林九中的」一个字都没有
+        cand = LEAD.sub("", TAIL.sub("", cand)).rstrip("的")
         # 「查询玉林职院附近有没有公交车」：动词粘在站名前头，「职院」就补不成全称了
         cand0 = cand                    # 剥动词之前的原样，剥完对不上时还得退回它（「那洪立交」）
         cand = JUNK_HEAD.sub("", cand) or cand
@@ -1685,7 +1690,7 @@ def render_at(city_key, city_name, want, msg):
             return f"{hit[0][1]['lineName']} 不经过{station_name}"
         # 这条线过我这站、方向全被 dest 过滤掉了：返 None 会落到整条线的清单
         # （「9路 现在 2 辆在路上，457 火车站 1.6km」）——站在站台的人读这个没用
-        return f"{hit[0][1]['lineName']} 这会儿没有开往{dest or station_name}的车"
+        return f"{hit[0][1]['lineName']} 这会儿没有开往{dest or station_name}的预测（刚发车或还没发，过会儿再问）"
     line_name = hit[0][1]["lineName"]
     # 目录里这条线有两个方向、但这站只有一个方向停（单边站）：另一个方向永远不会来，
     # 不加这句的话「往X 首班还没到」会被当成再等等就有了
@@ -1704,7 +1709,7 @@ def render_at(city_key, city_name, want, msg):
         where = ({"after": "末班已经开走", "before": "首班还没到"}.get(next(iter(st)), "")
                  if len(st) == 1 else "各方向运营时间不一样" if st else "")
         if not where:
-            return f"{line_name} 这会儿没有开往{station_name}的车（往{dirs}方向都没有）{ow}"
+            return f"{line_name} 这会儿没有到{station_name}的预测（往{dirs}方向都没报过来，刚过站或还没发车）{ow}"
         span = (f"{wins[0][1] or '?'}–{wins[0][2] or '?'}" if len({(x, y) for _, x, y in wins}) == 1
                 else "；".join(f"往{k} {x or '?'}–{y or '?'}" for k, x, y in wins))
         return f"{line_name} 这会儿没车报过来，{where}：{span}{ow}"
@@ -2618,6 +2623,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
                 out = render_stops(name, w)
             else:
                 out = render_at(city_key, name, w, msg)
+                # 「玉林九中的3路等多久」站名没认出来：站在站台问钟点的人读「每辆车离它旁边那站多远」没用
+                if not out and TIMEQ_RE.search(msg) and not INTERVAL_RE.search(msg):
+                    return f"{w + '路' if w.isdigit() else w} 是哪一站等？说个站名我给几分钟"
                 # 「多久一班」「发车间隔」：上游两家都没有这个字段，别装作答了——给实时，再说清缺什么
                 if out and re.search(r"多久一[班趟台]|几[分]钟一[班趟台]|间隔|一趟多久|多久一趟", msg):
                     out += "\n（发车间隔两家都不给，只能看实时的这几辆）"
