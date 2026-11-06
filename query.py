@@ -921,6 +921,8 @@ STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
 # 「11 路车」中间隔着「路」，不会被当成车号
 VEH_RE = re.compile(r"-\s*(\d{2,5})(?!\d)|(?<![\dA-Za-z])(\d{2,5})\s*[号]?车")
+# 「G02的512到汽车总站要等多久」：问的是这条线上自编号 512 那一辆，不是线号 512
+VEH2_RE = re.compile(r"的\s*(\d{2,5})(?![\d号线路])")
 # 完整车牌：省简称 + 字母 + 5 位（普通）或 6 位（新能源，闽A17997D）
 PLATE_RE = re.compile("(" + PLATE_PAT + ")")
 # 「桂K06833D 的自编号是啥」：车牌谁都有，问的是内部车号——两家都没有对照关系
@@ -1670,7 +1672,7 @@ def _clock(mins):
     return f"{(m // 60) % 24:02d}:{m % 60:02d}"
 
 
-def render_at(city_key, city_name, want, msg):
+def render_at(city_key, city_name, want, msg, veh=""):
     """「我在 X 站，N 路还有几站」：按方向给最近一辆，分钟用上游对该站的预测。"""
     station_name = pick_stop(city_name, msg)
     # 「安宁区8路」「东胜区 8路 夜班车」：线号前面那个词是行政区名，不是站名。
@@ -1683,6 +1685,18 @@ def render_at(city_key, city_name, want, msg):
     dest = _dest_after(city_name, msg, station_name)
     rows = _catalog(city_name).get("buslines") or []
     hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
+    # 「G02的512」：掌上按车牌报车来了按自编号报，先按同一刻 GPS 把 512 对到车牌。
+    # 对不上就照旧报最近一辆（不猜是哪辆，免得把别人的车说成他的）
+    mine, nos = set(), []
+    if veh and hit:
+        try:
+            mate = _selfno_mate(city_key, city_name, hit[0][1]["lineName"])[0]
+            mine = {k for k, (no, _) in mate.items() if veh in str(no)}
+            nos = sorted(no for no, _ in mate.values())
+        except Exception:
+            mine = set()
+        if nos and not mine:
+            return f"{hit[0][1]['lineName']} 这会儿没有 {veh} 这辆，在跑的自编号：{'、'.join(nos)}"
     got, dead, have = {}, [], []      # 方向名 -> (分钟, 车牌, 站数)；没预测的进 dead
     near = False                      # 这条线到底过不过我这个站
     for line_name, row in hit:
@@ -1703,6 +1717,25 @@ def render_at(city_key, city_name, want, msg):
         lab = row.get("to") or ""
         pay = _live_my(city_name, line_name, d, idx)
         eta = _etas(pay)
+        if mine:
+            own = [r for r in pay.get("routeOnStationRTimeInfoList") or []
+                   if _plate_key(r.get("busNumber")) in mine
+                   and int(r.get("busToStationCount") or -1) >= 0]
+            if own:
+                b = min(own, key=lambda r: float(r.get("busToStationTime") or 0) or 1e9)
+                eta = (float(b.get("busToStationTime") or 0),
+                       int(b.get("busToStationCount") or 0), f"{veh} {b['busNumber']}")
+            else:
+                # 掌上只给最近两辆报这站的预测，再往后的车按它现在停的那站往后累
+                car = next((c for c in pay.get("list") or []
+                            if _plate_key(c.get("busNumber")) in mine), None)
+                here = next((i for i, n in enumerate(names)
+                             if n == (car or {}).get("stationName")), None)
+                if car and here is not None and here < idx - 1:
+                    eta = (_run(pay, here, idx - 1), idx - 1 - here,
+                           f"{veh} {car['busNumber']}（现在{car['stationName']}）")
+                else:
+                    eta = None
         if not eta:
             # 上游对没车的方向一律给 busToStationTips（「非运营时间」也算），
             # 光抄它不行：运营窗口里它照样这么写。得对首末班才知道是真收班还是这一站没预测
@@ -2655,7 +2688,8 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
             elif STOPS_RE.search(msg):       # 要的是站表，别回实时车
                 out = render_stops(name, w)
             else:
-                out = render_at(city_key, name, w, msg)
+                _v2 = VEH2_RE.search(msg)
+                out = render_at(city_key, name, w, msg, _v2.group(1) if _v2 else "")
                 # 「玉林九中的3路等多久」站名没认出来：站在站台问钟点的人读「每辆车离它旁边那站多远」没用
                 if not out and TIMEQ_RE.search(msg) and not INTERVAL_RE.search(msg):
                     return f"{w + '路' if w.isdigit() else w} 是哪一站等？说个站名我给几分钟"

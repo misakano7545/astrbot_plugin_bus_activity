@@ -856,6 +856,9 @@ assert "玉林北站" in list(query._cands("玉林市", "往玉林北站还要�
 # 「G02在玉林汽车总站要等多久才能等到」：号在前、站夹中间，尾字「到」把最后一片切成空
 assert "玉林汽车总站" in list(query._cands("玉林市", "G02在玉林汽车总站要等多久才能等到"))
 assert "汽车总站" in list(query._cands("玉林市", "G02在汽车总站要等多久"))
+# 「G02的512到玉林汽车总站要等多久」：问的是这条线上自编号 512 那一辆，不是线号 512
+assert query.VEH2_RE.search("G02的512到玉林汽车总站要等多久").group(1) == "512"
+assert query.VEH2_RE.search("玉林到南宁的506路") is None
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities
