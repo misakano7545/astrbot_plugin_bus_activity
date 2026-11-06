@@ -712,6 +712,10 @@ def render(city_key, want, res, veh="", dir=""):
             return f"没查到「{want}」这条线" + (f"，{city_key}这边有的是 {near}" if near else "")
         return e                                      # 其余文案本身已经是人话
     line = res["line"]
+    # 车来了目录里的线名是裸号（湛江「9」），群里念出来像半句话：大陆的加个「路」，
+    # 香港/澳门的线号本来就不带「路」（506、B8）
+    if line.isdigit() and norm_city(city_key) not in ("香港", "澳门"):
+        line += "路"
     groups = res["groups"]
     if veh:
         if not any(_veh(b, veh) for _, bs in groups for b in bs):
@@ -784,7 +788,7 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?(?:公交车|公交|巴士|公车)?(?:线路|线)|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋坐|咋去|换乘|有直达|直达|路线|的?(?:公交)?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?(?:公交车|公交|巴士|公车)?(?:线路|线)|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋走|咋坐|咋去|换乘|有直达|直达|路线|的?(?:公交)?线路|的话|附近|周边|周围|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
 # 站牌上不写「公交站」，用户嘴里常带：「丰州公交站」其实是「丰州」
 STOPSUF = re.compile(r"(公交车站|公交站|车站|站台)$")
 # 「G02-513 现在在哪」「513 号车」「现在 512 车到哪」：问的是一辆具体的车，不是整条线
@@ -956,6 +960,20 @@ def find_stop(city_name, raw):
         names = {r["stationName"] for r in rows}
         if len(names) == 1 and core in next(iter(names)):
             return _merge_same(rows, rows[0]), core
+    # 「玉林职院有没有公交」：站表只收「玉林职业技术学院」，群里的简称一个字都不差地对不上，
+    # 补回全称再搜一次，全城只有一个才认
+    for ab, full in (("职院", "职业技术学院"), ("职校", "职业技术学校"),
+                     ("卫校", "卫生学校"), ("师院", "师范学院")):
+        if core.endswith(ab):
+            # 简称前头没剩字（「职院」整段就是简称）就拿城市名补上，否则搜出来的全城同名站不止一个
+            head = core[:-len(ab)] or norm_city(city_name)
+            rows = [r for r in stops(city_name, head + full) or [] if r.get("stationName")]
+            names = {r["stationName"] for r in rows}
+            if len(names) == 1:
+                # 返回站表里的真名（「玉林职业技术学院」），不是用户写的简称——
+                # 上层拿它去对站序，写「职院」一个站都对不上
+                return _merge_same(rows, rows[0]), next(iter(names))
+            break
     return None, raw
 
 
@@ -970,6 +988,10 @@ def hop(msg):
         if not m or LINE_RE.search(m.group(1)):
             return None
     a = LEAD.sub("", m.group(1).lstrip("从"))   # 「我在十字街咋去火车站」
+    # 「G02 有多少辆车，以及到哪里了」：HOP_RE 按「到」切，「以及」被当成出发站，
+    # 答出一句「没查到从「以及」到「」的换乘方案」——连同下面的「然后/顺便」一起挡掉
+    if a.strip(" 　") in ("以及", "然后", "顺便", "还有", "并且", "同时", "接着", "再看", "再", "和", "跟", "它", "他"):
+        return None
     # 「从市体育中心坐到玉林北站」：HOP_RE 按「到」切，动词「坐」粘在出发站后面
     a = re.sub(r"[坐走骑乘搭]$", "", a)
     # 「石家庄从谈固到…」：城名和「从」一起粘在出发站前面，剥掉；只认这个形状，
@@ -1493,6 +1515,10 @@ def _clock(mins):
 def render_at(city_key, city_name, want, msg):
     """「我在 X 站，N 路还有几站」：按方向给最近一辆，分钟用上游对该站的预测。"""
     station_name = pick_stop(city_name, msg)
+    # 「安宁区8路」「东胜区 8路 夜班车」：线号前面那个词是行政区名，不是站名。
+    # 拿它去匹会匹到「安宁区医院」「东胜区党校」，然后答一句「8路 不经过…」——用户问的是车
+    if re.split(r"\d", msg.strip(), 1)[0].strip().endswith(("区", "县")):
+        return None
     if not station_name:
         return None
     # 「G02 到高新产业园，去玉林北站」问的是在产业园上车、往玉林北站那个方向，别把终点当上车站
@@ -1673,10 +1699,12 @@ CITYLINES_RE = re.compile(r"(?:有哪些|哪些|几条|多少条|所有|全部)[
 
 
 def _city_wide(msg, city_name):
-    """这句问的是整座城吗：把城市名和问法都抹掉，还剩地名就是在问那个地方。"""
-    t = msg.replace(norm_city(city_name), "", 1)
+    """这句问的是整座城吗：把城市名、数据源和问法都抹掉，还剩地名就是在问那个地方。"""
+    t = re.sub(r"用车来了|车来了|用掌上|掌上公交|掌上|查询|查一下|查下|查一查|看一下|看下|看看"
+               r"|搜一下|搜搜|帮忙|帮我|麻烦|查|看", "", msg.replace(norm_city(city_name), "", 1))
     t = re.sub(r"公交线路|公交线|线路|公交车|公交|有哪些|有没有|哪些|几条|多少条|所有|全部"
-               r"|这边|那里|这儿|那边|这里|这|那|该|市|县|有|的|呢|吗|啊|？|\?|\s", "", t)
+               r"|这边|那里|这儿|那边|这里|这|那|该|市|县|有|的|呢|吗|啊|？|\?|\s"
+               r"|城巴|九巴|屿巴|新巴|龙运|小巴|巴士", "", t)
     return len(t) < 2
 
 
@@ -1691,6 +1719,15 @@ def render_city_lines(city_name):
         n = r.get("lineName")
         if n:
             ends.setdefault(n, []).append(r.get("to") or "")
+    if not ends:
+        # 香港这类城市掌上的 114 返空（status=1 但没目录），车来了那边有整城线名清单
+        cid = (cities().get(norm_city(city_name)) or {}).get("chelaile")
+        if cid:
+            try:
+                for n, _i in _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid)):
+                    ends.setdefault(n, [])
+            except Exception:
+                pass
     if not ends:
         return None
     names = list(ends)
@@ -2397,6 +2434,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
                 out = render_stops(name, w)
             else:
                 out = render_at(city_key, name, w, msg)
+                # 「多久一班」「发车间隔」：上游两家都没有这个字段，别装作答了——给实时，再说清缺什么
+                if out and re.search(r"多久一[班趟台]|几[分]钟一[班趟台]|间隔|一趟多久|多久一趟", msg):
+                    out += "\n（发车间隔两家都不给，只能看实时的这几辆）"
             if out:
                 return out
     vm = VEH_RE.search(msg)
@@ -2468,7 +2508,8 @@ def answer(msg, default_city, ctx="", key=""):
     base = norm_city(default_city)
     # 「316路山南张庄接驳车」：「山南张庄」是石家庄的站名，西藏山南市被当成城市，
     # 答出「山南这边有的是 6路、1路」。城市名只是更长一段话的前半截、而且那座城压根没这条线时不算明写
-    if explicit and line and re.search(re.escape(city_key) + r"[\u4e00-\u9fa5]", msg):
+    if explicit and line and re.search(re.escape(city_key) + r"[\u4e00-\u9fa5]", msg) \
+            and not re.search(re.escape(city_key) + r"(?:路|线|公交|巴士|城际|城乡|市郊|市域|客运|车站|地铁)", msg):
         try:
             if not mygolbs.lines((cities().get(city_key) or {}).get("mygolbs") or city_key, line[0]):
                 city_key, explicit = (base if base in cities() else None), False
@@ -2524,12 +2565,15 @@ def answer(msg, default_city, ctx="", key=""):
     # 「从玉林汽车总站到玉林北站坐哪条公交线路呢」是问换乘，不是要整城清单
     # 「玉林八中有没有什么公交线路」问的是那所学校的线路，不是整城 25 条
     if not line and name and not hop(msg) and not re.search(r"在跑|运营|还有", msg) and (
-            CITYLINES_RE.search(msg) or (explicit and "公交线路" in msg)) and _city_wide(msg, name):
+            CITYLINES_RE.search(msg) or (explicit and "公交线路" in msg)
+            # 「用车来了查湛江线路」「香港城巴全部线路」：没写「有哪些/全部」也是在要整城清单，
+            # 不接这句就落到最后返回空串，群里一声不吭
+            or (explicit and re.search(r"线路", msg))) and _city_wide(msg, name):
         out = render_city_lines(name)
         if out:
             return out
     # 「玉林公交公司电话是多少」：没带线路号，问的是整座城的公司，别回空交给模型（它会编）
-    if not line and CITY_CO_RE.search(msg):
+    if not line and CITY_CO_RE.search(msg) and not (SELFNO_RE.search(msg) and re.search(r"\d{3,}", msg)):
         out = render_city_company(name, msg)
         if out:
             return out
@@ -2624,6 +2668,11 @@ def answer(msg, default_city, ctx="", key=""):
     if not line and name and SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
         want = last.get("line") or ""
         out = render_line_selfno(city_key, name, want) if want else None
+        if not out:
+            # 光给一句号（「济宁公交自编号230021」）没有线路名：扫全城太慢，问一句比一声不吭强
+            num = re.search(r"\d{3,}", msg)
+            if num:
+                return f"自编号 {num.group()} 是哪条线上的？报个线路名（比如 9路）我就能查出这辆车跑到哪了"
         if out:
             return out
     if line:

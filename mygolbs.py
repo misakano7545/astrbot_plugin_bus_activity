@@ -49,7 +49,8 @@ def cached(kind, key, ttl, fn):
     # 过期键长期占位会让 cache 一直涨，顺手清掉同一个 kind 下的过期项，超上限再整体淘汰
     if len(cache) >= CACHE_MAX:
         now = time.time()
-        for k in [k for k, (t, _) in cache.items() if now - t >= CITY_TTL]:
+        # list() 拿快照：换乘/单向判定是八线程并发，边迭代边插会炸「dictionary changed size」
+        for k in [k for k, (t, _) in list(cache.items()) if now - t >= CITY_TTL]:
             cache.pop(k, None)
     cache[(kind, key)] = (time.time(), val)
     return val

@@ -83,11 +83,14 @@ assert "线路还在跑" in query.render(
     "南宁", "1", {"source": "掌上公交", "line": "1", "groups": [("", [])], "note": "线路还在跑，只是车机没报位置"})
 assert "末班" in query.render(
     "南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])], "desc": "本线路末班时间已过"})
+# 车来了目录里的线名是裸号，念出来像半句话：大陆加「路」，香港不加（506、B8）
 assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])]}) == \
-    "1 这会儿没车"
+    "1路 这会儿没车"
+assert query.render("香港", "506", {"source": "车来了", "line": "506", "groups": [("", [])]}) == \
+    "506 这会儿没车"
 assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups": [("", [])],
                                   "note": "末班 19:50 已经开走了"}) == \
-    "1 这会儿没车，末班 19:50 已经开走了"
+    "1路 这会儿没车，末班 19:50 已经开走了"
 # 线路不存在 / 有近似线名 / 上游异常：别把机器串甩进群里
 assert query.render("玉林", "999", {"error": "没这条线路"}).startswith("没查到「999」这条线")
 # 没查到要给同城近邻，否则模型自己解释成「这数据源没有这个城市」
@@ -1383,6 +1386,20 @@ assert "中药港：8" in _w9 and "技师学院" not in _w9, _w9   # 技师学�
 # 「主要换乘站」用导乘表，问「每站」仍逐站扫上游
 assert "主要换乘站" in query.render_transfer("玉林市", "G01路", "G01主要换乘站")
 assert "主要换乘站" not in (query.render_transfer("玉林市", "G01路", "G01每站能换乘啥") or "")
+
+# 2026-11-05 群的 412 条真实提问里翻出来的四类崩坏，见各条注释
+# ①「G02 有多少辆车，以及到哪里了」：HOP_RE 按「到」切，「以及」被当出发站
+assert query.hop("看一下现在玉林 G02 路有多少辆车，以及到哪里了") is None
+assert query.hop("从十字街到火车站") == ("十字街", "火车站")
+# ②「湛江线路」「香港城巴全部线路」都是要整城清单，不认就落到最后返回空串
+assert query._city_wide("用车来了查湛江线路", "湛江市")
+assert query._city_wide("用车来了查香港城巴全部线路", "香港特别行政区")
+assert not query._city_wide("用车来了查湛江开发区公交全部线路", "湛江市")
+# ③「安宁区8路」：线号前那个词是行政区名，不是站名，别匹成「安宁区医院」
+_p10, query.pick_stop = query.pick_stop, lambda cn, m: "安宁区医院"   # 上游只有这个名字相近的站
+assert query.render_at("兰州", "兰州市", "8", "安宁区8路") is None
+assert query.render_at("鄂尔多斯", "鄂尔多斯市", "8", "东胜区 8路 夜班车") is None
+query.pick_stop = _p10
 
 print("selftest ok")
 if "--live" in sys.argv:
