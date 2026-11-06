@@ -1243,6 +1243,15 @@ query._catalog = lambda c: {"buslines": [{"lineName": "555路", "from": "南环�
 assert query._renamed("苏州市", "南环桥（华东装饰城） ↔ 越溪首末站南") == "555路"
 assert query._renamed("苏州市", "甲 ↔ 乙") == ""
 query._catalog = _oc2
+# 「614」在佛山是 614A/614B（只有车来了收了，目录里全是带字母的）：别回「没查到这条线」
+_cc, _cat3, _cl3 = query.cities, query._catalog, query.chelaile
+query.cities = lambda: {"佛山": {"mygolbs": "佛山市", "chelaile": "019"}}
+query._catalog = lambda c: {"buslines": []}
+query.chelaile = types.SimpleNamespace(lines=lambda cid: [("614A", "1"), ("614A", "2"),
+                                                          ("614B", "3"), ("600", "4")])
+assert query._variants("佛山", "614") == ["614A", "614B"], query._variants("佛山", "614")
+assert query._variants("佛山", "600") == []
+query.cities, query._catalog, query.chelaile = _cc, _cat3, _cl3
 query.buspedia = _bp
 
 # 「查询玉林职院附近有没有公交车」：动词粘在站名前头，把「职院」和站名隔开了

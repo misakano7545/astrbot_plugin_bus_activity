@@ -820,6 +820,17 @@ def _renamed(city_name, term):
     return ""
 
 
+def _variants(city_key, want):
+    """「614」在佛山分成 614A/614B：同城目录里只有「号+字母」派生的，就是它俩。"""
+    ent = cities().get(city_key) or {}
+    rows = [r["lineName"] for r in (_catalog(ent.get("mygolbs")).get("buslines") or [])] \
+        if ent.get("mygolbs") else []
+    if ent.get("chelaile"):
+        rows += [n for n, _ in chelaile.lines(ent["chelaile"])]
+    pat = re.compile(re.escape(want) + r"[A-Za-z]$")
+    return list(dict.fromkeys(n for n in rows if pat.fullmatch(norm_line(n))))[:4]
+
+
 def render_ghost(city_key, city_name, want):
     """两家实时都没收这条线时，回落巴士派迪的建档目录。
     「安宁12」两家都没有，可这条线真实存在——回「没这条」就是把数据源缺口说成了事实错误。"""
@@ -864,6 +875,12 @@ def render(city_key, want, res, veh="", dir=""):
                 return ghost
             return f"没「{want}」这条，是 {e[2:]}"
         if e.startswith("没这条"):
+            # 「614」在佛山是 614A/614B 两条：别回「没这条」，也别只报相似线名
+            vs = _variants(city_key, want)
+            if vs:
+                return (f"{want + '路' if want.isdigit() else want} 分成 {'、'.join(vs)} 两条：\n"
+                        + "\n".join(render(city_key, norm_line(v), query(city_key, [norm_line(v)]))
+                                    for v in vs))
             ghost = render_ghost(city_key, (cities().get(city_key) or {}).get("mygolbs"), want)
             if ghost:
                 return ghost
