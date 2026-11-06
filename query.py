@@ -2335,12 +2335,15 @@ def render_line_selfno(city_key, city_name, want):
         got = mate.get(k)
         own = c.get("busNumber")
         sn = _selfno_of(own, got[0]) if got else ""
+        # 一句话常同时问「几辆 / 到哪了 / 自编号」，位置顺手带上，别只答其中两件
+        at = _car(own, c.get("stationName") or "", c.get("busToStationNiheDistance"),
+                  c.get("statusType")).rstrip()
         if sn:
-            out.append(f"{own} → {sn}")
+            out.append(f"{at} → {sn}")
         else:
             miss += 1
-            out.append(f"{own} → 没配上（车来了那边给它挂的也是车牌）" if got
-                       else f"{own} → 没配上（车来了那边对不上位置）")
+            out.append(f"{at} → 没配上（车来了那边给它挂的也是车牌）" if got
+                       else f"{at} → 没配上（车来了那条线没报这辆）")
     if miss:
         out.append(f"没配上的 {miss} 辆多半是车来了那条线没报这辆车，隔一分钟再问会变")
     return "\n".join(out)

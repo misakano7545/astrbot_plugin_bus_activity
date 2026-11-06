@@ -1034,8 +1034,10 @@ _cl2, query.chelaile = query.chelaile, types.SimpleNamespace(
                                    "397": {"lat": 22.7100, "lng": 110.2300}}})
 _ci, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
 _lm, query._live_my = query._live_my, lambda cn, ln, d: {"list": [
-    {"busNumber": "桂K12345", "bus_lat": 22.6545, "bus_lng": 110.1736},
-    {"busNumber": "桂K54321", "bus_lat": 22.7066, "bus_lng": 110.2260}]}
+    {"busNumber": "桂K12345", "bus_lat": 22.6545, "bus_lng": 110.1736,
+     "stationName": "甲站", "busToStationNiheDistance": 480, "statusType": "2"},
+    {"busNumber": "桂K54321", "bus_lat": 22.7066, "bus_lng": 110.2260,
+     "stationName": "乙站", "statusType": "0"}]}
 query._plate_index = lambda cn: ({"K12345": ("9路", "1", "火车站"),
                                   "K54321": ("9路", "1", "甲站")}, 2, 80)
 query._cache.clear()
@@ -1043,7 +1045,9 @@ assert "自编号是 514" in query.render_selfno("玉林", "玉林市", "桂K123
 assert "自编号是 397" in query.render_selfno("玉林", "玉林市", "桂K54321")
 # 「这几辆车自编号分别是多少」整条线一次列完，一辆一行
 _bl = query.render_line_selfno("玉林", "玉林市", "9")
-assert "桂K12345 → 514" in _bl and "桂K54321 → 397" in _bl
+assert "桂K12345 甲站 480m → 514" in _bl and "桂K54321 已到乙站 → 397" in _bl
+# 「几辆 / 到哪了 / 自编号」一句话问三件，三件都得在
+assert _bl.split("\n")[0].endswith("自编号：") and "甲站" in _bl
 query._plate_index = lambda cn: ({}, 80, 80)
 query._cache.clear()
 assert "没扫到" in query.render_selfno("玉林", "玉林市", "桂K99999")
