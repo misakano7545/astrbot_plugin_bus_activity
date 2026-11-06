@@ -73,6 +73,8 @@ LINE_RE = re.compile(
     # 「131区间」不带「路」也算线路——石家庄目录里就叫「131路区间」
     r"|(?<![0-9])(?P<inum>\d{1,4})\s*(?P<iqual>区间|支线|快线|专线)"
     r"|(?P<cnnum>[一二三四五六七八九十]{1,3})\s*路"
+    # 「北流105配车」：问配车时口语不带「路」字，号后面直接跟问法
+    r"|(?<![0-9])(?P<fnum>\d{1,4})\s*(?=配[车了几台]|用什么车|什么车(?:型|跑)?)"
 )
 PREFIX_RE = re.compile(r"([\u4e00-\u9fa5]{1,4})\s*$")
 # 「在市政广场要等多久等到17路」：问法黏在线号前面，先从句尾剥掉，剩下的才是站名
@@ -216,7 +218,7 @@ def parse(msg):
     num = (m.group("nnum") + m.group("nqual")) if m.group("nnum") else \
         (m.group("inum") + m.group("iqual")) if m.group("inum") else \
         (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
-         or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
+         or m.group("fnum") or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
     # 「柳州快1路」：快/慢 粘在线号前，被当成了前缀的尾巴——挪回线名里
     if pre[-1:] in ("快", "慢") and (not pre[:-1] or pre[:-1] in cities()):
@@ -2456,10 +2458,20 @@ def render_fleet(city_key, city_name, want):
     没填就说没填，别拿同公司别的线顶。数量是整家公司这个型号的保有量，不全是这条线的。"""
     # 目录里线名带「路」（G02路），wants 里是归一化过的裸号（G02、9）
     tail = "" if norm_city(city_key) in ("香港", "澳门") or want.endswith(("线", "路")) else "路"
-    line = want + tail
+    # 巴士派迪按地级市建档，县级市（北流、容县）没有自己的 region：落回父城。
+    # 要用掌上那套带「市」的名字——fleet 按 region 字符串筛，剥成「玉林」一条都对不上
+    region = (cities().get(_district_city(norm_city(city_name))) or {}).get("mygolbs") or city_name
     try:
-        cid = buspedia.region_id(city_name)
-        hit = buspedia.find_line(cid, line) if cid else []
+        cid = buspedia.region_id(region)
+        # 县内线路在目录里带县名（「北流105路」）：裸号查不到建档，得用目录里的真名
+        # 用 orig 的 lineName：_pick_city_line 返回的名字已经把县名前缀剥了（105路）
+        real = [o.get("lineName") for _, o in _pick_city_line(
+            [(r["lineName"], r) for r in (_catalog(city_name).get("buslines") or [])], want, city_name)]
+        hit, line = [], want + tail
+        for line in dict.fromkeys(real + [want + tail]):
+            hit = buspedia.find_line(cid, line) if cid else []
+            if hit:
+                break
         if not hit:
             return None                      # 这站没建这条线，交回实时那条路
         hit.sort(key=lambda l: not l.get("active"))
@@ -2470,7 +2482,7 @@ def render_fleet(city_key, city_name, want):
         comp = buspedia.comp_name(uid)
         parts, total = [], 0
         for nm, mid in ms:
-            rows = buspedia.fleet(mid, comp, city_name) if mid else []
+            rows = buspedia.fleet(mid, comp, region) if mid else []
             cnt = sum(r[1] for r in rows)
             total += cnt
             nos = [r[2] for r in rows if r[2]]

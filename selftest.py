@@ -1098,6 +1098,20 @@ query.buspedia = types.SimpleNamespace(
 assert "车型这站没填" in query.render_fleet("玉林", "玉林市", "5")
 query.buspedia = types.SimpleNamespace(region_id=lambda cn: None, find_line=lambda *a: [])
 assert query.render_fleet("玉林", "玉林市", "9") is None    # 这站没有这条线：交回实时那条路
+# 「北流105配车」：县级市没有自己的 region，得落回父城、用目录里的真名（北流105路）
+# 也要认：口语问配车不带「路」字
+assert query.parse("北流105配车") == ("105", "北流"), query.parse("北流105配车")
+_seen_r = []
+query.buspedia = types.SimpleNamespace(
+    region_id=lambda cn: _seen_r.append(cn) or 34,
+    find_line=lambda cid, nm: [{"uid": "L9", "name": nm, "active": True}] if nm == "北流105路" else [],
+    models=lambda uid: [("甲 X1", "m1")], comp_name=lambda uid: "益业公汽",
+    fleet=lambda mid, c="", r="": [("2017", 29, "")])
+_oc, query._catalog = query._catalog, lambda cn: {"buslines": [{"lineName": "北流105路", "upperOrDown": "1"}]}
+_nb = query.render_fleet("北流", "北流市", "105")
+query._catalog = _oc
+assert "北流105路 用的是 甲 X1（29 辆）" in _nb, _nb
+assert _seen_r == ["玉林市"], _seen_r      # 落父城、且用带「市」的名字（fleet 按这个字符串筛）
 # 「安宁12」两家实时都没收，可这条线真实存在：不能回「没这条」
 _bp2 = types.SimpleNamespace(
     region_id=lambda cn: 34,
