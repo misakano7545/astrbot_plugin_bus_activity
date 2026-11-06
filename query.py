@@ -465,9 +465,9 @@ def _pick_city_line(catalog, want, city_name):
 TZ_OFF = 8 * 3600
 
 
-def _now():
+def _now(t=None):
     # 从 UTC 起算，不吃宿主机时区——本机是 CST、实例是 UTC，用 localtime 会差 8 小时
-    return time.gmtime(time.time() + TZ_OFF)
+    return time.gmtime((time.time() if t is None else t) + TZ_OFF)
 
 
 def _window(first, last):

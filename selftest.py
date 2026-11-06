@@ -1265,6 +1265,8 @@ assert watch._left({"1": ["甲站", "乙站", "丙站"]}, "丙站", "甲站") ==
 assert watch._left({"1": ["甲站", "乙站"]}, "甲站", "戊站") is None     # 这个方向不经过
 assert watch._interval(0) == 10 and watch._interval(3) == 20 and watch._interval(9) == 45
 assert watch._interval(1, 3) == 80                                    # 连续失败 ×2 退避
+# 盯车时说的时间也得是北京时间（实例是 UTC，用 localtime 会差 8 小时）
+assert _tm.strftime("%H:%M", query._now(0)) == "08:00"
 
 # 「从1路东线」：号上粘着汉字的名字（在从化，属广州）。本城目录里没有就别回「没查到「1」」
 assert query._written_name("从1路东线", "1") == "从1路东线"

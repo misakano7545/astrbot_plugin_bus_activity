@@ -85,7 +85,7 @@ def add(key, city_key, city_name, line, stop, seqs, by=""):
                  "line": line, "stop": stop, "seqs": seqs, "by": by,
                  "created": int(time.time()), "next": 0, "fails": 0, "hit": []})
     _save(rows)
-    till = time.strftime("%H:%M", time.localtime(time.time() + MAX_SECONDS))
+    till = time.strftime("%H:%M", _q()._now(time.time() + MAX_SECONDS))
     return (f"记下了：{_flag(line)} 往 {stop}，剩 {NEAR_STOPS} 站的时候喊你一声"
             f"（最多盯到 {till}，说「取消提醒」就不盯了）")
 
@@ -107,7 +107,7 @@ def listing(key):
     if not rows:
         return "这会儿没在盯什么。说「2路到汽车总站叫我」就开始盯"
     return "正在盯：\n" + "\n".join(
-        f"{_flag(r['line'])} 往 {r['stop']}，{time.strftime('%H:%M', time.localtime(r['created']))} 开始"
+        f"{_flag(r['line'])} 往 {r['stop']}，{time.strftime('%H:%M', _q()._now(r['created']))} 开始"
         for r in rows)
 
 
