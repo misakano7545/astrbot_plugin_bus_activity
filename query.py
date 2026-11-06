@@ -1023,6 +1023,9 @@ def _cands(city_name, msg):
         # shortcut: 不认站名里带阿拉伯数字的（「3号门」），遇到了再收窄
         cand = re.sub(r"[A-Za-z]?\d{1,4}\s*[路线]", "", cand)
         cand = LEAD.sub("", TAIL.sub("", cand))
+        # 「查询玉林职院附近有没有公交车」：动词粘在站名前头，「职院」就补不成全称了
+        cand0 = cand                    # 剥动词之前的原样，剥完对不上时还得退回它（「那洪立交」）
+        cand = JUNK_HEAD.sub("", cand) or cand
         pre = cand                       # 剥「公交/地铁」前缀之前的原名，「公交公司」得靠它换写法
         whole = re.sub(r"^(地铁|轨道交通|公交)", "", cand)
         # 「广州地铁芳村站附近」：城市名和「地铁」都不是站名的一部分
@@ -1033,7 +1036,7 @@ def _cands(city_name, msg):
         # 「玉林公交公司」先换成平台上的写法再试，否则会被砍成「公司」搜不出东西
         alias = [c.replace(k, v) for c in (pre, whole, cand)
                  for k, v in STOP_ALIAS.items() if k in c]
-        for c in dict.fromkeys(alias + [cand, whole] + bare):
+        for c in dict.fromkeys(alias + [cand, cand0, whole] + bare):
             # 「泉州公交 惠南工业区四期站」：切出来的「泉州公交」只剩城市名，拿去搜站会匹到
             # 「中化泉州公司」这种同名不同地的站
             core = re.sub(r"(公交)?(车?站|台)?$", "", c) or c
@@ -2722,7 +2725,8 @@ def answer(msg, default_city, ctx="", key=""):
         # 「新乡胖东来三胖有哪些公交」：站表里没这个站就直说。回空的话模型会自己改口去问
         # 「新乡有哪些公交线路」，把全城 93 条倒进群里
         if STOPASK_RE.search(msg) and not _NOTPLACE.search(msg):
-            place = STOPASK_RE.sub("", msg).replace(norm_city(name), "", 1).strip()
+            place = TAIL.sub("", JUNK_HEAD.sub("", STOPASK_RE.sub("", msg)))
+            place = place.replace(norm_city(name), "", 1).strip()
             if len(place) >= 2:
                 core = re.sub(r"(?:客运站|汽车站|火车站|公交站|客运中心|站)$", "", place)
                 names = {r.get("stationName") for r in stops(name, core) or [] if r.get("stationName")}
