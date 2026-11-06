@@ -1102,6 +1102,9 @@ assert query.render_fleet("玉林", "玉林市", "9") is None    # 这站没有�
 # 也要认：口语问配车不带「路」字
 assert query.parse("北流105配车") == ("105", "北流"), query.parse("北流105配车")
 # 一句话问「配车 + 线上几辆」要都答；「配了几辆车」问的是配车本身，别当实时再查一遍
+# 「这是抓的档案站吗」只有个「站」字，不是公交问句——反问成「「这是抓的档案站」这个站没查到」就抢了闲聊
+assert query.BUS_RE.search("这是抓的档案站吗") is None
+assert query.answer("这是抓的档案站吗", "玉林市") == ""
 assert query.LIVE_Q.search("西安930路有什么配车，现在线上几辆车")
 assert not query.LIVE_Q.search("西安930路配了几辆车"), "配了几辆车 不是问实时"
 _seen_r = []

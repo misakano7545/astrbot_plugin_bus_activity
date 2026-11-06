@@ -2890,19 +2890,21 @@ def answer(msg, default_city, ctx="", key=""):
         # 「新乡胖东来三胖有哪些公交」：站表里没这个站就直说。回空的话模型会自己改口去问
         # 「新乡有哪些公交线路」，把全城 93 条倒进群里
         if STOPASK_RE.search(msg) and not _NOTPLACE.search(msg):
-            place = TAIL.sub("", JUNK_HEAD.sub("", STOPASK_RE.sub("", msg)))
-            place = place.replace(norm_city(name), "", 1).strip()
-            if len(place) >= 2:
-                core = re.sub(r"(?:客运站|汽车站|火车站|公交站|客运中心|站)$", "", place)
-                names = {r.get("stationName") for r in stops(name, core) or [] if r.get("stationName")}
-                if core and core != place and len({n for n in names if n.startswith(core)}) == 1:
-                    got = render_stop(city_key, name, next(iter(n for n in names if n.startswith(core))))
-                    if got:
-                        return got
-                return f"{norm_city(name)}站表里没查到「{place}」这个站"
+            place = TAIL.sub("", JUNK_HEAD.sub("", STOPASK_RE.sub("", msg))).strip()
+            # 原名先试：「玉林火车站有几路车」剥掉城市名剩「火车站」，站表里反而认不出
+            for place in dict.fromkeys([place, place.replace(norm_city(name), "", 1).strip()]):
+                if len(place) < 2:
+                    continue
+                got = render_stop(city_key, name, place)
+                if got:
+                    last["stop"] = pick_stop(name, place) or last.get("stop")
+                    return got
+            return f"{norm_city(name)}站表里没查到「{place}」这个站"
         # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）。
         # 「有一条线路查不到实时信息我就不写出来了（）」是吐槽，反问就抢话了
-        if not explicit and re.search(r"站|线路|几路", msg) \
+        # 还得真的是公交问句：「这是抓的档案站吗」只有一个「站」字，
+        # 反问成「「这是抓的档案站」这个站没查到」就把闲聊抢了
+        if not explicit and BUS_RE.search(msg) and re.search(r"站|线路|几路", msg) \
                 and not re.search(r"查不到|不写|没查到|找不到", msg):
             hint = re.sub(r"公交$", "", STOPSUF.sub("", TAIL.sub("", msg))).strip()
             return (f"「{hint}」这个站没查到，是哪座城的？说个城市名我再查" if hint
