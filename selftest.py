@@ -1236,6 +1236,13 @@ query.buspedia = types.SimpleNamespace(
     models=lambda uid: [], comp_name=lambda uid: "", fleet=lambda *a, **k: [])
 assert "丙 ↔ 丁" in (query.render_ghost("佛山", "佛山市", "佛256") or "")
 assert query.render_ghost("安宁", "昆明市", "安宁99") is None
+# 建档记成「已停运」的老号，同城目录里起讫对得上的是它现在的号（苏州 55 → 555）
+_oc2 = query._catalog
+query._catalog = lambda c: {"buslines": [{"lineName": "555路", "from": "南环桥（华东装饰城）",
+                                         "to": "越溪首末站南"}]}
+assert query._renamed("苏州市", "南环桥（华东装饰城） ↔ 越溪首末站南") == "555路"
+assert query._renamed("苏州市", "甲 ↔ 乙") == ""
+query._catalog = _oc2
 query.buspedia = _bp
 
 # 「查询玉林职院附近有没有公交车」：动词粘在站名前头，把「职院」和站名隔开了

@@ -809,6 +809,17 @@ def _dir(msg):
     return ""
 
 
+def _renamed(city_name, term):
+    """建档里记成「已停运」的老线号：同城目录里起讫对得上的是它现在的号（苏州 55 → 555）。"""
+    ends = {e.strip() for e in (term or "").split("↔") if e.strip()}
+    if len(ends) < 2:
+        return ""
+    for r in (_catalog(city_name).get("buslines") or []):
+        if {r.get("from"), r.get("to")} == ends:
+            return r.get("lineName") or ""
+    return ""
+
+
 def render_ghost(city_key, city_name, want):
     """两家实时都没收这条线时，回落巴士派迪的建档目录。
     「安宁12」两家都没有，可这条线真实存在——回「没这条」就是把数据源缺口说成了事实错误。"""
@@ -829,6 +840,11 @@ def render_ghost(city_key, city_name, want):
                 term = (l.get("term") or [""])[0].replace("<>", " ↔ ")
                 if not term:
                     continue
+                if not l.get("active"):
+                    alt = _renamed(city_name, term)
+                    if alt:
+                        return (f"{l['name']} 这个号已经不跑了，同一条线现在叫 {alt}（{term}）\n"
+                                + render(city_key, norm_line(alt), query(city_key, [norm_line(alt)])))
                 return (f"{l['name']} 掌上公交和车来了都没收这条，建档资料是 {term}"
                         + ("" if l.get("active") else "（记的是已停运）")
                         + "\n（首末站查得到，实时的到站时间那两家没有）")
@@ -841,6 +857,11 @@ def render(city_key, want, res, veh="", dir=""):
     if "error" in res:
         e = res["error"]
         if e.startswith("是 "):                       # 目录里有近似线名，报候选
+            # 建档里有这条号（「苏州55」→ 建档案记成已停运、现在叫 555）时先说这个，
+            # 别只回「是 551 吗」——那等于把改号说成打错字
+            ghost = render_ghost(city_key, (cities().get(city_key) or {}).get("mygolbs"), want)
+            if ghost:
+                return ghost
             return f"没「{want}」这条，是 {e[2:]}"
         if e.startswith("没这条"):
             ghost = render_ghost(city_key, (cities().get(city_key) or {}).get("mygolbs"), want)
