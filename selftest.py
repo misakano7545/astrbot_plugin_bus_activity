@@ -94,7 +94,9 @@ assert query.render("南宁", "1", {"source": "车来了", "line": "1", "groups"
 # 线路不存在 / 有近似线名 / 上游异常：别把机器串甩进群里
 assert query.render("玉林", "999", {"error": "没这条线路"}).startswith("没查到「999」这条线")
 # 没查到要给同城近邻，否则模型自己解释成「这数据源没有这个城市」
+_g0, query.buspedia = query.buspedia, types.SimpleNamespace(region_id=lambda cn: None)   # 桩掉建档源，只测近邻那条
 assert "这边有的是" in query.render("玉林", "9", {"error": "没这条线路"})
+query.buspedia = _g0
 assert query.render("沛县", "1", {"error": "是 11路 / 17路 吗"}) == "没「1」这条，是 11路 / 17路 吗"
 assert query.render("玉林", "1", {"error": "上游这会儿没响应，过会儿再问"}) == "上游这会儿没响应，过会儿再问"
 
@@ -1077,6 +1079,23 @@ query.buspedia = types.SimpleNamespace(
 assert "车型这站没填" in query.render_fleet("玉林", "玉林市", "5")
 query.buspedia = types.SimpleNamespace(region_id=lambda cn: None, find_line=lambda *a: [])
 assert query.render_fleet("玉林", "玉林市", "9") is None    # 这站没有这条线：交回实时那条路
+# 「安宁12」两家实时都没收，可这条线真实存在：不能回「没这条」
+_bp2 = types.SimpleNamespace(
+    region_id=lambda cn: 34,
+    find_line=lambda cid, nm: ([{"name": nm, "term": ["甲<>乙"], "active": True}]
+                               if nm == "安宁12路" else []),
+    find_line_fuzzy=lambda cid, nm: [],
+    models=lambda uid: [], comp_name=lambda uid: "", fleet=lambda *a, **k: [])
+query.buspedia = _bp2
+assert "甲 ↔ 乙" in (query.render_ghost("安宁", "昆明市", "安宁12") or "")
+# 单字城市简称要能剥（佛256 → 256路）；全名城名不能剥（安宁99 → 99 会是昆明市区的线）
+query.buspedia = types.SimpleNamespace(
+    region_id=lambda cn: 34,
+    find_line=lambda cid, nm: [{"name": nm, "term": ["丙<>丁"], "active": True}] if nm == "256路" else [],
+    find_line_fuzzy=lambda cid, nm: [],
+    models=lambda uid: [], comp_name=lambda uid: "", fleet=lambda *a, **k: [])
+assert "丙 ↔ 丁" in (query.render_ghost("佛山", "佛山市", "佛256") or "")
+assert query.render_ghost("安宁", "昆明市", "安宁99") is None
 query.buspedia = _bp
 
 # 「查询玉林职院附近有没有公交车」：动词粘在站名前头，把「职院」和站名隔开了

@@ -702,12 +702,43 @@ def _dir(msg):
     return ""
 
 
+def render_ghost(city_key, city_name, want):
+    """两家实时都没收这条线时，回落巴士派迪的建档目录。
+    「安宁12」两家都没有，可这条线真实存在——回「没这条」就是把数据源缺口说成了事实错误。"""
+    try:
+        cid = buspedia.region_id(city_name or "")
+        if not cid:
+            return None
+        # 「佛256」：单字城市简称粘在号前面。只剥这种单字简称——「安宁99」剥成「99」
+        # 会匹到昆明市区的 99 路，那是另一条线，宁可照实说没查到
+        cands = [want, want + "路"]
+        ck = norm_city(city_key)
+        if len(ck) > 1 and want.startswith(ck[:1]) and not want.startswith(ck) and len(want) > 1:
+            cands += [want[1:], want[1:] + "路"]
+        for nm in dict.fromkeys(cands):
+            hit = buspedia.find_line(cid, nm) or buspedia.find_line_fuzzy(cid, nm)
+            if hit:
+                l = hit[0]
+                term = (l.get("term") or [""])[0].replace("<>", " ↔ ")
+                if not term:
+                    continue
+                return (f"{l['name']} 掌上公交和车来了都没收这条，建档资料是 {term}"
+                        + ("" if l.get("active") else "（记的是已停运）")
+                        + "\n（首末站查得到，实时的到站时间那两家没有）")
+    except Exception:
+        return None                      # 这站挂了就当没有，老文案照走
+    return None
+
+
 def render(city_key, want, res, veh="", dir=""):
     if "error" in res:
         e = res["error"]
         if e.startswith("是 "):                       # 目录里有近似线名，报候选
             return f"没「{want}」这条，是 {e[2:]}"
         if e.startswith("没这条"):
+            ghost = render_ghost(city_key, (cities().get(city_key) or {}).get("mygolbs"), want)
+            if ghost:
+                return ghost
             # 光说「没查到」，模型就会自己解释成「这个数据源没有这城市的线路」（泉州 K502 就是这样）
             near = _near(city_key, want)
             return f"没查到「{want}」这条线" + (f"，{city_key}这边有的是 {near}" if near else "")

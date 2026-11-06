@@ -68,6 +68,22 @@ def find_line(city_id, name):
     return out
 
 
+def find_line_fuzzy(city_id, want):
+    """「安宁12」在目录里写作「安宁附12路」：同前缀、同数字，中间最多夹一个汉字。
+    只认汉字（附/支/专），不认字母——「安宁1」不该匹到「安宁K1」，那是跨区快线不是同一趟。"""
+    m = re.match(r"^([\u4e00-\u9fa5]{2,6}?)(\d{1,4})$", want or "")
+    if not m:
+        return []
+    pat = re.compile(re.escape(m.group(1)) + r"[\u4e00-\u9fa5]?" + m.group(2) + "$")
+    out = []
+    for g in _api("region/%s/lines" % city_id):
+        for b in g.get("buckets") or []:
+            for l in b.get("lines") or []:
+                if pat.match(re.sub(r"[路线]$", "", l.get("name") or "")):
+                    out.append(l)
+    return out
+
+
 def models(uid):
     """这条线登记的常用车型：[(型号名, 车型 id)]。空 = 这站建了线路但没填型号。"""
     d = _api("line/" + uid).get("line") or {}
