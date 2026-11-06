@@ -1097,8 +1097,10 @@ _bp, query.buspedia = query.buspedia, types.SimpleNamespace(
     comp_name=lambda uid: "玉林公交",
     fleet=lambda mid, c="", r="": [("2020", 10, "1~10")])
 _f = query.render_fleet("玉林", "玉林市", "9")
-assert "9路 用的是 甲 X1（10 辆，自编号 1~10）" in _f, _f
-assert "等 5 种" in _f and "50 辆" in _f and "戊" not in _f, _f
+# 只报车型不报数量：/model 的保有量是整家公司的（南宁704 数出 986 辆），当成这条线配车数就是错的
+assert "9路 建档了 5 种车型：甲 X1、乙 X2、丙 X3、丁 X4、戊 X5" in _f, _f
+assert "辆" not in _f.split("\n")[0], _f
+assert "不记每条线配几辆" in _f, _f
 query.buspedia = types.SimpleNamespace(
     region_id=lambda cn: 34,
     find_line=lambda cid, nm: [{"uid": "L5", "name": nm, "active": False}],
@@ -1124,7 +1126,7 @@ query.buspedia = types.SimpleNamespace(
 _oc, query._catalog = query._catalog, lambda cn: {"buslines": [{"lineName": "北流105路", "upperOrDown": "1"}]}
 _nb = query.render_fleet("北流", "北流市", "105")
 query._catalog = _oc
-assert "北流105路 用的是 甲 X1（29 辆）" in _nb, _nb
+assert "北流105路 建档了 1 种车型：甲 X1" in _nb, _nb
 assert _seen_r == ["玉林市"], _seen_r      # 落父城、且用带「市」的名字（fleet 按这个字符串筛）
 # 「安宁12」两家实时都没收，可这条线真实存在：不能回「没这条」
 _bp2 = types.SimpleNamespace(

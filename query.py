@@ -2498,21 +2498,13 @@ def render_fleet(city_key, city_name, want):
         if not ms:
             return f"{line} 的车型这站没填"      # active 标记不可靠（13路标成停运其实在跑），不提
         comp = buspedia.comp_name(uid)
-        parts, total = [], 0
-        for nm, mid in ms:
-            rows = buspedia.fleet(mid, comp, region) if mid else []
-            cnt = sum(r[1] for r in rows)
-            total += cnt
-            nos = [r[2] for r in rows if r[2]]
-            parts.append(f"{nm}" + (f"（{cnt} 辆" + (f"，自编号 {nos[0]}" if nos else "") + "）" if cnt else ""))
+        parts = [nm for nm, _ in ms]
     except Exception:
         return None                          # 这站挂了就当没有，实时那条路照走
-    # 大线能挂五六种车型，全列会刷屏
-    more = len(parts) - 4
-    out = f"{line} 用的是 " + "、".join(parts[:4]) + (f" 等 {len(parts)} 种" if more > 0 else "")
-    if total and comp:
-        out += f"\n（{comp}这几种一共 {total} 辆，同型号别的线也在用）"
-    return out
+    # 只报车型不报数量：/model 的保有量是整家公司在用这个型号的车
+    # （南宁704 数出来 986 辆，一小时一趟的线也挂着一百多辆），当成这条线的配车数就是错的
+    return (f"{line} 建档了 {len(parts)} 种车型：" + "、".join(parts)
+            + f"\n（巴士派迪只记车型，不记每条线配几辆——要看这会儿跑着几辆，问「{line}现在几辆」）")
 
 
 def render_selfno(city_key, city_name, plate):
