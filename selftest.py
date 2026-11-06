@@ -1292,6 +1292,19 @@ query._station_seq = lambda cn, ln, d: [{"stationName": "十字街"}]
 query._live_my = lambda cn, ln, d, i=1: {"n": d}
 query._etas = lambda p: (7.0, 2, "桂K1")
 assert query.render_at("玉林", "玉林市", "9", "十字街") == "9路 离十字街 大约 7 分钟（桂K1，还有 2 站）"
+# 「用车来了查玉林G02」：点名了数据源就不许把另一家的车合进来，两份编号体系混一起一眼就串
+_mg, _cl, _ct = query._mygolbs, query._chelaile, query.cities
+query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+query._mygolbs = lambda c, w: {"source": "掌上公交", "line": "G02路",
+                               "groups": [("往A", [("桂K1", "甲", 100, "2")])],
+                               "pos": {"桂K1": {"lat": 22.0, "lng": 110.0}}}
+query._chelaile = lambda c, w: {"source": "车来了", "line": "G02",
+                                "groups": [("往A", [("512", "甲", 100, "2")])],
+                                "pos": {"512": {"lat": 23.0, "lng": 111.0}}}
+_r = query.query("玉林", ["G02"], "chelaile")
+assert _r["source"] == "车来了" and [b[0] for _, bs in _r["groups"] for b in bs] == ["512"]
+assert len([b for _, bs in query.query("玉林", ["G02"])["groups"] for b in bs]) == 2
+query._mygolbs, query._chelaile, query.cities = _mg, _cl, _ct
 query._catalog = lambda cn: _both
 query._etas = lambda p: ((20.0 if p["n"] == "2" else 7.0), 2, "桂K" + p["n"])
 assert query.render_at("玉林", "玉林市", "9", "十字街") == \

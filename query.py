@@ -723,10 +723,11 @@ def query(city_key, wants, src=None, veh=""):
                 continue
             if got and any(group for _, group in got["groups"]):
                 if not veh:
-                    # 另一家可能报得更多：先记下，问完再合，别拿一家的清单当全部
+                    # 另一家可能报得更多：先记下，问完再合，别拿一家的清单当全部。
+                    # 点名了数据源就不合：「用车来了查」混进掌上的车牌，用户一眼看出串了
                     if best is None:
                         best = got
-                    elif second is None and got.get("source") != best.get("source"):
+                    elif second is None and not src and got.get("source") != best.get("source"):
                         second = got
                     continue
                 # 点名一辆车：掌上的车牌是「桂K12590D」，车来了是「513」，得两家都翻一遍
@@ -2712,7 +2713,11 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
                 return out
     vm = VEH_RE.search(msg)
     veh = next((g for g in vm.groups() if g), "") if vm else ""
-    txt = render(city_key, wants[0], query(city_key, wants, src, veh), veh, _dir(msg))
+    res = query(city_key, wants, src, veh)
+    txt = render(city_key, wants[0], res, veh, _dir(msg))
+    # 点名车来了、可这条线只有掌上有：别让掌上的车冒充车来了的
+    if src and res.get("source") == LABEL["mygolbs" if src == "chelaile" else "chelaile"]:
+        txt += f"\n（{LABEL[src]}那边没这条，这份是{res['source']}的）"
     # 「G01多久一班」没有站名，走不到上面那条；上游两家都没有间隔字段，给实时并说清缺什么
     if re.search(r"多久一[班趟台]|几[分]钟一[班趟台]|间隔|多久一趟", msg) and "发车间隔" not in txt:
         txt += "\n（发车间隔两家都不给，只能看实时的这几辆）"
