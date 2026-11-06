@@ -1268,6 +1268,33 @@ assert watch._interval(1, 3) == 80                                    # 连续�
 # 盯车时说的时间也得是北京时间（实例是 UTC，用 localtime 会差 8 小时）
 assert _tm.strftime("%H:%M", query._now(0)) == "08:00"
 
+# 「一起等」：同一个站几条线的车排成一张表，按到站先后，没车的/不经过的分开说
+_pk2, _ra2 = query.pick_stop, query.render_at
+
+
+def _fake_at(city_key, city_name, want, msg, veh="", tally=None, at=""):
+    tbl = {"1": ("1路", {"甲": (9, "K1", "还有 6 站")}),
+           "G02": ("G02路", {"乙": (2, "K2", "还有 1 站")}),
+           "9": ("9路", {}),
+           "7": ("7路", None)}
+    line_name, live = tbl[want]
+    if tally is not None:
+        tally[line_name] = None if live is None else (live, [], "汽车总站")
+    return "x"
+
+
+query.pick_stop = lambda cn, msg: "汽车总站"
+query.render_at = _fake_at
+_tog = query.render_together("玉林", "玉林市", ["1", "G02", "9", "7"], "汽车总站等1路G02 9路 7路")
+_tog = _tog.split("\n")
+assert _tog[0] == "汽车总站 这会儿，按到站先后：", _tog
+assert "G02路（往乙） 大约 2 分钟" in _tog[1], _tog       # 2 分钟的排最前，不是按问的顺序
+assert "1路（往甲） 大约 9 分钟" in _tog[2], _tog
+assert _tog[3] == "9路 这会儿没车报过来", _tog
+assert _tog[4] == "7路 不经过汽车总站", _tog
+assert query.render_together("玉林", "玉林市", ["7"], "汽车总站等7路") is None   # 全都不到这站，交回原路径
+query.pick_stop, query.render_at = _pk2, _ra2
+
 # 「从1路东线」：号上粘着汉字的名字（在从化，属广州）。本城目录里没有就别回「没查到「1」」
 assert query._written_name("从1路东线", "1") == "从1路东线"
 assert query._written_name("1路东线", "1") == "1路东线"

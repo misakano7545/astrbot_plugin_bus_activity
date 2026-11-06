@@ -969,7 +969,7 @@ def _near(city_key, want, n=4):
 
 # 「从1路东线」「增城105」：号上粘着汉字的名字。本城目录里没有时说明号是别的城市的线，
 # 别回「没查到「1」」再赔一堆不相干的近似线名（佛山 614 之后又踩了从1路东线，它在广州从化）
-_WNAME_BAD = "坐等查看有没有这那该此本是我你要去到在问乘搭今昨每晚几哪末首多怎还现间票时"
+_WNAME_BAD = "坐等查看有没有这那该此本是我你要去到在问乘搭今昨每晚几哪末首多怎还现间票时和与跟及"
 # 号后面的定性词只认这几种，不然「1路末班车几点」也会被当成长名字
 _WNAME_MOD = ("东线", "西线", "南线", "北线", "中线", "环线", "区间", "支线", "快线", "慢线",
               "夜班", "夜线", "长线", "短线", "专线", "副线", "高峰", "大站", "直达", "接驳")
@@ -1778,9 +1778,9 @@ def _clock(mins):
     return f"{(m // 60) % 24:02d}:{m % 60:02d}"
 
 
-def render_at(city_key, city_name, want, msg, veh=""):
+def render_at(city_key, city_name, want, msg, veh="", tally=None, at=""):
     """「我在 X 站，N 路还有几站」：按方向给最近一辆，分钟用上游对该站的预测。"""
-    station_name = pick_stop(city_name, msg)
+    station_name = at or pick_stop(city_name, msg)
     # 「安宁区8路」「东胜区 8路 夜班车」：线号前面那个词是行政区名，不是站名。
     # 拿它去匹会匹到「安宁区医院」「东胜区党校」，然后答一句「8路 不经过…」——用户问的是车
     if re.split(r"\d", msg.strip(), 1)[0].strip().endswith(("区", "县")):
@@ -1869,6 +1869,8 @@ def render_at(city_key, city_name, want, msg, veh=""):
         if not hit:
             return None                  # 目录里根本没这条线，交给上层说「没查到」
         if not near:
+            if tally is not None:         # 「一起等」要知道这条线压根不到这站，别当成没车
+                tally[hit[0][1]["lineName"]] = None
             return f"{hit[0][1]['lineName']} 不经过{station_name}"
         # 这条线过我这站、方向全被 dest 过滤掉了：返 None 会落到整条线的清单
         # （「9路 现在 2 辆在路上，457 火车站 1.6km」）——站在站台的人读这个没用
@@ -1880,6 +1882,8 @@ def render_at(city_key, city_name, want, msg, veh=""):
           if len(hit) > 1 and len(set(have)) == 1 else "")
     ow = f"；{ow}" if ow else ""
     live = {k: v for k, v in got.items() if v}
+    if tally is not None:                 # 「一起等」要按到站先后排，把这一线摊出来的数留给人
+        tally[line_name] = (live, dead, station_name)
     if not live:
         # 这条线确实过我这一站、但两个方向这会儿都没有车往这儿开（刚过站 / 还没发车）。
         # 不能返 None 落到「每辆车离它旁边那个站 181 米」的清单上——站在站台的人读写没意义
@@ -1913,6 +1917,53 @@ def render_at(city_key, city_name, want, msg, veh=""):
 
     parts = [one(k, v) for k, v in live.items()] + [dead_txt(*d) for d in dead]
     return f"{line_name} 离{station_name}：" + "；".join(parts) + ow
+
+
+def render_together(city_key, city_name, wants, msg):
+    """「1路5路一起等」：一个站，几条线的车摊成一张按到站先后排的表。
+    站序本来就有缓存（城+线+方向），条数不影响站点请求数；实时是上游按线路给的，合并不了。"""
+    st = pick_stop(city_name, msg)
+    if not st:
+        return None
+    tally = {}
+    for w in wants:
+        try:
+            render_at(city_key, city_name, w, msg, tally=tally, at=st)   # 文本不要，只要它摊出来的数
+        except Exception:
+            continue
+    rows, deads, miss = [], [], []
+
+    def mine(line_name, w):
+        # 裸号问「5路」时 _pick 会把「北流105路」也算上：号对不上就别进这张表
+        nl = norm_line(line_name)
+        return nl == w or (w.isdigit() and w in re.findall(r"\d+", nl))
+
+    for line_name, v in tally.items():
+        if not any(mine(line_name, w) for w in wants):
+            continue
+        if v is None:
+            miss.append(line_name)
+            continue
+        live, _dead, _st = v
+        for lab, item in live.items():
+            rows.append((item[0], line_name, lab, item[1], item[2]))
+        if not live:
+            deads.append(line_name)
+    if not rows and not deads:
+        return None                    # 一条线都没经过这站，交给原来那段说「不经过」
+    rows.sort(key=lambda r: (r[0], r[1]))
+    out = [f"{st} 这会儿，按到站先后："]
+    for mins, line_name, lab, plate, left in rows:
+        who = f"{line_name}（往{lab}）" if lab else line_name
+        out.append(f"{who} 大约 {mins} 分钟，{left}，{plate}")
+    if deads:
+        out.append(f"{'、'.join(dict.fromkeys(deads))} 这会儿没车报过来")
+    if miss:
+        out.append(f"{'、'.join(dict.fromkeys(miss))} 不经过{st}")
+    lost = [w for w in dict.fromkeys(wants) if not any(mine(ln, w) for ln in tally)]
+    if lost:                           # 问了几条就答几条，目录里没有的明说，别当没听见
+        out.append(f"{'、'.join(w + '路' if w.isdigit() else w for w in lost)} 这城目录里没有")
+    return "\n".join(out)
 
 
 # 「9路站点」这种只说两个字的也要认；「到站点了没」「哪个站点」问的是实时位置，别抢
@@ -3236,6 +3287,14 @@ def answer(msg, default_city, ctx="", key=""):
         # 一句里问了两条线（「樟13 / 12路」）就都答，别只答第一条
         multi = _lines(msg)
         if len(multi) > 1:
+            # 「我在汽车总站等1路和G02」：一起等，一个站一张表按到站先后排，别各说一段
+            # 问的是站表（「1路9路站表」）就别排队了，站表有它自己的答案
+            if name and not STOPS_RE.search(msg) and (TIMEQ_RE.search(msg) or re.search(r"等", msg)):
+                tog = render_together(city_key, name,
+                                      [n for n, _pre in multi], msg)   # 前缀常是站名尾巴（「火车站等1」），不用
+                if tog:
+                    last["stop"] = pick_stop(name, msg) or last.get("stop")
+                    return tog
             outs = [t for t in (_one(city_key, name, n, pre, msg, src, explicit, last, key)
                                 for n, pre in multi) if t]
             if outs:
