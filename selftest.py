@@ -887,6 +887,9 @@ assert re.match(r"^(?:地铁|轨道交通)\d+号", query.norm_line("轨道交通
 assert query.BUS_RE.search("东莞707配车")
 assert query.BUS_RE.search("707路配了几辆车")
 assert query.FLEET_RE.search("东莞707配车")
+# 「西安616」：城市名跟裸号，不带「路」——BUS_RE 不认，快路不触发，整句交给模型就没回
+assert query.CITYNUM_RE.search("西安616")
+assert query.CITYNUM_RE.search("@御坂09714号 西安616")
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities

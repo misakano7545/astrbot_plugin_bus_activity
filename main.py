@@ -15,10 +15,10 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
 try:  # 插件内相对导入；单文件调试时按顶层模块兜底
-    from .query import BUS_RE, answer, looks_like_ask
+    from .query import BUS_RE, CITYNUM_RE, AT_RE, answer, detect_city, looks_like_ask
 except ImportError:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
-    from query import BUS_RE, answer, looks_like_ask
+    from query import BUS_RE, CITYNUM_RE, AT_RE, answer, detect_city, looks_like_ask
 
 # 模型嘴里那句「只接了玉林的数据源」是旧插件的谎话，发出去之前整句删掉
 FALSE_CLAIM = re.compile(r"数据源|只接了|只有玉林|玉林的接口|"
@@ -36,9 +36,13 @@ class BusActivity(Star):
         super().__init__(context)
         self.default_city = (config or {}).get("default_city") or "玉林市"
 
-    @filter.regex(BUS_RE)
+    @filter.regex(re.compile(BUS_RE.pattern + "|" + CITYNUM_RE.pattern))
     async def bus_fast(self, event: AstrMessageEvent):
         """问公交就直接查直接答，不经过模型判断——模型会漏答、会编「只接了玉林」。"""
+        if not BUS_RE.search(event.message_str):
+            # 只有「城市名 + 裸号」这一支（「西安616」）：城市得真在表里，不然「今天616」也进来
+            if not detect_city(AT_RE.sub(" ", event.message_str), "", "")[1]:
+                return
         if not looks_like_ask(event.message_str):
             return  # 带线路号的闲聊（「11路那车真挤」）交给模型，别抢成公交问答
         # 引用别人的消息追问（「那 39 路往哪开」）时，城市只在被引用的那句里
