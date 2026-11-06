@@ -266,6 +266,9 @@ def looks_like_ask(msg):
         return False                 # 一句中文都没有（「baga yalu: k3 4.1 gtp」）不是问公交，是闲聊
     if _about_someone(msg):
         return False
+    # 「G02到玉林北站叫我」「我的提醒」没有问法是祈使句，但确实是公交（答应了得真去盯）
+    if WATCH_RE.search(msg) or WATCH_OFF_RE.search(msg) or WATCH_Q_RE.search(msg):
+        return True
     return bool(ASK.search(msg)) or not CHAT.search(msg)
 
 
