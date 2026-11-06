@@ -943,7 +943,7 @@ WX_REF = re.compile(r"<refermsg>.*?<content>(.*?)</content>.*?</refermsg>", re.S
 MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐|往)")
 # 只剥带数据源的写法：「查桥站」这种真站名不能被「查」吃掉
-SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上)\s*[，,、:：]?\s*"
+SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上|巴士派迪|派迪)\s*[，,、:：]?\s*"
                     r"(?:查一下|查询|查查|看一下|看看|查|看|搜一下|搜|问一下)?\s*[，,、:：]?\s*")
 
 
@@ -1984,7 +1984,7 @@ TRANSFER_RE = re.compile(r"换乘|能换|可以换|转哪|转到")
 # 「G02 首班几点发车」只问时刻，别拿实时车回（会答成末班已开走）
 TIMES_RE = re.compile(r"首班|首车|头班|第一班|末班|末车|最后一班|收班|发车时间")
 # 用户点名数据源：「从车来了的那个看一下数据」
-SRC_RE = re.compile(r"(?P<cl>车来了)|(?P<my>掌上(?:公交)?)")
+SRC_RE = re.compile(r"(?P<cl>车来了)|(?P<bp>巴士派迪|派迪)|(?P<my>掌上(?:公交)?)")
 # 「9路是哪家公司的」「丢东西了找谁」——只有 114 的 routeBean 带运营公司
 COMPANY_RE = re.compile(r"哪家公司|哪个公司|哪家公交|所属公司|运营公司|归谁|谁开的|投诉|客服|电话|遗失|丢了|落下|忘在")
 
@@ -2618,40 +2618,65 @@ LIVE_Q = re.compile(r"(?:现在|线上|当前|这会儿|实时|在跑|在路上)
                     r"(?:几辆|几台)[^，。,]{0,6}(?:在跑|在路上|在线)")
 
 
+def _bp_line(city_name, want):
+    """巴士派迪建档：返回 (目录真名, uid, 起讫, 公司, 车型列表)；这站没建这条线返 None。
+
+    按地级市建档，县级市（北流、容县）没有自己的 region，落回父城；要用掌上那套带「市」
+    的名字——建档按 region 字符串筛，剥成「玉林」一条都对不上。"""
+    tail = "" if norm_city(city_name) in ("香港", "澳门") or want.endswith(("线", "路")) else "路"
+    region = (cities().get(_district_city(norm_city(city_name))) or {}).get("mygolbs") or city_name
+    cid = buspedia.region_id(region)
+    if not cid:
+        return None
+    # 县内线路在目录里带县名（「北流105路」）：裸号查不到建档，得用目录里的真名
+    real = [o.get("lineName") for _, o in _pick_city_line(
+        [(r["lineName"], r) for r in (_catalog(city_name).get("buslines") or [])], want, city_name)]
+    for line in dict.fromkeys([x for x in real if x] + [want + tail]):
+        hit = buspedia.find_line(cid, line)
+        if hit:
+            hit.sort(key=lambda l: not l.get("active"))     # active 标记不可靠（13路标成停运其实在跑），只用来排序
+            uid = hit[0]["uid"]
+            return (line, uid, hit[0].get("term") or [], buspedia.comp_name(uid),
+                    [nm for nm, _ in buspedia.models(uid)])
+    return None
+
+
 def render_fleet(city_key, city_name, want):
     """配车资料只在巴士派迪的建档数据里。线路→型号是众包标注，一半的线填了；
     没填就说没填，别拿同公司别的线顶。数量是整家公司这个型号的保有量，不全是这条线的。"""
-    # 目录里线名带「路」（G02路），wants 里是归一化过的裸号（G02、9）
-    tail = "" if norm_city(city_key) in ("香港", "澳门") or want.endswith(("线", "路")) else "路"
-    # 巴士派迪按地级市建档，县级市（北流、容县）没有自己的 region：落回父城。
-    # 要用掌上那套带「市」的名字——fleet 按 region 字符串筛，剥成「玉林」一条都对不上
-    region = (cities().get(_district_city(norm_city(city_name))) or {}).get("mygolbs") or city_name
     try:
-        cid = buspedia.region_id(region)
-        # 县内线路在目录里带县名（「北流105路」）：裸号查不到建档，得用目录里的真名
-        # 用 orig 的 lineName：_pick_city_line 返回的名字已经把县名前缀剥了（105路）
-        real = [o.get("lineName") for _, o in _pick_city_line(
-            [(r["lineName"], r) for r in (_catalog(city_name).get("buslines") or [])], want, city_name)]
-        hit, line = [], want + tail
-        for line in dict.fromkeys(real + [want + tail]):
-            hit = buspedia.find_line(cid, line) if cid else []
-            if hit:
-                break
-        if not hit:
-            return None                      # 这站没建这条线，交回实时那条路
-        hit.sort(key=lambda l: not l.get("active"))
-        uid, comp = hit[0]["uid"], ""
-        ms = buspedia.models(uid)
-        if not ms:
-            return f"{line} 的车型这站没填"      # active 标记不可靠（13路标成停运其实在跑），不提
-        comp = buspedia.comp_name(uid)
-        parts = [nm for nm, _ in ms]
+        got = _bp_line(city_name, want)
     except Exception:
         return None                          # 这站挂了就当没有，实时那条路照走
+    if not got:
+        return None
+    line, _uid, _term, _comp, parts = got
+    if not parts:
+        return f"{line} 的车型这站没填"
     # 只报车型不报数量：/model 的保有量是整家公司在用这个型号的车
     # （南宁704 数出来 986 辆，一小时一趟的线也挂着一百多辆），当成这条线的配车数就是错的
     return (f"{line} 建档了 {len(parts)} 种车型：" + "、".join(parts)
             + f"\n（巴士派迪只记车型，不记每条线配几辆——要看这会儿跑着几辆，问「{line}现在几辆」）")
+
+
+def render_bp(city_name, want):
+    """「用巴士派迪查 D276」：点名了建档站，就只给建档那份——起讫、公司、车型，不给实时。"""
+    try:
+        got = _bp_line(city_name, want)
+    except Exception:
+        return f"巴士派迪那边没响应，过会儿再问一次"
+    if not got:
+        # 建档是人工的，全国只建了一部分线和城，说清是「没建」而不是「没这条线」
+        return (f"巴士派迪没建「{want}」这条线（那站是人工建档，不是每座城每条线都有）；"
+                f"要看实时就问「{want}现在有车吗」")
+    line, _uid, term, comp, parts = got
+    out = [f"巴士派迪建档 · {line}"]
+    for t in term:
+        out.append("  " + re.sub(r"^\[(?:上行|下行)\]", "", t))
+    if comp:
+        out.append(f"  运营公司：{comp}")
+    out.append("  车型：" + ("、".join(parts) if parts else "这站没填"))
+    return "\n".join(out)
 
 
 def render_selfno(city_key, city_name, plate):
@@ -2740,6 +2765,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     last["line"] = wants[0]
     if name:
         for w in wants:
+            # 「用巴士派迪查D276」：点名了建档站，只给建档那份（起讫/公司/车型），不掺实时
+            if src == "buspedia":
+                return render_bp(name, w)
             # 「9路用什么车」：车型/配车只有建档资料有，先问它，答不上再走实时
             if FLEET_RE.search(msg):
                 out = render_fleet(city_key, name, w)
@@ -2809,7 +2837,7 @@ def answer(msg, default_city, ctx="", key=""):
         msg = msg.replace(qm.group(0), " ")
     raw = msg
     sm = SRC_RE.search(msg)
-    src = ("chelaile" if sm.group("cl") else "mygolbs") if sm else None
+    src = ("chelaile" if sm.group("cl") else "buspedia" if sm.group("bp") else "mygolbs") if sm else None
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
     line = parse(msg)
@@ -2845,6 +2873,13 @@ def answer(msg, default_city, ctx="", key=""):
     city_key, explicit = detect_city(msg, prefix, default_city)
     if not explicit:
         city_key, explicit = detect_city(msg + " " + ctx, prefix, default_city)
+        # 追问「用巴士派迪查」自己没写城市时，上一句答的站名会被当成县级市：
+        # 「往安吉客运站」里的安吉成了浙江安吉县，答出「安吉这边有的是 207路」。
+        # 城市名在 ctx 里只是更长一段话的前半截（安吉客运站 / 玉林北站）就不算明写
+        if explicit and city_key not in msg and re.search(
+                re.escape(city_key) + r"[东南西北中]?(?:客运|车站|站|公交|地铁|机场|路|线)", ctx):
+            back = last.get("city") if last.get("city") in cities() else norm_city(default_city)
+            city_key, explicit = (back if back in cities() else None), False
     base = norm_city(default_city)
     # 「316路山南张庄接驳车」：「山南张庄」是石家庄的站名，西藏山南市被当成城市，
     # 答出「山南这边有的是 6路、1路」。城市名只是更长一段话的前半截、而且那座城压根没这条线时不算明写

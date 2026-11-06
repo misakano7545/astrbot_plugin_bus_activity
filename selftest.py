@@ -866,6 +866,10 @@ assert not query._in_line("玉林99路", "9")      # 「99」里的 9 不是 9 �
 assert query.PLATE_RE.search("桂 K12682D 是哪个字编号呢").group(1).replace(" ", "") == "桂K12682D"
 assert query.BUS_RE.search("桂 K12682D 是哪个字编号呢")
 assert query.SELFNO_RE.search("桂 K12682D 是哪个字编号呢")
+# 「用巴士派迪查D276」：第四种数据源（别名「派迪」），点了名就别走实时，前缀也别当城市
+assert query.SRC_RE.search("用巴士派迪查南宁D276").group("bp")
+assert query.SRC_RE.search("派迪查G02").group("bp")
+assert query.SRCPRE.sub("", "用巴士派迪查南宁D276").strip() == "南宁D276"
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities
