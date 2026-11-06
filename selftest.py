@@ -862,6 +862,10 @@ assert query.VEH2_RE.search("玉林到南宁的506路") is None
 # 「威远3路副线」「云和1路上城门」：比裸号长的真线名整段在句子里，不能被裸号那条顶掉
 assert query._in_line("威远3副现在有车吗", "威远3副")
 assert not query._in_line("玉林99路", "9")      # 「99」里的 9 不是 9 路
+# 「桂 K12682D 是哪个字编号呢」：车牌中间打空格、少打个「自」都得认出来，不然整句落到模型手里编
+assert query.PLATE_RE.search("桂 K12682D 是哪个字编号呢").group(1).replace(" ", "") == "桂K12682D"
+assert query.BUS_RE.search("桂 K12682D 是哪个字编号呢")
+assert query.SELFNO_RE.search("桂 K12682D 是哪个字编号呢")
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities

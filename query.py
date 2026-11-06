@@ -110,7 +110,7 @@ JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|
 # 不单独算信号；实词、线号、数据源名才是。
 # 完整车牌：省简称 + 字母 + 5 位（普通）或 6 位（新能源，闽A17997D）
 PLATE_PAT = (r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云藏陕甘青宁新]"
-             r"[A-Z][A-Z0-9]{4,6}(?![A-Za-z0-9])")
+             r"\s*[A-Z]\s*[A-Z0-9]{4,6}(?![A-Za-z0-9])")
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
     r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|夜线|(?<![今昨天每这那晚])夜班车|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
@@ -927,7 +927,8 @@ VEH2_RE = re.compile(r"的\s*(\d{2,5})(?![\d号线路])")
 # 完整车牌：省简称 + 字母 + 5 位（普通）或 6 位（新能源，闽A17997D）
 PLATE_RE = re.compile("(" + PLATE_PAT + ")")
 # 「桂K06833D 的自编号是啥」：车牌谁都有，问的是内部车号——两家都没有对照关系
-SELFNO_RE = re.compile(r"自编号|自编|车号|车辆编号|内部编号")
+# 「哪个字编号」「编号多少」也算：群里打错字少个「自」很常见，只有这一截对得上
+SELFNO_RE = re.compile(r"自编号|自编|车号|车辆编号|内部编号|编号")
 # @ 标记里的 QQ 号（[At:E2795…] / <@E8CBB…>）长得像「E8 路」，解析前先抹掉
 # 群里 @机器人 的三种写法：OneBot 的 CQ 码、QQ 官方的 [At:xxx]、以及没转换掉的「@大肥鱼 」
 AT_RE = re.compile(r"\[At:[^\]]*\]|<@[^>\s]*>|(?<!\S)@\S+\s*")
@@ -2544,6 +2545,37 @@ def _selfno_of(own, other):
     return other or ""
 
 
+# 车牌 ↔ 自编号 是这辆车的身份，不是这一刻的位置：对上一次就存下来。
+# 收班之后全城实时里扫不到这辆车，再问也还能答，标明是哪天对上的（车调走了就会过时）。
+SELFNO_DB = HERE / "selfno.json"
+
+
+def _selfno_remember(pairs, line):
+    try:
+        db = json.loads(SELFNO_DB.read_text("utf-8"))
+    except Exception:
+        db = {}
+    now = time.strftime("%m-%d %H:%M")
+    for p, no in pairs.items():
+        if not no:
+            continue
+        db[_plate_key(p)] = [no, line, now]
+        if _plate_core(p) != _plate_key(p):
+            db[_plate_core(p)] = [no, line, now]
+    try:
+        SELFNO_DB.write_text(json.dumps(db, ensure_ascii=False), "utf-8")
+    except Exception:
+        pass            # 存不下只是这次没记住，这一句照答
+
+
+def _selfno_recall(plate):
+    try:
+        db = json.loads(SELFNO_DB.read_text("utf-8"))
+    except Exception:
+        return None
+    return db.get(_plate_key(plate)) or db.get(_plate_core(plate))
+
+
 def render_line_selfno(city_key, city_name, want):
     """「这几辆车的自编号分别是多少」：整条线的车一次问完，不用一辆一辆来。"""
     rows = _catalog(city_name).get("buslines") or []
@@ -2556,10 +2588,13 @@ def render_line_selfno(city_key, city_name, want):
         return f"{name} 这会儿没有车报位置，自编号也就没有对照"
     out = [f"{name} 这会儿 {len(cars)} 辆，自编号："]
     miss = 0
+    seen = {}
     for k, c in cars.items():
         got = mate.get(k)
         own = c.get("busNumber")
         sn = _selfno_of(own, got[0]) if got else ""
+        if sn:
+            seen[own] = sn
         # 一句话常同时问「几辆 / 到哪了 / 自编号」，位置顺手带上，别只答其中两件
         at = _car(own, c.get("stationName") or "", c.get("busToStationNiheDistance"),
                   c.get("statusType")).rstrip()
@@ -2571,6 +2606,7 @@ def render_line_selfno(city_key, city_name, want):
                        else f"{at} → 没配上（车来了那条线没报这辆）")
     if miss:
         out.append(f"没配上的 {miss} 辆多半是车来了那条线没报这辆车，隔一分钟再问会变")
+    _selfno_remember(seen, name)
     return "\n".join(out)
 
 
@@ -2632,6 +2668,11 @@ def render_selfno(city_key, city_name, plate):
     key = full if full in idx else core      # 「粤B05070D」在掌上叫「BS05070D」，只有数字那截一样
     hit = idx.get(key)
     if not hit:
+        # 收班了/调走了：全城实时里没这辆车，但它跟自编号的对应关系是记着的
+        old = _selfno_recall(plate)
+        if old:
+            return (f"{plate} 这会儿不在路上，上次 {old[2]} 在 {old[1]} 上对上的自编号是 {old[0]}"
+                    f"（车要是调了线，这条就旧了）")
         return f"没扫到 {plate} 这辆车，自编号更对不上"
     name = hit[0]
     mate, cars = _selfno_mate(city_key, city_name, name)
@@ -2641,9 +2682,13 @@ def render_selfno(city_key, city_name, plate):
                     if _plate_core(pn) == core), plate)
         sn = _selfno_of(own, got[0])
         if sn:
+            _selfno_remember({own: sn}, name)
             return (f"{plate} 在 {name}上，这会儿的位置对着呢：自编号是 {sn}"
                     f"（两家 GPS 差 {got[1]} 米，这条路上离它最近的一辆）")
         return f"{plate} 在 {name}上，车来了那边给它挂的也是车牌，没另给自编号"
+    old = _selfno_recall(plate)
+    if old:
+        return (f"{plate} 在 {name} 上，这会儿两家对不上哪辆；上次 {old[2]} 在这条线上对上的自编号是 {old[0]}")
     head = f"{plate} 在 {name} 上，两家的号没对上哪辆"
     return head + "；这条线的车号这会儿配不齐，隔一分钟再问"
 

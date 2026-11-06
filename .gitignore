@@ -7,3 +7,6 @@ _re_cl/
 _re_src/
 _re_src_src/
 _tool/
+
+# 车牌→自编号 的对照表（运行时自己记的，会变）
+selfno.json
