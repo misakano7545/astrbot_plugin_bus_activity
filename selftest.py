@@ -879,6 +879,10 @@ assert not query.looks_like_ask("不是，他查的是公交公司门口的公�
 assert query.answer("不是，他查的是公交公司门口的公交站", "玉林市") == ""
 assert query.looks_like_ask("不是，G02现在有车吗")          # 带线号照旧答
 assert query.looks_like_ask("其他城市9路有吗")               # 「其他」里的他不是第三人称
+# 「地铁快巴4」是南宁的微循环公交，不是地铁：别把收班说成「地铁不上报车机」
+assert query.STOPS_RE.search("南宁地铁快巴4站表")
+assert not re.match(r"^(?:地铁|轨道交通)\d+号", query.norm_line("地铁快巴4路"))
+assert re.match(r"^(?:地铁|轨道交通)\d+号", query.norm_line("轨道交通1号线"))
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities

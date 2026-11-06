@@ -875,7 +875,9 @@ def render(city_key, want, res, veh="", dir=""):
         groups = list(merged.items())
     if not total:
         # 「没车」和「上游没给车辆位置」是两件事，后者会被乘客读成停运（见 issue #2）
-        if "地铁" in norm_line(line):           # 地铁进得了目录，但全程 hasReal=0
+        # 「地铁快巴4」是微循环公交，不是地铁：只有真地铁（地铁1号/轨道交通2号）且上游
+        # 整城不给车机（unknown=hasReal=0）才这么说，否则会把收班说成「不上报车机」
+        if res.get("unknown") and re.match(r"^(?:地铁|轨道交通)\d+号", norm_line(line)):
             return f"{line} 没有实时车辆位置，地铁不上报车机，站表和首末班能查"
         tail = res.get("note") or res.get("desc") or ""
         head = f"{line} 查不到实时车" if res.get("unknown") else f"{line} 这会儿没车"
@@ -1838,7 +1840,7 @@ def render_at(city_key, city_name, want, msg, veh=""):
 
 
 # 「9路站点」这种只说两个字的也要认；「到站点了没」「哪个站点」问的是实时位置，别抢
-STOPS_RE = re.compile(r"所有?站点|全部站点|站(点)?列(表|出来)|经过哪些站|有哪些站|停哪些站|站序|沿途|(?<![到哪个几])站点")
+STOPS_RE = re.compile(r"所有?站点|全部站点|站(点)?列(表|出来)|站表|经过哪些站|有哪些站|停哪些站|站序|沿途|(?<![到哪个几])站点")
 
 
 def render_stops(city_name, want):
