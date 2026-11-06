@@ -1267,6 +1267,17 @@ def _dest_after(city_name, msg, stop):
     return (got or {}).get("stationName")
 
 
+def _in_line(flat, n):
+    """n 出现在 flat 里、且两侧不粘着别的数字（「13」里的「3」不算「3路」）。"""
+    i = flat.find(n)
+    while i >= 0:
+        if (i == 0 or not flat[i - 1].isdigit()) and \
+                (i + len(n) >= len(flat) or not flat[i + len(n)].isdigit()):
+            return True
+        i = flat.find(n, i + 1)
+    return False
+
+
 def _exact_line(city_name, msg, want, city_key=""):
     """目录里有更长的真线名整段出现在句子里（「新乐专1路」）就用它，别只拿裸号去匹。"""
     flat, w = _digitize(norm_line(msg)), norm_line(want)
@@ -1285,7 +1296,12 @@ def _exact_line(city_name, msg, want, city_key=""):
             # 「58路大站快车」「301路A」「613路支」：号在前、尾巴是定性词。整段出现在句子里才算，
             # 光看前缀会把「9路」当成「9路大站快车」
             front = n.startswith(w2) and len(n) > len(w2)
-            if not (n.endswith(tail) or front or (head and norm_city(head) == norm_city(city_name))):
+            # 「威远3路副线」「云和1路上城门」：比裸号长的真线名整段出现在句子里。
+            # 数字两侧卡边界：「玉林99路」不能被目录里的 9 路顶掉
+            whole = len(n) > len(w2) and _in_line(flat, n)
+            # 「（3路支路）」这种同名不同支的，靠下面按原样名择优
+            if not (n == flat or whole or n.endswith(tail) or front
+                    or (head and norm_city(head) == norm_city(city_name))):
                 continue
             # 「新乐专一路」的「一」也是数字，得和 1 等价地认
             cns = "零一二三四五六七八九"
@@ -1297,7 +1313,7 @@ def _exact_line(city_name, msg, want, city_key=""):
         return hit
 
     hit = scan([r["lineName"] for r in _catalog(city_name).get("buslines") or [] if r.get("lineName")])
-    best = max(hit, key=lambda n: len(norm_line(n)), default=None)
+    best = max(hit, key=lambda n: (n in (msg or ""), len(norm_line(n))), default=None)
     # 掌上没这条、或只匹到裸号（「吴川二路」）：真线名可能只在车来了目录里（吴川2路）
     cid = (cities().get(city_key or norm_city(city_name)) or {}).get("chelaile")
     if cid and (not best or norm_line(best) == w):
@@ -1307,7 +1323,7 @@ def _exact_line(city_name, msg, want, city_key=""):
                     if len(norm_line(n)) > len(w)]
         except Exception:
             pass
-        best = max(hit, key=lambda n: len(norm_line(n)), default=None)
+        best = max(hit, key=lambda n: (n in (msg or ""), len(norm_line(n))), default=None)
     return best
 
 

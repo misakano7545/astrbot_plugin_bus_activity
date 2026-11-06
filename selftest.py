@@ -859,6 +859,9 @@ assert "汽车总站" in list(query._cands("玉林市", "G02在汽车总站要�
 # 「G02的512到玉林汽车总站要等多久」：问的是这条线上自编号 512 那一辆，不是线号 512
 assert query.VEH2_RE.search("G02的512到玉林汽车总站要等多久").group(1) == "512"
 assert query.VEH2_RE.search("玉林到南宁的506路") is None
+# 「威远3路副线」「云和1路上城门」：比裸号长的真线名整段在句子里，不能被裸号那条顶掉
+assert query._in_line("威远3副现在有车吗", "威远3副")
+assert not query._in_line("玉林99路", "9")      # 「99」里的 9 不是 9 路
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities
