@@ -337,6 +337,14 @@ query._mygolbs = lambda c, w: (_seq.append(1), {"source": "掌上公交", "line"
                                                 "groups": [("", [])], "note": "", "unknown": True})[1]
 _rq("测试", ["1"])
 assert not _seq, "第二问该直接先问车来了"
+# 但只跳裸号：带汉字前缀的线名只有掌上目录认（新郑12 在郑州市那 1283 条里，车来了是裸号体系）
+_cap3 = []
+query._mygolbs = lambda c, w: (_cap3.append(w), {"source": "掌上公交", "line": "新郑12路",
+                                                "groups": [("", [])], "note": "", "unknown": True})[1]
+_rq("测试", ["新郑12"])
+assert _cap3 == ["新郑12"], _cap3
+# 县级市（新郑、巩义）在掌上不是一个城市，线路挂在父城目录里、线名带县名前缀
+assert query.norm_city(query.DIST_BARE["新郑"]) == "郑州"
 query.cities, query._mygolbs, query._chelaile = _cit, _mg, _cl
 query.PREFER_CL.pop("测试", None)
 

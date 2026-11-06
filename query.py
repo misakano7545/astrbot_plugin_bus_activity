@@ -516,7 +516,13 @@ def _mygolbs(city_name, want):
         # 没有就报候选，别让「沛县 1 路」这种（只有 11/17/18 路）答成「没这条线」
         near = sorted({r["lineName"] for r in rows
                        if norm_line(r["lineName"]).startswith(want)})[:4]
-        return {"error": "是 " + " / ".join(near) + " 吗"} if near else None
+        if not near:
+            return None
+        # 「沛县 1 路」只有 11/17/18 路是少打一位；「新郑2路」命中的 201/202 是另一批线，
+        # 念成「是 201 吗」等于替用户改口
+        if any(len(norm_line(n)) == len(want) + 1 for n in near):
+            return {"error": "是 " + " / ".join(near) + " 吗"}
+        return {"error": "没这条线路"}
     groups, live_known, first, last, live_flags, wins, pos = [], False, "", "", [], [], {}
     for name, row in hit:
         d = str(row.get("upperOrDown") or "")
@@ -669,7 +675,8 @@ def query(city_key, wants, src=None, veh=""):
                 continue
             # 掌上这座城整城不给车辆位置（hasReal=0，北京/成都），上一问已经知道了，
             # 现在两家都要问，跳过它省一整轮
-            if source == "mygolbs" and PREFER_CL.get(city_key):
+            # 只跳过裸号：带汉字前缀的线名（新郑12、东胜8）只有掌上的目录认，车来了那边是裸号体系
+            if source == "mygolbs" and PREFER_CL.get(city_key) and not re.search(r"[\u4e00-\u9fa5]", want):
                 continue
             # 县级市借父城的车来了 id：「吴川9路」不能拿湛江市区的 9 路顶
             if source == "chelaile" and ent.get("_borrow") and not re.search(r"[\u4e00-\u9fa5]", want):
@@ -2535,6 +2542,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     bare = re.sub(r"(区|县|旗|市|镇)$", "", prefix) if prefix else ""
     if len(bare) >= 2 and bare != prefix and not num.startswith(bare):
         wants.insert(len(wants) - 1, bare + num)
+    # 县级市线路落到父城查（新郑2路 → 郑州市目录）：裸号「2」是父城自己的 2 路，退回去就是拿同名线顶替
+    if prefix and norm_city(_district_city(prefix) or "") == city_key:
+        wants = [prefix + num]
     # 有前缀要纠前缀截短；「环山二号线」这种自带汉字的线名也要纠（前缀是空的）
     if name and (prefix or not num[:1].isdigit()):
         cat = _catalog(name)
@@ -2684,7 +2694,13 @@ def answer(msg, default_city, ctx="", key=""):
             bn = (cities().get(base) or {}).get("mygolbs")
             # 前缀截到的常是站名的尾巴（「我在汽车总站等 9 路」→「车总站等」）：
             # 它在默认城里是个站，就按默认城查——这条不看 looks_like_ask，「我在…等」会被当成闲聊
-            if line and bn and find_stop(bn, prefix)[0]:
+            # 县级市（新郑、巩义）在掌上不是一个城市，它的线路挂在父城目录里、线名自带县名前缀
+            # （「新郑12路」全在郑州市那 1283 条里）。落到父城查，查不到也让「没查到 + 同前缀的线」讲清楚
+            parent = _district_city(prefix) if line else None
+            pk = norm_city(parent or "")
+            if pk and pk in cities():
+                city_key, explicit = pk, True        # 用户写了地名，别再补「你没写城市，我按X查的」
+            elif line and bn and find_stop(bn, prefix)[0]:
                 city_key = base
             elif looks_like_ask(msg):
                 if not _covered(prefix):
