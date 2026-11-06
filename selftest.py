@@ -1059,6 +1059,26 @@ assert query.hop("玉林火车站咋去北流万达") == ("玉林火车站", "�
 assert query.hop("玉林火车站怎么去北流万达") == ("玉林火车站", "北流万达")
 assert query.hop("我在十字街咋去火车站") == ("十字街", "火车站")
 assert query.hop("怎么去北流万达") is None              # 没出发站，不猜
+# 「9路用什么车」：车型/配车只有建档资料有；4 种以上要收，别刷屏
+_bp, query.buspedia = query.buspedia, types.SimpleNamespace(
+    region_id=lambda cn: 34,
+    find_line=lambda cid, nm: [{"uid": "L9", "name": nm, "active": True}],
+    models=lambda uid: [("甲 X1", "m1"), ("乙 X2", "m2"), ("丙 X3", "m3"),
+                        ("丁 X4", "m4"), ("戊 X5", "m5")],
+    comp_name=lambda uid: "玉林公交",
+    fleet=lambda mid, c="", r="": [("2020", 10, "1~10")])
+_f = query.render_fleet("玉林", "玉林市", "9")
+assert "9路 用的是 甲 X1（10 辆，自编号 1~10）" in _f, _f
+assert "等 5 种" in _f and "50 辆" in _f and "戊" not in _f, _f
+query.buspedia = types.SimpleNamespace(
+    region_id=lambda cn: 34,
+    find_line=lambda cid, nm: [{"uid": "L5", "name": nm, "active": False}],
+    models=lambda uid: [], comp_name=lambda uid: "", fleet=lambda *a, **k: [])
+assert "车型这站没填" in query.render_fleet("玉林", "玉林市", "5")
+query.buspedia = types.SimpleNamespace(region_id=lambda cn: None, find_line=lambda *a: [])
+assert query.render_fleet("玉林", "玉林市", "9") is None    # 这站没有这条线：交回实时那条路
+query.buspedia = _bp
+
 # 「查询玉林职院附近有没有公交车」：动词粘在站名前头，把「职院」和站名隔开了
 _c1 = list(query._cands("玉林市", "查询玉林职院附近有没有公交车"))
 assert "职院" in _c1, _c1                    # 「查询」剥掉了，简称才补得成全称

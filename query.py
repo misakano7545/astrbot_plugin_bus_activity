@@ -15,9 +15,10 @@ from pathlib import Path
 import yulin          # 玉林导乘资料：只在上游给不出的地方补（换乘站表、上车点、联营线无实时）
 
 try:  # AstrBot 按包加载时走相对导入，单文件调试时退回顶层模块
-    from . import chelaile, mygolbs
+    from . import buspedia, chelaile, mygolbs
     from .plates import PLATE
 except ImportError:
+    import buspedia
     import chelaile
     import mygolbs
     from plates import PLATE
@@ -2352,6 +2353,44 @@ def render_line_selfno(city_key, city_name, want):
     return "\n".join(out)
 
 
+# 「9路用什么车」「配了几辆车」：两家的实时接口都没有车型/配车字段，问到这层才去查建档资料
+FLEET_RE = re.compile(r"用什么车|用的什么车|什么车型|什么车跑|什么车在跑|配了几辆|配了几台|配几辆|配车")
+
+
+def render_fleet(city_key, city_name, want):
+    """配车资料只在巴士派迪的建档数据里。线路→型号是众包标注，一半的线填了；
+    没填就说没填，别拿同公司别的线顶。数量是整家公司这个型号的保有量，不全是这条线的。"""
+    # 目录里线名带「路」（G02路），wants 里是归一化过的裸号（G02、9）
+    tail = "" if norm_city(city_key) in ("香港", "澳门") or want.endswith(("线", "路")) else "路"
+    line = want + tail
+    try:
+        cid = buspedia.region_id(city_name)
+        hit = buspedia.find_line(cid, line) if cid else []
+        if not hit:
+            return None                      # 这站没建这条线，交回实时那条路
+        hit.sort(key=lambda l: not l.get("active"))
+        uid, comp = hit[0]["uid"], ""
+        ms = buspedia.models(uid)
+        if not ms:
+            return f"{line} 的车型这站没填"      # active 标记不可靠（13路标成停运其实在跑），不提
+        comp = buspedia.comp_name(uid)
+        parts, total = [], 0
+        for nm, mid in ms:
+            rows = buspedia.fleet(mid, comp, city_name) if mid else []
+            cnt = sum(r[1] for r in rows)
+            total += cnt
+            nos = [r[2] for r in rows if r[2]]
+            parts.append(f"{nm}" + (f"（{cnt} 辆" + (f"，自编号 {nos[0]}" if nos else "") + "）" if cnt else ""))
+    except Exception:
+        return None                          # 这站挂了就当没有，实时那条路照走
+    # 大线能挂五六种车型，全列会刷屏
+    more = len(parts) - 4
+    out = f"{line} 用的是 " + "、".join(parts[:4]) + (f" 等 {len(parts)} 种" if more > 0 else "")
+    if total and comp:
+        out += f"\n（{comp}这几种一共 {total} 辆，同型号别的线也在用）"
+    return out
+
+
 def render_selfno(city_key, city_name, plate):
     """「XX 的自编号是啥」：掌上只给车牌（104 的 busNumber），车来了只给自编号（licence），
     两家没有共同的键。唯一能对上的东西是这一刻的 GPS —— 同方向里取离它最近的那辆，
@@ -2424,8 +2463,11 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     last["line"] = wants[0]
     if name:
         for w in wants:
+            # 「9路用什么车」：车型/配车只有建档资料有，先问它，答不上再走实时
+            if FLEET_RE.search(msg):
+                out = render_fleet(city_key, name, w)
             # 「G02 这几辆的自编号」：整条线一次列完，别只答一辆
-            if SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
+            elif SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
                 out = render_line_selfno(city_key, name, w)
             # 「到终点站还要多久」问的是时长，不是起讫站
             elif ENDS_RE.search(msg) and not re.search(r"多久|几分钟|几站|多远", msg):
