@@ -959,6 +959,31 @@ def _near(city_key, want, n=4):
     return "、".join(hit) if hit and difflib.SequenceMatcher(None, norm_line(hit[0]), w).ratio() >= 0.5 else ""
 
 
+# 「从1路东线」「增城105」：号上粘着汉字的名字。本城目录里没有时说明号是别的城市的线，
+# 别回「没查到「1」」再赔一堆不相干的近似线名（佛山 614 之后又踩了从1路东线，它在广州从化）
+_WNAME_BAD = "坐等查看有没有这那该此本是我你要去到在问乘搭今昨每晚几哪末首多怎还现间票时"
+# 号后面的定性词只认这几种，不然「1路末班车几点」也会被当成长名字
+_WNAME_MOD = ("东线", "西线", "南线", "北线", "中线", "环线", "区间", "支线", "快线", "慢线",
+              "夜班", "夜线", "长线", "短线", "专线", "副线", "高峰", "大站", "直达", "接驳")
+
+
+def _written_name(msg, want):
+    """句子里那个号的写法（「从1路东线」「增城105」），纯「1路」返回空串。"""
+    if not want:
+        return ""
+    m = re.search(r"(?<!\d)([\u4e00-\u9fa5]{1,4})?\s*" + re.escape(want)
+                  + r"(?:路|线)?(?!\d)([\u4e00-\u9fa5]{0,4})", msg)
+    if not m:
+        return ""
+    pre, suf = m.group(1) or "", m.group(2) or ""
+    name = m.group(0).strip()
+    if pre and pre[0] in _WNAME_BAD:
+        name, pre = name[len(pre):], ""
+    if suf and not any(suf.startswith(x) for x in _WNAME_MOD):
+        name, suf = name[:len(name) - len(suf)], ""
+    return name.strip() if (pre or suf) else ""
+
+
 HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
                     # 「看到/说到/想到/遇到/查不到」都是动词的「到」，不是「A 站到 B 站」——闲聊被当成换乘问过
                     r"(?<![看说想做达遇收得感觉听找等拿买卖学记念料猜想跑走来回送带拉请叫问答碰见闻触意识考虑注意查不])到\s*"
@@ -2888,8 +2913,14 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     # 「G01多久一班」没有站名，走不到上面那条；上游两家都没有间隔字段，给实时并说清缺什么
     if re.search(r"多久一[班趟台]|几[分]钟一[班趟台]|间隔|多久一趟", msg) and "发车间隔" not in txt:
         txt += "\n（发车间隔两家都不给，只能看实时的这几辆）"
+    # 句子里写的是「从1路东线」这种号上粘着汉字的名字，本城目录里匹到的却是「1路」（或压根没这条）：
+    # 那是别的城市的同号车，别拿本城的 1 路顶掉，也别回「没查到「1」」；这名字自己看不出城市，问
+    w = _written_name(msg, wants[0]) if city_key not in msg else ""
+    if w and (txt.startswith("没查到") or norm_line(w) != norm_line(str(res.get("line") or ""))):
+        return (f"「{w}」{norm_city(city_key)}这边没这条，这是哪座城市的线？"
+                f"带上城市名我再查（像「广州{w}」）")
     # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
-    if not explicit and txt.startswith("没查到"):
+    if txt.startswith("没查到") and city_key not in msg:
         txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
     return txt
 

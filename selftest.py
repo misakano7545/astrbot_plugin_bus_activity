@@ -1254,6 +1254,13 @@ assert query._variants("佛山", "600") == []
 query.cities, query._catalog, query.chelaile = _cc, _cat3, _cl3
 query.buspedia = _bp
 
+# 「从1路东线」：号上粘着汉字的名字（在从化，属广州）。本城目录里没有就别回「没查到「1」」
+assert query._written_name("从1路东线", "1") == "从1路东线"
+assert query._written_name("1路东线", "1") == "1路东线"
+assert query._written_name("1路末班车几点", "1") == ""      # 「末班车」不是线名后缀
+assert query._written_name("坐1路了", "1") == ""            # 「坐」是动词不是前缀地名
+assert query._written_name("105路", "105") == ""            # 纯号
+
 # 「查询玉林职院附近有没有公交车」：动词粘在站名前头，把「职院」和站名隔开了
 _c1 = list(query._cands("玉林市", "查询玉林职院附近有没有公交车"))
 assert "职院" in _c1, _c1                    # 「查询」剥掉了，简称才补得成全称
