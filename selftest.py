@@ -874,6 +874,11 @@ assert query.SRCPRE.sub("", "用巴士派迪查南宁D276").strip() == "南宁D2
 assert query.MODEL_RE.search("lck6116evga2 在玉林配属哪条公交线路").group(1).upper() == "LCK6116EVGA2"
 assert query.MODEL_Q.search("lck6116evga2 在玉林配属哪条公交线路")
 assert query.MODEL_RE.search("查南宁D276") is None          # D276 是线号，不是型号
+# 「不是，他查的是公交公司门口的公交站」：跟群里别人解释，不是问机器人
+assert not query.looks_like_ask("不是，他查的是公交公司门口的公交站")
+assert query.answer("不是，他查的是公交公司门口的公交站", "玉林市") == ""
+assert query.looks_like_ask("不是，G02现在有车吗")          # 带线号照旧答
+assert query.looks_like_ask("其他城市9路有吗")               # 「其他」里的他不是第三人称
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities

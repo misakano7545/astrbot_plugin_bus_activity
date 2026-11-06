@@ -255,7 +255,17 @@ def looks_like_ask(msg):
         return False
     if not re.search(r"[\u4e00-\u9fa5]", msg):
         return False                 # 一句中文都没有（「baga yalu: k3 4.1 gtp」）不是问公交，是闲聊
+    if _about_someone(msg):
+        return False
     return bool(ASK.search(msg)) or not CHAT.search(msg)
+
+
+def _about_someone(msg):
+    """跟群里别人说话、不是问机器人：「不是，他查的是公交公司门口的公交站」。
+    裸「查」进了 ASK，第三人称的叙述句也会被当问句接住 → 真去反问「是哪座城的」。
+    带线路号或问法的照旧放行（「不是，G02 现在有车吗」）。"""
+    return bool(re.search(r"(?<!其)他|她", msg)) and not re.search(r"\d", msg) \
+        and not re.search(r"哪|几|多少|有车|有没有|有吗|怎么|咋|多久|几点", msg)
 
 
 def _lines(msg):
@@ -2842,6 +2852,8 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
 def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     if CODE_RE.search(msg):      # 群里贴的脚本不查公交，交给模型
+        return ""
+    if _about_someone(AT_RE.sub(" ", msg)):   # 只是跟别人说话（bus_query 也被模型调过）
         return ""
     # 微信的引用整段是 XML：真要答的那句在 <title>，被引用的话在 <refermsg><content>
     if "<refermsg>" in msg or "<appmsg>" in msg:
