@@ -114,7 +114,7 @@ PLATE_PAT = (r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂�
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
     r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|夜线|(?<![今昨天每这那晚])夜班车|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
-    r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + PLATE_PAT + r"|" + ALPHA_PAT +
+    r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + PLATE_PAT + r"|配车|配属|" + ALPHA_PAT +
     r"|[\u4e00-\u9fa5A-Za-z0-9]{2,10}(?:专线|快线|支线)|[\u4e00-\u9fa5]{2,6}[东南西北中]\d{1,4}(?![0-9])")
 # 纯文字线名（「妇幼专线」「宝钢专线」）不含数字，也不是公交词——靠这两个专有线名尾巴认
 TEXT_LINE = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9]{2,10}(?:专线|快线|支线)")
@@ -2659,9 +2659,9 @@ def render_fleet(city_key, city_name, want):
     try:
         got = _bp_line(city_name, want)
     except Exception:
-        return None                          # 这站挂了就当没有，实时那条路照走
+        return "巴士派迪那边没响应，过会儿再问一次"     # 别默默落到实时，那答的不是配车
     if not got:
-        return None
+        return f"巴士派迪建档里没有 {want + '路' if want.isdigit() else want} 这条线的车型（那站是人工填的，不是每城每线都有）"
     line, _uid, _term, _comp, parts = got
     if not parts:
         return f"{line} 的车型这站没填"

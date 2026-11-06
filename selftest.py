@@ -883,6 +883,10 @@ assert query.looks_like_ask("其他城市9路有吗")               # 「其他�
 assert query.STOPS_RE.search("南宁地铁快巴4站表")
 assert not re.match(r"^(?:地铁|轨道交通)\d+号", query.norm_line("地铁快巴4路"))
 assert re.match(r"^(?:地铁|轨道交通)\d+号", query.norm_line("轨道交通1号线"))
+# 「东莞707配车」：配车是建档里的车型，得问巴士派迪，不能被当成实时问（原来 BUS_RE 不认，整句交给模型）
+assert query.BUS_RE.search("东莞707配车")
+assert query.BUS_RE.search("707路配了几辆车")
+assert query.FLEET_RE.search("东莞707配车")
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities
@@ -1189,7 +1193,7 @@ query.buspedia = types.SimpleNamespace(
     models=lambda uid: [], comp_name=lambda uid: "", fleet=lambda *a, **k: [])
 assert "车型这站没填" in query.render_fleet("玉林", "玉林市", "5")
 query.buspedia = types.SimpleNamespace(region_id=lambda cn: None, find_line=lambda *a: [])
-assert query.render_fleet("玉林", "玉林市", "9") is None    # 这站没有这条线：交回实时那条路
+assert "建档里没有 9路" in query.render_fleet("玉林", "玉林市", "9")   # 这站没建这条线：说清，别默默落到实时
 # 「北流105配车」：县级市没有自己的 region，得落回父城、用目录里的真名（北流105路）
 # 也要认：口语问配车不带「路」字
 assert query.parse("北流105配车") == ("105", "北流"), query.parse("北流105配车")
