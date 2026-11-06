@@ -882,6 +882,23 @@ query._catalog = lambda cn: {"buslines": [{"lineName": "东胜8路"}]}
 query._one("鄂尔多斯", "鄂尔多斯市", "8", "东胜区", "帮我查一下东胜区8路公交", None, True, {})
 query.query, query.render_at, query._catalog = _q, _r, _cat
 assert "东胜8" in _seen[0], _seen
+# 「等到9路」的「9路」是线路号，别当目的地：dest 一有值，方向会被 _goes 全过滤掉
+assert query._dest_after("玉林市", "玉林汽车总站等多久才能等到9路", "汽车总站") is None
+# 「玉林汽车总站等多久才能等到9路」：站经停这条线，可两个方向连 tips 都没有（got 空）。
+# 返 None 会落到整条线的清单（「9路 现在 2 辆在路上」），站在站台的人读这个没用
+_lm5, _sq5, _ct5, _ps5 = query._live_my, query._station_seq, query._catalog, query.pick_stop
+query._live_my = lambda cn, n, d, order=1: {"routeOnStationRTimeInfoList": []}
+query._station_seq = lambda c, l, d: [{"stationName": "汽车总站"}, {"stationName": "乙站"}]
+query._catalog = lambda c: {"buslines": [{"lineName": "9路", "upperOrDown": d, "to": t}
+                                        for d, t in (("1", "甲"), ("2", "乙"))]}
+query.pick_stop = lambda c, m: "汽车总站"
+_da5, _go5 = query._dest_after, query._goes
+query._dest_after = lambda c, m, s: "别处"        # 「G02 到高新产业园，去玉林北站」那种 dest
+query._goes = lambda c, l, s, d: None             # 两个方向都开不到 dest
+_g5 = query.render_at("玉林", "玉林市", "9", "玉林汽车总站等多久才能等到9路")
+assert _g5 and "没有开往别处" in _g5, _g5
+query._live_my, query._station_seq, query._catalog, query.pick_stop = _lm5, _sq5, _ct5, _ps5
+query._dest_after, query._goes = _da5, _go5
 
 # 站名猜不出是哪座城：问一句，别回空让模型自己圆话
 assert "是哪座城的" in query.answer("伦教街道办事处公交线路", "玉林市", key="k-ask")

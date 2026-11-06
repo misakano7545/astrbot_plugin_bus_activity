@@ -1217,6 +1217,9 @@ def _dest_after(city_name, msg, stop):
     m = re.search(r"(?:去|往|到)\s*([^，,。.？?！!\s]{2,12})", msg.split(stop)[-1])
     if not m:
         return None
+    # 「玉林汽车总站等多久才能等到9路」：「等到9路」的「9路」是线路号，不是目的地
+    if LINE_RE.search(m.group(1)):
+        return None
     # 「往呈贡广场方向什么时候能到」：方向后面跟的是「方向」和问法，砍掉再搜
     raw = re.sub(r"方向.*$", "", re.split(r"要|等", m.group(1))[0])
     got, _ = find_stop(city_name, TAIL.sub("", raw))
@@ -1672,7 +1675,9 @@ def render_at(city_key, city_name, want, msg):
             return None                  # 目录里根本没这条线，交给上层说「没查到」
         if not near:
             return f"{hit[0][1]['lineName']} 不经过{station_name}"
-        return None
+        # 这条线过我这站、方向全被 dest 过滤掉了：返 None 会落到整条线的清单
+        # （「9路 现在 2 辆在路上，457 火车站 1.6km」）——站在站台的人读这个没用
+        return f"{hit[0][1]['lineName']} 这会儿没有开往{dest or station_name}的车"
     line_name = hit[0][1]["lineName"]
     # 目录里这条线有两个方向、但这站只有一个方向停（单边站）：另一个方向永远不会来，
     # 不加这句的话「往X 首班还没到」会被当成再等等就有了
