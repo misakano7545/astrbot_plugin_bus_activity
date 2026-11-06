@@ -2451,6 +2451,10 @@ def render_line_selfno(city_key, city_name, want):
 
 # 「9路用什么车」「配了几辆车」：两家的实时接口都没有车型/配车字段，问到这层才去查建档资料
 FLEET_RE = re.compile(r"用什么车|用的什么车|什么车型|什么车跑|什么车在跑|配了几辆|配了几台|配几辆|配车")
+# 「有什么配车，现在线上几辆车」是一句话问两件事：配车只答了前一半，用户还得再问一次。
+# 「配了几辆车」问的是配车本身，不能算实时，所以前缀只认这几个
+LIVE_Q = re.compile(r"(?:现在|线上|当前|这会儿|实时|在跑|在路上)[^，。,]{0,8}(?:几辆|几台|多少辆)|"
+                    r"(?:几辆|几台)[^，。,]{0,6}(?:在跑|在路上|在线)")
 
 
 def render_fleet(city_key, city_name, want):
@@ -2575,6 +2579,10 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
             # 「9路用什么车」：车型/配车只有建档资料有，先问它，答不上再走实时
             if FLEET_RE.search(msg):
                 out = render_fleet(city_key, name, w)
+                if out and LIVE_Q.search(msg):       # 顺带问了实时，一并给
+                    live = render(city_key, w, query(city_key, [w]))
+                    if "在路上" in live:
+                        out += "\n" + live.replace("有，", "", 1)   # 单独发才需要「有，」
             # 「G02 这几辆的自编号」：整条线一次列完，别只答一辆
             elif SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
                 out = render_line_selfno(city_key, name, w)

@@ -1101,6 +1101,9 @@ assert query.render_fleet("玉林", "玉林市", "9") is None    # 这站没有�
 # 「北流105配车」：县级市没有自己的 region，得落回父城、用目录里的真名（北流105路）
 # 也要认：口语问配车不带「路」字
 assert query.parse("北流105配车") == ("105", "北流"), query.parse("北流105配车")
+# 一句话问「配车 + 线上几辆」要都答；「配了几辆车」问的是配车本身，别当实时再查一遍
+assert query.LIVE_Q.search("西安930路有什么配车，现在线上几辆车")
+assert not query.LIVE_Q.search("西安930路配了几辆车"), "配了几辆车 不是问实时"
 _seen_r = []
 query.buspedia = types.SimpleNamespace(
     region_id=lambda cn: _seen_r.append(cn) or 34,
