@@ -517,7 +517,7 @@ def _mygolbs(city_name, want):
         near = sorted({r["lineName"] for r in rows
                        if norm_line(r["lineName"]).startswith(want)})[:4]
         return {"error": "是 " + " / ".join(near) + " 吗"} if near else None
-    groups, live_known, first, last, live_flags, wins = [], False, "", "", [], []
+    groups, live_known, first, last, live_flags, wins, pos = [], False, "", "", [], [], {}
     for name, row in hit:
         d = str(row.get("upperOrDown") or "")
         # 传 0/3/空串时服务端会静默退化成方向 1，回一列错方向的车，宁可不报
@@ -541,6 +541,10 @@ def _mygolbs(city_name, want):
         groups.append((row.get("to") or "", [(c.get("busNumber"), c.get("stationName"),
                                               c.get("busToStationNiheDistance"), c.get("statusType"))
                                              for c in cars]))
+        # 留着坐标：另一家报的车要按 GPS 配掉重复的，没有坐标就只能盲并（会多出同一辆车）
+        for c in cars:
+            if float(c.get("bus_lat") or 0) and float(c.get("bus_lng") or 0):
+                pos[c.get("busNumber")] = {"lat": c["bus_lat"], "lng": c["bus_lng"]}
     note, unknown = "", False
     if not any(g for _, g in groups):
         if live_flags and all(live_flags):
@@ -568,7 +572,7 @@ def _mygolbs(city_name, want):
         elif live_known:
             note = "线路还在跑，只是车机没报位置"
     return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
-            "note": note, "unknown": unknown}
+            "note": note, "unknown": unknown, "pos": pos}
 
 
 def _chelaile(city_id, want):
@@ -585,7 +589,7 @@ def _chelaile(city_id, want):
     # 目录是方向级的：同一条线上下行是两个 lineId，全查再合并（见 issue #6）。
     # 香港一个「1」对应五家公司（九巴/城巴/屿巴/新界小巴/港岛小巴），名字里的括号
     # 就是公司，按名字分组查，别取前两条（前两条可能分属两家，混着报）。
-    groups, desc = [], ""
+    groups, desc, pos = [], "", {}
     for nm in dict.fromkeys(n for n, _ in hit):
         co = re.search(r"[（(](.+?)[)）]", nm)
         for line_id in [lid for n, lid in hit if n == nm]:
@@ -594,9 +598,11 @@ def _chelaile(city_id, want):
             desc = desc or d.get("desc") or ""
             to = d.get("to") or ""
             groups.append((f"{to}（{co.group(1)}）" if co and not op else to, d["buses"]))
+            pos.update(d.get("pos") or {})
     # 多家公司同名时抬头别写成「1（九巴） 有 7 辆」，那不是一家的车
     return {"source": "车来了", "line": re.sub(r"[（(].*?[)）]", "", name)
-            if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc}
+            if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc,
+            "pos": pos}
 
 
 # 掌上这座城不给车辆位置（hasReal=0：北京、成都）时，下次把车来了排前面，省一次空等
@@ -607,15 +613,51 @@ def _veh(bus, veh):
     return veh in str((bus or ("",))[0])
 
 
+def _union(a, b):
+    """两家报在路上的车不完全一样（6路实测 掌上 12、车来了 13，各自都有对方没报的车），
+    只报一家就必然差一两辆——这就是「有时候漏车或者多车」的来源。
+    按 GPS 一对一配掉重复的，再把另一家独有那几辆补进来。"""
+    pa, pb = a.get("pos") or {}, b.get("pos") or {}
+    lab_of = {str(z[0]): lab for lab, bs in a["groups"] for z in bs}
+    pairs = sorted((m, x, y) for x, p in pa.items() for y, q in pb.items()
+                   if (m := _dist_m(p, q)) is not None)
+    mate, taken = {}, set()
+    for m, x, y in pairs:
+        # 同一辆车两家刷新节奏差几十秒，位置就差几百米（实测 53~902m）
+        if m > 1000:
+            break
+        if x in mate or y in taken:
+            continue
+        mate[x] = y
+        taken.add(y)
+    extra = [(lab, z) for lab, bs in b["groups"] for z in bs
+             if str(z[0]) in pb and str(z[0]) not in taken]
+    if not extra:
+        return a
+    groups = [(lab, list(bs)) for lab, bs in a["groups"]]
+    for lab, z in extra:
+        q = pb[str(z[0])]
+        # 归到离它最近的已报车那一组：同一条线的反方向隔几公里，距离分得开
+        seat = min(((_dist_m(q, pa[x]), lab_of.get(x, lab)) for x in pa if x in lab_of),
+                   default=(None, lab))[1]
+        for i, (gl, bs) in enumerate(groups):
+            if gl == seat:
+                groups[i] = (gl, bs + [z])
+                break
+        else:
+            groups.append((seat, [z]))
+    return dict(a, groups=groups, source=f'{a["source"]}+{b["source"]}')
+
+
 def query(city_key, wants, src=None, veh=""):
-    """两家依次试。有车就立刻用，两家都空车才算没车——否则会漏掉另一家有车的城。
+    """两家依次试，都有车就按 GPS 合起来报（一家可能少报一两辆）。
 
     wants 是候选线路名，先试带前缀的「陆川1」，再试裸号「1」。
     src 是用户点名要的数据源（「从车来了看一下」），排它前面而已，不是只用它——
     点名的那家没有这条线时仍要能答上来。
     """
     ent = cities().get(city_key) or {}
-    tried, blank, near, fallback, others = [], None, None, None, {}
+    tried, blank, near, fallback, others, best, second = [], None, None, None, {}, None, None
     order = ("chelaile", "mygolbs") if PREFER_CL.get(city_key) else ("mygolbs", "chelaile")
     if src:
         order = (src,) + tuple(s for s in order if s != src)
@@ -624,6 +666,10 @@ def query(city_key, wants, src=None, veh=""):
             fetch = {"mygolbs": _mygolbs, "chelaile": _chelaile}[source]
             target = ent.get(source)
             if not target:
+                continue
+            # 掌上这座城整城不给车辆位置（hasReal=0，北京/成都），上一问已经知道了，
+            # 现在两家都要问，跳过它省一整轮
+            if source == "mygolbs" and PREFER_CL.get(city_key):
                 continue
             # 县级市借父城的车来了 id：「吴川9路」不能拿湛江市区的 9 路顶
             if source == "chelaile" and ent.get("_borrow") and not re.search(r"[\u4e00-\u9fa5]", want):
@@ -642,7 +688,12 @@ def query(city_key, wants, src=None, veh=""):
                 continue
             if got and any(group for _, group in got["groups"]):
                 if not veh:
-                    return got
+                    # 另一家可能报得更多：先记下，问完再合，别拿一家的清单当全部
+                    if best is None:
+                        best = got
+                    elif second is None and got.get("source") != best.get("source"):
+                        second = got
+                    continue
                 # 点名一辆车：掌上的车牌是「桂K12590D」，车来了是「513」，得两家都翻一遍
                 hit = [(lab, [b for b in grp if _veh(b, veh)]) for lab, grp in got["groups"]]
                 if any(g for _, g in hit):
@@ -656,11 +707,16 @@ def query(city_key, wants, src=None, veh=""):
                 if got.get("unknown") and ent.get("chelaile"):
                     PREFER_CL[city_key] = True
                 blank = blank or got
-        if blank:
+        if best:
+            if second:
+                break
+        elif blank:
             return blank           # 有这条线，只是当下两端都没车
     if not ent:
         # 城市表里没这个键：要么名字写错，要么两家都不覆盖，别把话说成「两家都没有」
         return {"error": "这个城市名没认出来，写全称或把城市补在路线前面试试"}
+    if best:
+        return _union(best, second) if second else best
     if fallback:
         # 这条线有车，只是没有问的那辆：两家查到的一起报，别让群友以为只查了一家
         return dict(fallback, veh_others=others)
