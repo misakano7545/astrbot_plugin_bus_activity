@@ -853,6 +853,9 @@ assert query.find_stop("玉林市", "玉林火车站")[0]["stationName"].startsw
 assert "玉林汽车总站" in list(query._cands("玉林市", "G02路还差多久到玉林汽车站"))# 「玉林北站要等几分钟才能等到 g02」：问法里的「要等」「往」粘在站名上，站名就认不出
 assert "玉林北站" in list(query._cands("玉林市", "玉林北站要等几分钟才能等到 g02"))
 assert "玉林北站" in list(query._cands("玉林市", "往玉林北站还要等多少分钟才能等到 g02"))
+# 「G02在玉林汽车总站要等多久才能等到」：号在前、站夹中间，尾字「到」把最后一片切成空
+assert "玉林汽车总站" in list(query._cands("玉林市", "G02在玉林汽车总站要等多久才能等到"))
+assert "汽车总站" in list(query._cands("玉林市", "G02在汽车总站要等多久"))
 
 # 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities
