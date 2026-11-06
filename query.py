@@ -344,6 +344,12 @@ def detect_city(msg, prefix, default_city):
         key = norm_city(DISTRICTS[max(dd, key=len)])
         if key in idx:
             return key, True
+    # 群里写的是裸县名：「新郑站有什么线路」里没有「新郑市」，districts.json 的键带「市」
+    bb = [k for k, v in DIST_BARE.items() if v and k in msg]
+    if bb:
+        key = norm_city(DIST_BARE[max(bb, key=len)])
+        if key in idx:
+            return key, True
     # 「东胜区8路」：区县名不是城市，掌上也不认它当城市名，得先翻到属地级市
     if prefix and DISTRICTS.get(prefix):
         key = norm_city(DISTRICTS[prefix])
@@ -1012,6 +1018,9 @@ def find_stop(city_name, raw):
             tail = raw[:n].replace(norm_city(city_name), "", 1)
             if norm_city(raw[:n]) == norm_city(city_name) or (
                     tail != raw[:n] and not re.search(r"[\u4e00-\u9fa5]", tail)):
+                continue
+            # 「新郑市火车站」退到「新郑市」会匹上「新郑市二中」：县名本身不是站名
+            if raw[n:] and norm_city(raw[:n]) in DIST_BARE:
                 continue
             rows = [r for r in stops(city_name, raw[:n]) or [] if r.get("stationName")]
             # 2 字兜底只认同名的：「石家」会搜出石家庄东站/石家庄站（地铁站），跟问的站没关系。
@@ -2004,8 +2013,11 @@ def _stop_chelaile(city_name, msg):
         # 两家站名不完全一样（「广西医科大玉林校区」↔「医科大学玉林校区」），得模糊匹；
         # 但 4 字以内的短站名只认包含关系：「麻章车站」和「麻章汽车站」差一个字也算 0.89，
         # 那是隔壁站牌，太平-麻章A线就这么混进了麻章车站的线路表
+        # 用户点的是火车站就只认火车站：问「新郑火车站」扫出「新郑汽车站」等于答错站
+        kind = re.search(r"(客运站|汽车站|火车站|公交站|客运中心)", msg)
         hit = next((s for s in sn
-                    if any(w in norm_city(s)
+                    if (not kind or kind.group(1) in norm_city(s))
+                    and any(w in norm_city(s)
                            or (len(w) >= 5 and difflib.SequenceMatcher(None, w, norm_city(s)).ratio() >= 0.8)
                            for w in wants)), None)
         return (n, hit, sn[0], sn[-1]) if hit and sn else None
@@ -2890,16 +2902,17 @@ def answer(msg, default_city, ctx="", key=""):
         # 「新乡胖东来三胖有哪些公交」：站表里没这个站就直说。回空的话模型会自己改口去问
         # 「新乡有哪些公交线路」，把全城 93 条倒进群里
         if STOPASK_RE.search(msg) and not _NOTPLACE.search(msg):
-            place = TAIL.sub("", JUNK_HEAD.sub("", STOPASK_RE.sub("", msg))).strip()
+            raw_place = TAIL.sub("", JUNK_HEAD.sub("", STOPASK_RE.sub("", msg))).strip()
             # 原名先试：「玉林火车站有几路车」剥掉城市名剩「火车站」，站表里反而认不出
-            for place in dict.fromkeys([place, place.replace(norm_city(name), "", 1).strip()]):
+            for place in dict.fromkeys([raw_place, raw_place.replace(norm_city(name), "", 1).strip()]):
                 if len(place) < 2:
                     continue
                 got = render_stop(city_key, name, place)
                 if got:
                     last["stop"] = pick_stop(name, place) or last.get("stop")
                     return got
-            return f"{norm_city(name)}站表里没查到「{place}」这个站"
+            bare = raw_place.replace(norm_city(name), "", 1).strip()
+            return f"{norm_city(name)}站表里没查到「{bare if len(bare) >= 3 else raw_place}」这个站"
         # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）。
         # 「有一条线路查不到实时信息我就不写出来了（）」是吐槽，反问就抢话了
         # 还得真的是公交问句：「这是抓的档案站吗」只有一个「站」字，
