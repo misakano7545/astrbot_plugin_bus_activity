@@ -828,6 +828,23 @@ query.stops = _stops
 assert "玉林九中" in list(query._cands("玉林市", "玉林九中的3路等多久"))
 assert "玉林火车站" in list(query._cands("玉林市", "玉林火车站的9路等多久"))
 # 站在站台问等多久、站名又没认出来：反问哪一站，别退化成整车清单
+# 全国线名形态（579 城 74696 条目录扫出来的少数派）：照抄站牌上的线名必须认得出
+assert query.parse("DK401路") == ("DK401", "")          # 双字母前缀
+assert query.parse("601B2路") == ("601B2", "")          # 号中间夹字母
+assert query.parse("27-1路") == ("27-1", "")            # 数字-数字
+assert query.parse("1005-1号线") == ("1005-1", "")      # 数字-数字 + 号线
+assert query.parse("BRT1号线") == ("BRT1号", "")        # 乌鲁木齐/厦门 BRT
+assert query.parse("地铁快线R101路") == ("R101", "地铁快线")   # 东莞：不是「地铁快线」这条线
+assert query.parse("hy4") is None and query.parse("9KB") is None and query.parse("MP3") is None
+assert query._pick([("2路A", {})], "2") == [("2路A", {})]                 # 路+字母
+assert query._pick([("东山2路", {}), ("东山12路", {})], "3") == []
+assert query._pick([("东山2路", {}), ("东山12路", {})], "2") == [("东山2路", {})]  # 县名写在线名里
+assert query._pick([("云海专线B（T105B/定制巴士1893号）", {})], "T105B")   # 括号里的别名号
+_cat0 = query._catalog
+query._catalog = lambda c: {"buslines": [{"lineName": "张堰一路"}, {"lineName": "②号线"}]}
+assert query._exact_line("上海市", "张堰一路", "张堰1") == "张堰一路"      # 中文数字 vs 阿拉伯
+assert query._exact_line("上海市", "②号线", "2号") in (None, "②号线")     # 「②」不许崩
+query._catalog = _cat0
 assert query.TIMEQ_RE.search("3路等多久") and not query.INTERVAL_RE.search("3路等多久")
 assert not query.TIMEQ_RE.search("9路多久一班") or query.INTERVAL_RE.search("9路多久一班")
 assert "这座城暂时没有公交数据" not in str(query.answer("玉高附中等多久才能等到7路", "玉林市"))

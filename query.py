@@ -49,8 +49,12 @@ _up_fail = mygolbs.last_fail
 # 必须至少含一个字母，否则「11路」「2026年」会被当线号
 # 字母前后各最多一个：「9KB」「500MB」「3.2GB」这种量纲不是线号
 # shortcut: 目录抽了 7 城 7 千多条线名，没有「数字+两个字母」的线号，出现再放宽
-ALPHA_PAT = (r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]{2,6}(?![A-Za-z0-9]))(?=[A-Za-z0-9]*[A-Za-z])"
-             r"[A-Za-z]{0,1}\d{1,4}[A-Za-z]{0,1}(?![A-Za-z0-9])")
+ALPHA_PAT = (r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]{2,8}(?![A-Za-z0-9]))(?=[A-Za-z0-9]*[A-Za-z])"
+             # 深圳 DK401 / 聊城 KS7 / 苍南 CX01 / 日照 601B2：两个字母前缀、号中间夹字母都真的存在
+             # 后缀两个字母必须跟着数字（601B2），否则「9KB」「MP3」这种就被认成线号
+             # 双字母前缀只认全大写——目录里 43 个双字母前缀只有「Cj」例外，
+             # 放开大小写会把「hy4」这类闲聊吃进来
+             r"(?:[A-Z]{2}|[A-Za-z]{0,1})\d{1,4}(?:[A-Za-z]\d{0,3}|[A-Za-z]{2}\d{1,3})?(?![A-Za-z0-9])")
 # 香港一个「1」对应五家公司（城巴/九巴/屿巴/新界小巴/港岛小巴）：点名单算一家，
 # 长名字排前面，「小巴」放最后当统称（港岛小巴/新界小巴都含这两个字）
 OPS = ("新界小巴", "港岛小巴", "九龙小巴", "城巴", "九巴", "屿巴", "龙运", "新巴", "港铁", "小巴")
@@ -58,7 +62,10 @@ OPS = ("新界小巴", "港岛小巴", "九龙小巴", "城巴", "九巴", "屿�
 # 「路」后面紧跟的定性词（夜班/专线）得一起吃掉，否则「6路夜班」会被截成「6」
 LINE_RE = re.compile(
     # 真地铁也在这套目录里：「地铁10号线」「轨道交通1号线」「地铁广佛线」
-    r"(?P<metro>(?:地铁|轨道交通)\s*\d+\s*号线|地铁\s*[\u4e00-\u9fa5]{1,3}线)"
+    # 「地铁快线R101路」是东莞的一条线，不是「地铁快线」：定性字后面不算线名
+    r"(?P<metro>(?:地铁|轨道交通)\s*\d+\s*号线|地铁\s*(?![快慢支专干微高])[\u4e00-\u9fa5]{1,3}线)"
+    # 乌鲁木齐/厦门的 BRT：「BRT1号线」不算地铁，也不是裸数字
+    r"|(?P<brt>BRT\s*\d{1,3}\s*(?:号线|线|路))"
     # 「环山二号线」「高新二号线」：号码夹在中间，不带「地铁」也是目录里的真线名。
     # shortcut: 只吃 4 个汉字前缀，「玉林二号线」这种城市名+号线的写法会被整段吃掉
     # 前面带「地铁/轨道交通」的归上面那条（最左匹配会先把城市名一起吃进来，得挡掉）
@@ -67,7 +74,7 @@ LINE_RE = re.compile(
     r"|(?P<alpha>" + ALPHA_PAT + r")(?:\s*路)?"
     # 带前导零的四位线号（重庆「0492」）口语里不加「路」字；裸的 492 不加路字就太宽（可能是数量）
     r"|(?<![0-9])(?P<zero>0\d{2,3})(?![0-9])"
-    r"|(?<![0-9])(?P<num>\d{1,4})\s*(?:夜宵|夜班|通宵)?\s*[路线](?P<qual>夜线|夜班线|夜宵线|夜班|区间|支线|快线|专线)?"
+    r"|(?<![0-9])(?P<num>(?:\d{1,4}-)?\d{1,4})\s*(?:夜宵|夜班|通宵)?\s*(?:[路线]|号线)(?P<qual>夜线|夜班线|夜宵线|夜班|区间|支线|快线|专线)?"
     # 「济宁76夜线」不带「路」字：目录里叫「76路夜线」，少写一个字也得认成这条夜线，不能削成 76路
     r"|(?<![0-9])(?P<nnum>\d{1,4})\s*(?P<nqual>夜线|夜班线|夜宵线)"
     # 「131区间」不带「路」也算线路——石家庄目录里就叫「131路区间」
@@ -180,7 +187,7 @@ def parse(msg):
     m = LINE_RE.search(msg)
     # 「3D 打印」「5G 网络」「4K 视频」：一位数字＋量纲字母不是线号。
     # shortcut: 只看一位数，香港 10M/11D/11K 这种两位数线号照样认；哪天真有一位数线号再放宽
-    if m and m.group("alpha") and re.fullmatch(r"[1-9][GDMK]", m.group("alpha")):
+    if m and m.group("alpha") and re.fullmatch(r"[1-9][GDMK]|MP\d", m.group("alpha")):
         return None
     if not m:
         # 「香港城巴1」香港人不带「路」字：算子名＋号也算一条线，前缀里留住算子名
@@ -217,8 +224,8 @@ def parse(msg):
     pre = "" if m.group("numline") else PREFIX_RE.search(head)
     num = (m.group("nnum") + m.group("nqual")) if m.group("nnum") else \
         (m.group("inum") + m.group("iqual")) if m.group("inum") else \
-        (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
-         or m.group("fnum") or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
+        (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("brt")
+         or m.group("numline") or m.group("fnum") or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
     pre = JUNK_TAIL.sub("", JUNK_HEAD.sub("", pre.group(1) if pre else ""))
     # 「柳州快1路」：快/慢 粘在线号前，被当成了前缀的尾巴——挪回线名里
     if pre[-1:] in ("快", "慢") and (not pre[:-1] or pre[:-1] in cities()):
@@ -260,8 +267,8 @@ def _lines(msg):
         end = m.end()
         num = (m.group("nnum") + m.group("nqual")) if m.group("nnum") else \
             (m.group("inum") + m.group("iqual")) if m.group("inum") else \
-            (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("numline")
-             or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
+            (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("brt")
+             or m.group("numline") or str(_cn_num(m.group("cnnum")))) + (m.group("qual") or "")
         # 只认紧贴着的汉字前缀：多行里上一行的「樟」不算 12 路的前缀
         cut = msg[: m.start()]
         # 「地铁3/11号线」：前面的「3/」不是前缀，剥掉才能取到「地铁」
@@ -395,7 +402,20 @@ def _pick(catalog, want):
                  if want in re.findall(r"[（(]\s*(\d{1,4})\s*[路线]", c[0])]
         if alias:
             return alias
+    # 括号里的别名号不一定是纯数字：深圳「云海专线B（T105B/定制巴士1893号）」
+    alias = [c for c in catalog
+             if any(re.search(rf"(?<![0-9A-Z]){re.escape(want)}(?![0-9A-Z])", x)
+                    for x in re.findall(r"[（(]([^）)]*)[)）]", c[0]))]
+    if alias:
+        return alias
     near = [c for c in catalog if norm_line(c[0]).startswith(want)]
+    if not near:
+        # 「永嘉51路」「忻州201路」：城名/县名写在线名里，用户只写裸号，靠尾巴对上。
+        # 取名字最短的那批，「永嘉51」不能被「永嘉151」顶掉
+        near = [c for c in catalog if norm_line(c[0]).endswith(want)]
+        if near:
+            short = min(len(norm_line(c[0])) for c in near)
+            near = [c for c in near if len(norm_line(c[0])) == short]
     if not near:
         return []
     if len(near) < 3:
@@ -1194,7 +1214,10 @@ def _msg_line(city_name, msg, city_key=""):
     """句子里点名的真线名不是「数字+路」（「玉林北站定制夜班车」）：按目录认。"""
     def _look(names):
         for n in names:
-            if len(n) >= 4 and n in msg:
+            # 短真线名（夜1 / 微2 / 青金线 / 619）照抄也会被问，别只认四字以上。
+            # 数字两侧要卡边界，否则「13路」里的「3路」会把整句顶掉
+            if (len(n) >= 3 or re.search(r"\d", n)) and re.search(
+                    rf"(?<![0-9]){re.escape(n)}(?![0-9])", msg):
                 return n
         # 简称：「大容山专线」少说了「旅游」。字基本都在、比例够、且全城只有一条对得上才认，
         # 认不出来宁可去查站名，也不能硬塞一条别的线
@@ -1241,23 +1264,29 @@ def _dest_after(city_name, msg, stop):
 
 def _exact_line(city_name, msg, want, city_key=""):
     """目录里有更长的真线名整段出现在句子里（「新乐专1路」）就用它，别只拿裸号去匹。"""
-    flat, w = norm_line(msg), norm_line(want)
+    flat, w = _digitize(norm_line(msg)), norm_line(want)
     w2 = _digitize(w)          # 「地铁一号」在目录里叫「地铁1号线」
 
     def scan(names):
         hit = []
         for nm in names:
-            n = norm_line(nm)
+            # 目录里「张堰一路」是中文数字，用户写「张堰1路」：两边都折成阿拉伯再比
+            n = _digitize(norm_line(nm))
             # 句子里把城市名也粘进了线名（「西安环山二号线」）：目录名是它的后缀也算。
             # 只认 head 就是这座城的名字——「安宁12」的「安宁」是线名本身（安宁K12），
             # 当成城市名剥掉会把昆明市区的 12 路答成安宁的车
             tail = w2 if n.endswith(w2) else w
             head = tail[:len(tail) - len(n)] if tail.endswith(n) and len(tail) > len(n) else ""
-            if not (n.endswith(tail) or (head and norm_city(head) == norm_city(city_name))):
+            # 「58路大站快车」「301路A」「613路支」：号在前、尾巴是定性词。整段出现在句子里才算，
+            # 光看前缀会把「9路」当成「9路大站快车」
+            front = n.startswith(w2) and len(n) > len(w2)
+            if not (n.endswith(tail) or front or (head and norm_city(head) == norm_city(city_name))):
                 continue
             # 「新乐专一路」的「一」也是数字，得和 1 等价地认
             cns = "零一二三四五六七八九"
-            pat = "".join(f"[{d}{cns[int(d)]}]" if d.isdigit() else re.escape(d) for d in n)
+            # 「②」isdecimal 也算数字，可 int() 认不了——目录里真有这种线名，会整句崩掉
+            pat = "".join(f"[{d}{cns[int(d)]}]" if d.isascii() and d.isdigit() else re.escape(d)
+                          for d in n)
             if n in flat or re.search(pat, flat):
                 hit.append(nm)
         return hit
@@ -1651,7 +1680,7 @@ def render_at(city_key, city_name, want, msg):
     # 「G02 到高新产业园，去玉林北站」问的是在产业园上车、往玉林北站那个方向，别把终点当上车站
     dest = _dest_after(city_name, msg, station_name)
     rows = _catalog(city_name).get("buslines") or []
-    hit = _pick([(r["lineName"], r) for r in rows], want)
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
     got, dead, have = {}, [], []      # 方向名 -> (分钟, 车牌, 站数)；没预测的进 dead
     near = False                      # 这条线到底过不过我这个站
     for line_name, row in hit:
@@ -1740,7 +1769,7 @@ STOPS_RE = re.compile(r"所有?站点|全部站点|站(点)?列(表|出来)|经�
 def render_stops(city_name, want):
     """「B19 路所有站点」要的是站表，不是实时车。两个方向站一样，只念主方向。"""
     rows = _catalog(city_name).get("buslines") or []
-    hit = _pick([(r["lineName"], r) for r in rows], want)
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
     out = []
     for line_name, row in hit:
         names = [s.get("stationName") or "" for s in _station_seq(city_name, line_name, row["upperOrDown"])]
@@ -1959,7 +1988,7 @@ def render_transfer(city_name, want, msg=""):
         if w:
             return render_ways(*w)
     rows = _catalog(city_name).get("buslines") or []
-    hit = _pick([(r["lineName"], r) for r in rows], want)
+    hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
     out, done = [], set()
     for line_name, row in hit:
         if line_name in done:                    # 目录里同一路有上下行两条，别念两遍
@@ -2586,7 +2615,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     if prefix and norm_city(_district_city(prefix) or "") == city_key:
         wants = [prefix + num]
     # 有前缀要纠前缀截短；「环山二号线」这种自带汉字的线名也要纠（前缀是空的）
-    if name and (prefix or not num[:1].isdigit()):
+    # 数字线号同样要纠：「58路大站快车」和「58路」同城并存，只拿裸号会答成普通线。
+    # _exact_line 要求整段真线名出现在句子里，裸号问法不受影响
+    if name:
         cat = _catalog(name)
         # 网络挂了才不敢兜底：目录取不到时裸号会答成另一条线（「新乐专1路」→ 1 路）；
         # 业务上的「这城没目录」照旧往下走
