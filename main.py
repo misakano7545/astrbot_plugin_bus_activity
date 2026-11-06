@@ -11,13 +11,15 @@ import re
 import sys
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
 try:  # 插件内相对导入；单文件调试时按顶层模块兜底
+    from . import watch
     from .query import BUS_RE, CITYNUM_RE, AT_RE, answer, detect_city, looks_like_ask
 except ImportError:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
+    import watch
     from query import BUS_RE, CITYNUM_RE, AT_RE, answer, detect_city, looks_like_ask
 
 # 模型嘴里那句「只接了玉林的数据源」是旧插件的谎话，发出去之前整句删掉
@@ -35,10 +37,33 @@ class BusActivity(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
         self.default_city = (config or {}).get("default_city") or "玉林市"
+        self._watch_task = None
+
+    def _ensure_watch(self):
+        """到站提醒的轮询：第一次收消息时起一个后台任务，之后一直转。"""
+        if self._watch_task and not self._watch_task.done():
+            return
+        try:
+            self._watch_task = asyncio.create_task(self._watch_loop())
+        except RuntimeError:            # 单文件调试时没有事件循环，不起就行
+            self._watch_task = None
+
+    async def _watch_loop(self):
+        while True:
+            try:
+                for row, text in await asyncio.to_thread(watch.due):
+                    ok = await self.context.send_message(
+                        row["umo"], MessageChain().message(text))
+                    logger.info(f"到站提醒 {row['line']}→{row['stop']}: "
+                                f"{text[:40]} 发出={ok}")
+            except Exception as e:      # 轮询挂了不许把插件带走，也不许往群里丢 traceback
+                logger.warning(f"到站提醒轮询失败: {e}")
+            await asyncio.sleep(watch.TICK)
 
     @filter.regex(re.compile(BUS_RE.pattern + "|" + CITYNUM_RE.pattern))
     async def bus_fast(self, event: AstrMessageEvent):
         """问公交就直接查直接答，不经过模型判断——模型会漏答、会编「只接了玉林」。"""
+        self._ensure_watch()
         if not BUS_RE.search(event.message_str):
             # 只有「城市名 + 裸号」这一支（「西安616」）：城市得真在表里，不然「今天616」也进来
             if not detect_city(AT_RE.sub(" ", event.message_str), "", "")[1]:
@@ -105,6 +130,7 @@ class BusActivity(Star):
             question(string): 用户关于公交的原话，原样传入，不要改写；
                 他点名「从车来了查」「用掌上公交查」时这两个词必须留着
         """
+        self._ensure_watch()
         try:
             text = await asyncio.to_thread(answer, question, self.default_city, "",
                                            event.unified_msg_origin)

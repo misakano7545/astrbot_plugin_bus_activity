@@ -8,6 +8,7 @@ import sys
 import types
 
 import mygolbs
+import watch
 import query
 import yulin
 
@@ -1254,6 +1255,17 @@ assert query._variants("佛山", "600") == []
 query.cities, query._catalog, query.chelaile = _cc, _cat3, _cl3
 query.buspedia = _bp
 
+# 「2路到汽车总站叫我」：到站提醒（照 Trackr 的口径：站序差 / 节奏 / 同一辆车只喊一次）
+assert query.WATCH_RE.search("2路到汽车总站叫我")
+assert query.WATCH_RE.search("G02到玉林北站提醒我")
+assert query.WATCH_OFF_RE.search("取消提醒")
+assert query.WATCH_Q_RE.search("我的提醒")
+assert watch._left({"1": ["甲站", "乙站", "丙站"]}, "甲站", "丙站") == 2
+assert watch._left({"1": ["甲站", "乙站", "丙站"]}, "丙站", "甲站") == -2
+assert watch._left({"1": ["甲站", "乙站"]}, "甲站", "戊站") is None     # 这个方向不经过
+assert watch._interval(0) == 10 and watch._interval(3) == 20 and watch._interval(9) == 45
+assert watch._interval(1, 3) == 80                                    # 连续失败 ×2 退避
+
 # 「从1路东线」：号上粘着汉字的名字（在从化，属广州）。本城目录里没有就别回「没查到「1」」
 assert query._written_name("从1路东线", "1") == "从1路东线"
 assert query._written_name("1路东线", "1") == "1路东线"
@@ -1482,7 +1494,7 @@ _c4, _ml4, _o4 = query.cities, query._msg_line, query._one
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市"}, "湛江": {"mygolbs": "湛江市", "chelaile": "157"}}
 query._msg_line = lambda cn, msg, ck="": ("妇幼专线" if cn == "湛江市" else None)
 _seen = {}
-query._one = lambda ck, nm, num, pre, msg, src, ex, last: _seen.update({"ck": ck}) or "ok"
+query._one = lambda ck, nm, num, pre, msg, src, ex, last, key="": _seen.update({"ck": ck}) or "ok"
 query.LAST["t_fu"] = {"city": "湛江"}
 assert query.answer("妇幼专线", "玉林市", key="t_fu") == "ok"
 assert _seen["ck"] == "湛江", "纯文字线名该沿用上一条问过的城"

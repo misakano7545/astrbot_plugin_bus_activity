@@ -13,6 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yulin          # 玉林导乘资料：只在上游给不出的地方补（换乘站表、上车点、联营线无实时）
+try:
+    import watch       # 到站提醒：说了「2路到汽车总站叫我」就在后台盯着
+except ImportError:
+    from . import watch
 
 try:  # AstrBot 按包加载时走相对导入，单文件调试时退回顶层模块
     from . import buspedia, chelaile, mygolbs
@@ -115,7 +119,8 @@ BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
     r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|夜线|(?<![今昨天每这那晚])夜班车|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
     r"(?:城巴|九巴|屿巴|新巴|龙运|小巴)\s*\d{1,4}|" + PLATE_PAT + r"|配车|配属|" + ALPHA_PAT +
-    r"|[\u4e00-\u9fa5A-Za-z0-9]{2,10}(?:专线|快线|支线)|[\u4e00-\u9fa5]{2,6}[东南西北中]\d{1,4}(?![0-9])")
+    r"|[\u4e00-\u9fa5A-Za-z0-9]{2,10}(?:专线|快线|支线)|[\u4e00-\u9fa5]{2,6}[东南西北中]\d{1,4}(?![0-9])|"
+    r"提醒我|叫我|喊我|到站提醒|取消提醒|我的提醒|提醒列表")
 # 纯文字线名（「妇幼专线」「宝钢专线」）不含数字，也不是公交词——靠这两个专有线名尾巴认
 TEXT_LINE = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9]{2,10}(?:专线|快线|支线)")
 # 城市名后面跟裸号（「西安616」，不带「路」）。BUS_RE 认不出这种写法，快路不触发、整句
@@ -2063,6 +2068,12 @@ def render_price(city_name, want, msg=""):
 TRANSFER_RE = re.compile(r"换乘|能换|可以换|转哪|转到")
 # 「G02 首班几点发车」只问时刻，别拿实时车回（会答成末班已开走）
 TIMES_RE = re.compile(r"首班|首车|头班|第一班|末班|末车|最后一班|收班|发车时间")
+# 「2路到汽车总站叫我」：到站提醒（照 Trackr 的追踪，答应了就得真在后台盯着）
+WATCH_RE = re.compile(r"叫我|喊我|提醒我|提醒一下|提醒下|提醒一声|跟我说一声|跟我说下|通知我|"
+                      r"到站提醒|到了说|到了喊|到了叫")
+WATCH_OFF_RE = re.compile(r"取消(?:掉)?(?:提醒|盯|追踪|关注)|别(?:再)?(?:提醒|盯|叫)我|"
+                          r"不用(?:提醒|盯|叫)|撤(?:掉|了)?提醒|停了提醒|取消订阅")
+WATCH_Q_RE = re.compile(r"我的提醒|有哪些提醒|在盯(?:什么|哪些)|提醒列表")
 # 用户点名数据源：「从车来了的那个看一下数据」
 SRC_RE = re.compile(r"(?P<cl>车来了)|(?P<bp>巴士派迪|派迪)|(?P<my>掌上(?:公交)?)")
 # 「9路是哪家公司的」「丢东西了找谁」——只有 114 的 routeBean 带运营公司
@@ -2835,7 +2846,36 @@ def _last(key):
     return d
 
 
-def _one(city_key, name, num, prefix, msg, src, explicit, last):
+def render_watch(key, city_key, city_name, want, msg):
+    """「2路到汽车总站叫我」：把这条线盯起来，剩两站时在群里喊一声。"""
+    line = want if not want.isdigit() else want + "路"
+    # 「叫我」「2路到」都不是站名的一部分，先抹掉再找站，不然会搜出「汽车总站叫我」这种
+    s = WATCH_RE.sub(" ", msg)
+    s = re.sub(r"[A-Za-z]{0,2}\d{1,4}\s*[路线]?", " ", s)
+    stop = pick_stop(city_name, s) or pick_stop(city_name, msg)
+    if not stop:
+        return f"{line} 到哪一站？说个站名我盯着（「{line}到汽车总站叫我」）"
+    seqs = {}
+    # _station_seq 要的是目录里的真线名（「2路」），归一化后的「2」它认不出
+    rows = (_catalog(city_name).get("buslines") or [])
+    lname = next((r.get("lineName") for r in rows
+                  if norm_line(r.get("lineName") or "") == norm_line(want)), want)
+    for d in ("1", "2"):
+        try:
+            names = [s.get("stationName") or "" for s in _station_seq(city_name, lname, d)]
+        except Exception:
+            names = []
+        if names:
+            seqs[d] = names
+    if not seqs:
+        return (f"{line} 的站序只有掌上有，这条线那边没给，盯不了它到哪站；"
+                f"问「{line}还有几分钟」倒能给你实时的")
+    if not any(stop in ns for ns in seqs.values()):
+        return f"{line} 不到 {stop}，说个这条线经过的站"
+    return watch.add(key, city_key, city_name, want, stop, seqs)
+
+
+def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
     """一条线路的回答：时刻表 / 公司 / 站表 / 到站 / 实时，按问法选。"""
     # num 里已经带着这个前缀（「安宁市12路」→ 安宁12）时别再拼一次，否则成了「安宁安宁12」
     wants = ([prefix + num] if prefix and norm_city(prefix) != city_key
@@ -2866,6 +2906,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
         if full:
             wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
     last["line"] = wants[0]
+    # 「2路到汽车总站叫我」：答应了就得真在后台盯着，别只给一句实时就完
+    if key and name and WATCH_RE.search(msg):
+        return render_watch(key, city_key, name, wants[0], msg)
     if name:
         for w in wants:
             # 「用巴士派迪查D276」：点名了建档站，只给建档那份（起讫/公司/车型），不掺实时
@@ -2951,6 +2994,11 @@ def answer(msg, default_city, ctx="", key=""):
     src = ("chelaile" if sm.group("cl") else "buspedia" if sm.group("bp") else "mygolbs") if sm else None
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
+    # 提醒的撤单和查看不需要线路号，先接走（答应了盯车，就得让它停得掉）
+    if key and WATCH_OFF_RE.search(msg):
+        return watch.stop(key, msg)
+    if key and WATCH_Q_RE.search(msg):
+        return watch.listing(key)
     # 「LCK6116EVGA2 在玉林配属哪条线路」：型号代号当线号会匹到 2 路，先按型号问法接走
     mm = MODEL_RE.search(msg)
     # 型号代号后面还得挂字母（LCK6116EVGA2 / ZK6821NG5）：D276 这种纯「字母+数字」是线号不是型号
@@ -3185,12 +3233,12 @@ def answer(msg, default_city, ctx="", key=""):
         # 一句里问了两条线（「樟13 / 12路」）就都答，别只答第一条
         multi = _lines(msg)
         if len(multi) > 1:
-            outs = [t for t in (_one(city_key, name, n, pre, msg, src, explicit, last)
+            outs = [t for t in (_one(city_key, name, n, pre, msg, src, explicit, last, key)
                                 for n, pre in multi) if t]
             if outs:
                 return "\n\n".join(outs)
         # 前缀是线路名的一部分（容县11路），明写城市也不该丢——explicit 只管去哪个目录找
-        return _one(city_key, name, line[0], prefix, msg, src, explicit, last)
+        return _one(city_key, name, line[0], prefix, msg, src, explicit, last, key)
     if name:
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
         pl = re.search(r"车牌|号牌", msg)
