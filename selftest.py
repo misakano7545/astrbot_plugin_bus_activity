@@ -1268,6 +1268,11 @@ assert watch._interval(1, 3) == 80                                    # 连续�
 # 盯车时说的时间也得是北京时间（实例是 UTC，用 localtime 会差 8 小时）
 assert _tm.strftime("%H:%M", query._now(0)) == "08:00"
 
+# 「我在汽车总站等1路和G02」：第一人称+所在站，「我」曾被 CHAT 判成闲聊、整句交给模型
+assert query.looks_like_ask("我在汽车总站等1路和G02")
+assert query.looks_like_ask("我在玉林火车站等9路")
+assert not query.looks_like_ask("我在家躺着")
+
 # 「一起等」：同一个站几条线的车排成一张表，按到站先后，没车的/不经过的分开说
 _pk2, _ra2 = query.pick_stop, query.render_at
 

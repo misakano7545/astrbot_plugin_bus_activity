@@ -269,6 +269,9 @@ def looks_like_ask(msg):
     # 「G02到玉林北站叫我」「我的提醒」没有问法是祈使句，但确实是公交（答应了得真去盯）
     if WATCH_RE.search(msg) or WATCH_OFF_RE.search(msg) or WATCH_Q_RE.search(msg):
         return True
+    # 「我在汽车总站等1路和G02」：第一人称+所在站，是站在站台上问车；「我」被 CHAT 当成闲聊了
+    if re.search(r"我在.{0,12}(?:站|路口|广场|公园|医院|学校|门口|桥)", msg):
+        return True
     return bool(ASK.search(msg)) or not CHAT.search(msg)
 
 
