@@ -2442,6 +2442,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last):
     vm = VEH_RE.search(msg)
     veh = next((g for g in vm.groups() if g), "") if vm else ""
     txt = render(city_key, wants[0], query(city_key, wants, src, veh), veh, _dir(msg))
+    # 「G01多久一班」没有站名，走不到上面那条；上游两家都没有间隔字段，给实时并说清缺什么
+    if re.search(r"多久一[班趟台]|几[分]钟一[班趟台]|间隔|多久一趟", msg) and "发车间隔" not in txt:
+        txt += "\n（发车间隔两家都不给，只能看实时的这几辆）"
     # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
     if not explicit and txt.startswith("没查到"):
         txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
