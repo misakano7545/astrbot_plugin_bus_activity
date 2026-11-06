@@ -292,6 +292,8 @@ query._catalog = lambda c: {"buslines": [
 _g9 = query._mygolbs("湛江市", "9")
 assert "末班已经开走：往市委党校 06:30–19:30；往东堤车站 07:30–20:30" in _g9["note"], _g9
 assert "末班最晚" not in _g9["note"], _g9
+# 过了末班就别再说「上游不给这城实时」——昆明掌上整城不给车机，车来了照样有，那句话像在说这城没数据
+assert not _g9["unknown"] and "上游不给" not in _g9["note"], _g9
 query._window = _w0
 query._live_my, query._first_last, query._station_seq, query._catalog = _lm, _fl, _seq, _cat
 

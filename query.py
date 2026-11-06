@@ -599,22 +599,23 @@ def _mygolbs(city_name, want):
             # hasReal=0 = 上游这座城根本不给车辆位置（北京、上海、成都等），
             # 不能当成「没车」报，那是假消息（实测玉林 0 车时 hasReal 仍是 1）
             # 但只回「不提供」等于什么都没答，把这条线能查到的（首末班、站数）补上
-            unknown = True
             ln = hit[0][1]["lineName"]
-            # 联营线（玉林-樟木）本来就不给车辆定位，说成「上游不给」会被当成平台抽风
-            note = yulin.no_real(ln) or f"上游不给{norm_city(city_name)}的实时车辆位置"
-            lname, ldir = hit[0][1]["lineName"], hit[0][1]["upperOrDown"]
-            n = len(_station_seq(city_name, lname, ldir))
             # 「末班最晚 20:30」是上下行混在一起的一个数：过了末班还说「起、末班最晚」，
             # 等于没说清这两个方向都收车了。有这个就按方向报，并说明现在是不是出窗口了
             wl = _window_note(wins)
+            # 过了末班/没到首班：为什么没车已经答清了，别再补一句「上游不给这座城实时」
+            # ——昆明掌上整城不给车机，车来了照样有车，那句话读起来像这城根本没数据
+            unknown = not wl
+            note = yulin.no_real(ln) or ("" if wl else f"上游不给{norm_city(city_name)}的实时车辆位置")
+            lname, ldir = hit[0][1]["lineName"], hit[0][1]["upperOrDown"]
+            n = len(_station_seq(city_name, lname, ldir))
             bits = [f"{first} 起、末班最晚 {last}"] if first and last and not wl else []
             if n:
                 bits.append(f"{n} 站")
             if bits:
-                note += "，这条线 " + "、".join(bits)
+                note += ("，这条线 " if note else "这条线 ") + "、".join(bits)
             if wl:
-                note += "，" + wl
+                note += ("，" if note else "") + wl
         elif (_wn := _window_note(wins)):
             note = _wn
         elif live_known:
