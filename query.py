@@ -1697,7 +1697,7 @@ def render_at(city_key, city_name, want, msg, veh=""):
             mine = set()
         if nos and not mine:
             return f"{hit[0][1]['lineName']} 这会儿没有 {veh} 这辆，在跑的自编号：{'、'.join(nos)}"
-    got, dead, have = {}, [], []      # 方向名 -> (分钟, 车牌, 站数)；没预测的进 dead
+    got, dead, have, vmiss = {}, [], [], []      # 方向名 -> (分钟, 车牌, 站数)；没预测的进 dead
     near = False                      # 这条线到底过不过我这个站
     for line_name, row in hit:
         d = row["upperOrDown"]
@@ -1726,16 +1726,19 @@ def render_at(city_key, city_name, want, msg, veh=""):
                 eta = (float(b.get("busToStationTime") or 0),
                        int(b.get("busToStationCount") or 0), f"{veh} {b['busNumber']}")
             else:
-                # 掌上只给最近两辆报这站的预测，再往后的车按它现在停的那站往后累
+                # 掌上只给最近两辆报这站的预测，再往后的车按它现在停的那站往后累。
+                # 站名两家写法不一样（「德兴花园」↔「德兴花园（南）」），别只认全等
                 car = next((c for c in pay.get("list") or []
                             if _plate_key(c.get("busNumber")) in mine), None)
+                at = (car or {}).get("stationName") or ""
                 here = next((i for i, n in enumerate(names)
-                             if n == (car or {}).get("stationName")), None)
+                             if n and (n == at or n in at or (len(n) >= 2 and at and n in at))), None)
                 if car and here is not None and here < idx - 1:
                     eta = (_run(pay, here, idx - 1), idx - 1 - here,
-                           f"{veh} {car['busNumber']}（现在{car['stationName']}）")
+                           f"{veh} {car['busNumber']}（现在{at}）")
                 else:
                     eta = None
+                    vmiss.append((lab, car, here, idx))
         if not eta:
             # 上游对没车的方向一律给 busToStationTips（「非运营时间」也算），
             # 光抄它不行：运营窗口里它照样这么写。得对首末班才知道是真收班还是这一站没预测
@@ -1747,6 +1750,15 @@ def render_at(city_key, city_name, want, msg, veh=""):
             continue
         mins, left, plate = eta
         got[lab] = (max(1, round(mins)), plate, "马上到" if left <= 0 else f"还有 {left} 站")
+    if vmiss and len(vmiss) == len(have):
+        # 问的是某一辆：它在路上但掌上没给这站预测（刚过站 / 车机没上线）。
+        # 说清它在哪，别退成「这站没车报过来」——那是站着等车的人读的
+        lab, car, here, idx = vmiss[0]
+        if car and here is not None and here >= idx - 1:
+            return f"{veh}（{car['busNumber']}）现在{car.get('stationName')}，已经过了{station_name}"
+        return (f"{veh}（{car['busNumber'] if car else '车牌没报'}）"
+                f"现在{car.get('stationName') if car else '没报位置'}；"
+                f"到{station_name}的到站预测这站这会儿没报出来（刚发车或车机没上线）")
     if not got:
         if not hit:
             return None                  # 目录里根本没这条线，交给上层说「没查到」
