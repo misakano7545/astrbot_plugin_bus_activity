@@ -816,7 +816,10 @@ _st5, query.stops = query.stops, lambda cn, kw: [
     {"stationName": "玉林火车站（出站口）", "relatedRoutes": ["1路"]},
 ] if kw in ("车站", "火车站") else []
 assert query.find_stop("玉林市", "玉林汽车站")[0] is None
-assert query.find_stop("玉林市", "玉林火车站")[0]["stationName"].startswith("玉林火车站")# 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
+assert query.find_stop("玉林市", "玉林火车站")[0]["stationName"].startswith("玉林火车站")
+# 「G02路还差多久到玉林汽车站」：站牌上叫「汽车总站」，掌上搜「汽车站」一个字都搜不到
+assert "玉林汽车总站" in list(query._cands("玉林市", "G02路还差多久到玉林汽车站"))
+# 「新郑站有什么线路」：裸县名（不带「市」）也得翻到父城，不然落回默认城答「玉林站表里没查到」
 _cv = query.cities
 query.cities = lambda: {**_cv(), "郑州": {"mygolbs": "郑州市", "chelaile": "010"}}
 assert query.detect_city("新郑站有什么线路", "", "玉林市") == ("郑州", True)
