@@ -954,7 +954,10 @@ def render(city_key, want, res, veh="", dir=""):
         # 「地铁快巴4」是微循环公交，不是地铁：只有真地铁（地铁1号/轨道交通2号）且上游
         # 整城不给车机（unknown=hasReal=0）才这么说，否则会把收班说成「不上报车机」
         if res.get("unknown") and re.match(r"^(?:地铁|轨道交通)\d+号", norm_line(line)):
-            return f"{line} 没有实时车辆位置，地铁不上报车机，站表和首末班能查"
+            # note 里已经有首末班和站数，别丢掉只回一句「能查」；头一句跟这里重复，先剥掉
+            n = re.sub(r"^[^，]*实时[^，]*，?", "", res.get("note") or "")
+            return (f"{line} 没有实时车辆位置，地铁不上报车机"
+                    + (f"；{n}" if n else "，站表和首末班能查"))
         tail = res.get("note") or res.get("desc") or ""
         head = f"{line} 查不到实时车" if res.get("unknown") else f"{line} 这会儿没车"
         return head + ("，" + tail if tail else "")
