@@ -1065,6 +1065,31 @@ assert query._msg_line("玉林市", "玉林北站有哪几条公交线？") is N
 assert query._msg_line("玉林市", "现在有玉林北站夜班车吗？") == "玉林北站定制夜班车"
 query._catalog, query._live_my = _cat4, _lm4
 
+# BRT 的叫法：「北京BRT4」不能落成通州的「T4」（那是另一条线），目录里叫「快速公交4线」。
+# 前缀粘着字母的线名（T4）也不该在「BRT4」里被认出来
+assert query.parse("北京BRT4") == ("BRT4", "北京")
+assert query.parse("北京BRT4号线") == ("BRT4号", "北京")
+assert query.brt_alias("BRT4") == ["快速公交4", "快4", "BRT4号"]
+assert query.brt_alias("快速公交4") == ["快4", "BRT4号", "BRT4"]
+assert query.brt_alias("9路") == [] and query.brt_alias("G02") == []
+_cat5, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": n, "upperOrDown": "1", "from": "A", "to": "B"}
+    for n in ("T4路", "快速公交4线", "1路")]}
+assert query._msg_line("北京市", "北京BRT4") is None      # 不能挑中 T4路
+assert query._msg_line("北京市", "北京快速公交4线") == "快速公交4线"
+assert query._msg_line("北京市", "北京T4路") == "T4路"    # 真点名 T4 还是认
+query._catalog = _cat5
+# 车来了 state=-5 = 这城不给实时车辆（北京全城），别报成「这会儿没车」
+_cl5, query._chelaile = query._chelaile, lambda cid, want: {
+    "source": "车来了", "line": "快速公交4线", "unknown": True,
+    "desc": "首班 05:00 末班 22:30",
+    "note": "上游不给北京的实时车辆位置，只有时刻表：首班 05:00 末班 22:30、19 站",
+    "groups": [("阜成门", []), ("龙泉西公交场站", [])]}
+_t5 = query.render("北京", "快速公交4", query._chelaile("027", "快速公交4"))
+query._chelaile = _cl5
+assert _t5.startswith("快速公交4线 查不到实时车，上游不给北京的实时车辆位置"), _t5
+assert "这会儿没车" not in _t5, _t5
+
 # 重庆「0492」是夜班线，和白天线的「492路」是两条线：带前导零的四位号不加「路」也认
 assert query.parse("重庆0492") == ("0492", "重庆")
 assert query.BUS_RE.search("重庆0492")

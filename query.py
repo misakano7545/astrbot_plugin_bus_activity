@@ -69,8 +69,9 @@ LINE_RE = re.compile(
     # 真地铁也在这套目录里：「地铁10号线」「轨道交通1号线」「地铁广佛线」
     # 「地铁快线R101路」是东莞的一条线，不是「地铁快线」：定性字后面不算线名
     r"(?P<metro>(?:地铁|轨道交通)\s*\d+\s*号线|地铁\s*(?![快慢支专干微高])[\u4e00-\u9fa5]{1,3}线)"
-    # 乌鲁木齐/厦门的 BRT：「BRT1号线」不算地铁，也不是裸数字
-    r"|(?P<brt>BRT\s*\d{1,3}\s*(?:号线|线|路))"
+    # 乌鲁木齐/厦门的 BRT：「BRT1号线」不算地铁，也不是裸数字。
+    # 后缀可以省：「北京BRT4」口语里就这么写，目录里叫「快速公交4线」
+    r"|(?P<brt>BRT\s*\d{1,3}\s*(?:号线|线|路)?)"
     # 「环山二号线」「高新二号线」：号码夹在中间，不带「地铁」也是目录里的真线名。
     # shortcut: 只吃 4 个汉字前缀，「玉林二号线」这种城市名+号线的写法会被整段吃掉
     # 前面带「地铁/轨道交通」的归上面那条（最左匹配会先把城市名一起吃进来，得挡掉）
@@ -161,6 +162,22 @@ def norm_city(name):
     short = SUFFIX.sub("", s)
     # 剥完不足两个字说明这个缀本来就是名字的一部分，原样保留
     return short if len(short) >= MIN_CITY_KEY else s
+
+
+# BRT 的叫法三家各写各的：车来了北京叫「快速公交4线」、掌上厦门叫「BRT1号线」，
+# 群里人写「BRT4」「快速公交4」「快4」。同一个号，得互相认得，否则
+# 「北京BRT4」只能靠模糊匹配落到通州的 T4 路上（假答案）
+_BRT = re.compile(r"^(?:BRT|快速公交|快)\s*(\d{1,3})(?:号?线|路)?$")
+
+
+def brt_alias(want):
+    """同一个 BRT 号的其它写法（已归一化）。查不到时按这个顺序再试一遍目录。"""
+    m = _BRT.fullmatch(norm_line(want))
+    if not m:
+        return []
+    n = m.group(1)
+    out = [f"快速公交{n}", f"快{n}", f"BRT{n}号", f"BRT{n}"]
+    return [x for x in dict.fromkeys(out) if x != norm_line(want)]
 
 
 def _district_city(text):
@@ -674,7 +691,8 @@ def _chelaile(city_id, want):
     # 目录是方向级的：同一条线上下行是两个 lineId，全查再合并（见 issue #6）。
     # 香港一个「1」对应五家公司（九巴/城巴/屿巴/新界小巴/港岛小巴），名字里的括号
     # 就是公司，按名字分组查，别取前两条（前两条可能分属两家，混着报）。
-    groups, desc, pos = [], "", {}
+    groups, desc, pos, states = [], "", {}, []
+    hit_ids = {}
     for nm in dict.fromkeys(n for n, _ in hit):
         co = re.search(r"[（(](.+?)[)）]", nm)
         for line_id in [lid for n, lid in hit if n == nm]:
@@ -684,10 +702,33 @@ def _chelaile(city_id, want):
             to = d.get("to") or ""
             groups.append((f"{to}（{co.group(1)}）" if co and not op else to, d["buses"]))
             pos.update(d.get("pos") or {})
+            states.append(d.get("state"))
+            hit_ids[nm] = line_id
     # 多家公司同名时抬头别写成「1（九巴） 有 7 辆」，那不是一家的车
-    return {"source": "车来了", "line": re.sub(r"[（(].*?[)）]", "", name)
-            if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc,
-            "pos": pos}
+    res = {"source": "车来了", "line": re.sub(r"[（(].*?[)）]", "", name)
+           if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc,
+           "pos": pos}
+    # state=-5 是「这城根本不给实时车辆」：北京全城都是 -5（1路/52路/300快内/快速公交1线
+    # 一起验过），desc 只剩「首班…末班…」。当成「这会儿没车」报是假消息（BRT4 19:26 明明在跑），
+    # 照实说上游不给车辆位置，把时刻表和站数补上
+    if states and all(s == -5 for s in states) and not any(g for _, g in groups):
+        res["unknown"] = True
+        ck = next((k for k, v in cities().items() if (v or {}).get("chelaile") == city_id), "")
+        note = f"上游不给{norm_city(ck)}的实时车辆位置" if ck else "上游不给这城的实时车辆位置"
+        bits = [desc] if desc else []
+        n = 0
+        if hit_ids:
+            try:
+                n = len(chelaile.stations(city_id, next(iter(hit_ids.values()))))
+            except Exception:
+                n = 0
+        if n:
+            bits.append(f"{n} 站")
+        if bits:
+            note += "，只有时刻表：" if desc else "，"
+            note += "、".join(bits)
+        res["note"] = note
+    return res
 
 
 # 掌上这座城不给车辆位置（hasReal=0：北京、成都）时，下次把车来了排前面，省一次空等
@@ -1363,8 +1404,9 @@ def _msg_line(city_name, msg, city_key=""):
         for n in names:
             # 短真线名（夜1 / 微2 / 青金线 / 619）照抄也会被问，别只认四字以上。
             # 数字两侧要卡边界，否则「13路」里的「3路」会把整句顶掉；
-            # 前面粘着英文字母的也不算（「AirPods5」「pro3」里的数字不是线号）
-            pre = r"(?<![0-9A-Za-z])" if n[:1].isdigit() else r"(?<![0-9])"
+            # 前面粘着字母的不算（「AirPods5」「pro3」里的数字不是线号，
+            # 「北京BRT4」里的 T4 也不是——那是通州的 T4，北京 BRT4 是「快速公交4线」）
+            pre = r"(?<![0-9A-Za-z])" if n[:1].isalnum() else r"(?<![0-9])"
             if (len(n) >= 3 or re.search(r"\d", n)) and re.search(
                     rf"{pre}{re.escape(n)}(?![0-9])", msg):
                 return n
@@ -3023,13 +3065,17 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
     bare = re.sub(r"(区|县|旗|市|镇)$", "", prefix) if prefix else ""
     if len(bare) >= 2 and bare != prefix and not num.startswith(bare):
         wants.insert(len(wants) - 1, bare + num)
-    # 县级市线路落到父城查（新郑2路 → 郑州市目录）：裸号「2」是父城自己的 2 路，退回去就是拿同名线顶替
-    if prefix and norm_city(_district_city(prefix) or "") == city_key:
+    # 县级市线路落到父城查（新郑2路 → 郑州市目录）：裸号「2」是父城自己的 2 路，退回去就是拿同名线顶替。
+    # 写的就是父城名（「乌鲁木齐BRT2」）时不算县级市，别拼成「乌鲁木齐BRT2」这种目录里没有的名字
+    if prefix and norm_city(prefix) != city_key \
+            and norm_city(_district_city(prefix) or "") == city_key:
         wants = [prefix + num]
     # 有前缀要纠前缀截短；「环山二号线」这种自带汉字的线名也要纠（前缀是空的）
     # 数字线号同样要纠：「58路大站快车」和「58路」同城并存，只拿裸号会答成普通线。
     # _exact_line 要求整段真线名出现在句子里，裸号问法不受影响
+    # BRT 的叫法先补全（「BRT4」↔「快速公交4线」），不然只能落到同城的别的 T4/快4 上
     if name:
+        wants += [a for w in list(wants) for a in brt_alias(w) if a not in wants]
         cat = _catalog(name)
         # 网络挂了才不敢兜底：目录取不到时裸号会答成另一条线（「新乐专1路」→ 1 路）；
         # 业务上的「这城没目录」照旧往下走
