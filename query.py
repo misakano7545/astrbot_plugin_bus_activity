@@ -207,7 +207,21 @@ def _place_head(msg):
         if rest.startswith(k):
             rest = rest[len(k):]
             break
-    return bool(rest) and (rest in DIST_BARE or rest in DISTRICTS or rest in cities())
+    return bool(rest) and _is_place(rest)
+
+
+def _is_place(name):
+    """这个词是不是地名（县/区/县级市）：有数据依据的才算，靠后缀或区县表。
+
+    反向用例：「快速公交1线」的 prefix 剥掉「公交」后剩「快速」，目录里又正好有
+    「快速直达专线1路」，光看「目录里有以它开头的线」会把这个叫法当成县名。
+    """
+    s = (name or "").strip()
+    if not s:
+        return False
+    if s in DIST_BARE or s in DISTRICTS or s in cities():
+        return True
+    return bool(re.search(r"[区县市旗镇盟州]$", s)) and len(s) >= 2
 
 
 def _district_city(text):
@@ -749,8 +763,24 @@ def _chelaile(city_id, want):
     if states and all(s == -5 for s in states) and not any(g for _, g in groups):
         res["unknown"] = True
         ck = next((k for k, v in cities().items() if (v or {}).get("chelaile") == city_id), "")
-        note = f"上游不给{norm_city(ck)}的实时车辆位置" if ck else "上游不给这城的实时车辆位置"
-        bits = [desc] if desc else []
+        city_label = norm_city(ck) if ck else "这城"
+        # -5 有两种：北京是全城都不给（1路/52路/300快内/快速公交1线 一起验过都是 -5），
+        # 昆明只有个别的线没接实时（C61 是 -5，同城 108 路照样有车）。分不清就说不清，
+        # 会把「这条线没实时」说成「昆明不给实时车辆位置」——昆明 108 路明明有车
+        city_wide = not any(
+            (probe or {}).get("state") != -5 or (probe or {}).get("buses")
+            for probe in (_probe_cl(city_id, lid) for lid in _other_ids(rows, hit)))
+        # desc 是「首班 07:30 末班 18:00」：22 点问 C61 时先说是收班了，
+        # 比「上游没给实时」更回答得了「为什么查不到」
+        win = re.search(r"首班\s*(\d{1,2}:\d{2}).*?末班\s*(\d{1,2}:\d{2})", desc or "")
+        wl = _window_note([("", win.group(1), win.group(2))]) if win else ""
+        if wl:
+            note = wl
+            city_wide = False
+        else:
+            note = (f"上游不给{city_label}的实时车辆位置" if city_wide
+                    else f"车来了这条线的实时车辆位置没给（{city_label}别的线有）")
+        bits = [] if wl else ([desc] if desc else [])
         n = 0
         if hit_ids:
             try:
@@ -760,10 +790,30 @@ def _chelaile(city_id, want):
         if n:
             bits.append(f"{n} 站")
         if bits:
-            note += "，只有时刻表：" if desc else "，"
+            note += ("，只有时刻表：" if desc and not wl else "，")
             note += "、".join(bits)
         res["note"] = note
     return res
+
+
+def _other_ids(rows, hit, n=2):
+    """同城另外几条线的 lineId：用来分辨「全城没实时」还是「这条线没实时」。"""
+    taken = {lid for _, lid in hit}
+    out = []
+    for _, lid in rows:
+        if lid not in taken and lid not in out:
+            out.append(lid)
+            if len(out) >= n:
+                break
+    return out
+
+
+def _probe_cl(city_id, line_id):
+    try:
+        return _cached("live-cl", (city_id, line_id), LIVE_TTL,
+                       lambda: chelaile.live(city_id, line_id))
+    except Exception:
+        return {}
 
 
 # 掌上这座城不给车辆位置（hasReal=0：北京、成都）时，下次把车来了排前面，省一次空等
@@ -3125,7 +3175,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
     # _exact_line 要求整段真线名出现在句子里，裸号问法不受影响
     # BRT 的叫法先补全（「BRT4」↔「快速公交4线」），不然只能落到同城的别的 T4/快4 上
     if name:
-        wants += [a for w in list(wants) for a in brt_alias(w) if a not in wants]
+        add = [a for w in list(wants) for a in brt_alias(w) if a not in wants]
+        # 别名得排在裸号前面：厦门「快速公交1线」先试「快1」，试不到才轮到「1」（那是另一条线）
+        wants = ([wants[0]] + add + wants[1:]) if add else wants
         cat = _catalog(name)
         # 网络挂了才不敢兜底：目录取不到时裸号会答成另一条线（「新乐专1路」→ 1 路）；
         # 业务上的「这城没目录」照旧往下走
@@ -3135,9 +3187,12 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
         # 点名单（「城巴1」）时不能纠：香港掌上目录里只有一个 1 路（九巴的），纠过去就答错公司
         # 「博罗233路」也不能纠：句子里那个「233路」是惠城—惠阳的线，博罗没有 233，
         # 纠过去就把同城的另一条线当成博罗的车报（跟县级市那条分支一个道理）
-        county_ns = bool(prefix) and norm_city(prefix) != city_key and any(
+        county_ns = bool(prefix) and norm_city(prefix) != city_key and _is_place(prefix) and any(
             (r.get("lineName") or "").startswith(prefix) for r in cat.get("buslines") or [])
-        full = None if (op or county_ns) else _exact_line(name, msg, num, city_key)
+        # 句子里写的是「快速公交1线」/「BRT1」时别拿目录里的「1路」来纠：那是同城的另一条线，
+        # 该纠的方向是「快1」，交给上面的别名
+        brt_words = bool(re.search(r"快速公交|BRT", msg, re.I)) and bool(add)
+        full = None if (op or county_ns or brt_words) else _exact_line(name, msg, num, city_key)
         if full:
             wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
         if county_ns:
@@ -3277,7 +3332,9 @@ def answer(msg, default_city, ctx="", key=""):
     prefix = line[1] if line else ""
     # 「泉州公交11路」「泉州公交K502」：前缀截到的是「泉州公交」，去掉「公交」才是城市名，
     # 留着就会拼成「泉州公交K502」这种不存在的线
-    prefix = re.sub(r"公交$", "", prefix)
+    # 「快速公交1线」的「公交」是线名的一部分（厦门叫「快1路」、北京叫「快速公交1线」），
+    # 剥掉就剩「快速」，拼成「快速1」——厦门没有这条，答成同城的 1 路
+    prefix = re.sub(r"(?<!快速)公交$", "", prefix)
     # 「惠州博罗233路」：前缀里粘着城市名（惠州 + 博罗县），线名里只写县名。
     # 不剥掉会拼成「惠州博罗233」命中不了，还会把「博罗」当站名，答成「233路 不经过博罗天虹」
     for _ck in sorted(cities(), key=len, reverse=True):

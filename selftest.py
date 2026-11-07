@@ -1103,6 +1103,38 @@ _r6 = query.render("连云港", "B1", {"source": "掌上公交", "line": "B1路/
 render_pick = _r6.startswith("有，B1路 现在 1 辆在路上"), _r6
 query._catalog = _cat6
 assert render_pick[0], render_pick[1]
+# 「快速公交1线」的「公交」是线名的一部分（厦门叫「快1路」）：剥掉就剩「快速」，
+# 拼成「快速1」查不到，最后落到同城的 1 路——那是另一条线
+assert query._is_place("博罗") and query._is_place("博罗县") and query._is_place("安宁")
+assert not query._is_place("快速") and not query._is_place("快速公交")
+assert query.brt_alias("快速公交1") == ["快1", "BRT1号", "BRT1"]
+# 车来了 state=-5：北京全城都不给实时（别的线也是 -5），昆明只有个别线没接（别的一问就有车）。
+# 以前一律说「上游不给昆明的实时车辆位置」，可同城 108 路明明有车
+class _FakeCL:
+    def __init__(self, others_have_cars):
+        self.others = others_have_cars
+    def lines(self, cid):
+        return [("双誉公交C61", "a9"), ("108", "b9"), ("52", "c9")]
+    def live(self, cid, lid):
+        if lid == "a9":      # 目标线：-5，只给首末班
+            # 首末班覆盖全天：运营窗口内才轮到「没给实时」那句话（窗口外先说收班）
+            return {"state": -5, "desc": "首班 00:00 末班 23:59", "to": "团结镇", "buses": []}
+        if self.others:
+            return {"state": 0, "desc": "", "to": "X", "buses": [("8100", "S", 10)], "pos": {}}
+        return {"state": -5, "desc": "首班 05:00 末班 22:40", "to": "Y", "buses": []}
+    def stations(self, cid, lid):
+        return ["s"] * 22
+_cl9, _cit9 = query.chelaile, query.cities
+query.chelaile = _FakeCL(True)
+query.cities = lambda: {"昆明": {"chelaile": "CITY-LINE"}}
+_r9 = query._chelaile("CITY-LINE", "C61")
+assert "别的线有" in (_r9.get("note") or ""), _r9.get("note")
+assert "上游不给昆明" not in (_r9.get("note") or ""), _r9.get("note")
+query.chelaile = _FakeCL(False)
+query.cities = lambda: {"北京": {"chelaile": "CITY-WIDE"}}
+_r10 = query._chelaile("CITY-WIDE", "C61")
+assert "上游不给北京的实时车辆位置" in (_r10.get("note") or ""), _r10.get("note")
+query.chelaile, query.cities = _cl9, _cit9
 # 「北京BRT4」得进快路：BUS_RE 不认它的时候整个由模型决定要不要调工具，群里就是「查不出来」
 assert query.BUS_RE.search("北京BRT4") and query.BUS_RE.search("厦门BRT1")
 assert query.BUS_RE.search("北京快速公交4线") and query.BUS_RE.search("乌鲁木齐BRT2")
