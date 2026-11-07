@@ -566,6 +566,13 @@ assert not query.looks_like_ask("微信ZFB收眯 一天8OO0")
 assert not query.looks_like_ask("收8OO0")
 assert query.looks_like_ask("G02现在有车吗")            # 字母开头的线号不受影响
 assert query.looks_like_ask("佛山614A有车吗")           # 有城市名+问法的照旧
+# 「c2c出呗」：C2C/B2B 这类一两位字母夹一两位数字的缩写不是线号（真线号 C621A 是三位数、
+# B1K 要带「路/线/号」或问法），整句只剩「出呗」这种话时别答成「没查到「C2C」这条线，玉林这边…」
+assert not query.looks_like_ask("c2c出呗")
+assert not query.looks_like_ask("C2C")
+assert query.looks_like_ask("c2c线")                  # 带「线」才是线号写法
+assert query.looks_like_ask("c2c出呗，2路有车吗")      # 同句里有真问法照旧答
+assert query.looks_like_ask("K901A呢")                # 三位数字的真线号不受影响
 # 上一条问过 9 路，再来一句带站点的「车来了查XX校区」：别拿上一条的线路号答
 _ql, _cit2, _rst = query.query, query.cities, query.render_stop
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}

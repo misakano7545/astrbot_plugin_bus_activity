@@ -290,6 +290,13 @@ def looks_like_ask(msg):
     if re.search(r"(?<![A-Za-z0-9])\d+[A-Za-z]+\d*(?![A-Za-z0-9])", msg) \
             and not re.search(r"路|线|号|[站车]|公交|地铁", msg) and not detect_city(msg, "", "")[1]:
         return False
+    # 「c2c出呗」：C2C/B2B 这种「一两位字母夹一两位数字」的缩写被 ALPHA_PAT 当线号（真线号
+    # C621A 是三位数，B1K/KS7 这类要带「路/线/号」或问法），整句又只剩「出呗」这种话，
+    # 落进最后那条「没闲聊词就当问句」的兜底 → 群里收到「没查到「C2C」这条线，玉林这边有的是 2路…」
+    if re.search(r"(?<![A-Za-z0-9])[A-Za-z]{1,2}\d{1,2}[A-Za-z]{1,2}(?![A-Za-z0-9])", msg) \
+            and not re.search(r"路|线|号|[站车]|公交|巴士|地铁", msg) \
+            and not detect_city(msg, "", "")[1] and not ASK.search(msg):
+        return False
     return bool(ASK.search(msg)) or not CHAT.search(msg)
 
 
