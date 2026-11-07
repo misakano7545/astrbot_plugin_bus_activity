@@ -543,6 +543,11 @@ assert query.find_stop("玉林市", "税局") == (query._merge_same(
     {"stationName": "市税务局", "relatedRoutes": ["9路"]}), "市税务局")
 assert query.find_stop("玉林市", "车站") == (None, "车站")     # 整个词都是通用字，不认
 query.stops = _st3
+# 「北京密101路」：剥掉线号只剩个「密」，上游子串搜会匹上「北京密码小区」，答一句「不经过」
+_st4 = query.stops
+query.stops = lambda cn, kw: [{"stationName": "北京密码小区", "relatedRoutes": ["密101路"]}]
+assert query.pick_stop("北京市", "北京密101路") is None
+query.stops = _st4
 # 「微信ZFB收眯 一天8OO0」：广告拿 O 冒 0，8OO0 被 ALPHA_PAT 当线号，整句没问法没闲聊词就兜底答站
 assert not query.looks_like_ask("微信ZFB收眯 一天8OO0")
 assert not query.looks_like_ask("收8OO0")

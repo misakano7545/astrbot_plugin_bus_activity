@@ -885,6 +885,10 @@ def render_ghost(city_key, city_name, want):
                     if alt:
                         return (f"{l['name']} 这个号已经不跑了，同一条线现在叫 {alt}（{term}）\n"
                                 + render(city_key, norm_line(alt), query(city_key, [norm_line(alt)])))
+                if _exact_line(city_name, want, None):
+                    # 目录里明明有这条，只是刚才实时没报上来——不能说成「两家都没收」
+                    return (f"{l['name']} 这城目录里有这条线，刚才两家实时都没报来车；建档资料是 {term}"
+                            "\n（首末站查得到，实时的到站时间那两家刚才没给）")
                 return (f"{l['name']} 掌上公交和车来了都没收这条，建档资料是 {term}"
                         + ("" if l.get("active") else "（记的是已停运）")
                         + "\n（首末站查得到，实时的到站时间那两家没有）")
@@ -1169,6 +1173,9 @@ def find_stop(city_name, raw):
             if norm_city(raw[:n]) == norm_city(city_name) or (
                     tail != raw[:n] and not re.search(r"[\u4e00-\u9fa5]", tail)):
                 continue
+            # 「北京密101路」剥掉线号只剩个「密」，上游子串搜会匹上「北京密码小区」
+            if len(tail) < 2:
+                continue
             # 「新郑市火车站」退到「新郑市」会匹上「新郑市二中」：县名本身不是站名
             if raw[n:] and norm_city(raw[:n]) in DIST_BARE:
                 continue
@@ -1206,7 +1213,7 @@ def find_stop(city_name, raw):
             core = re.sub(rf"^{re.escape(norm_city(city_name))}", "", core)
             if best and len(core) >= 2 and not _subseq(core, best["stationName"]):
                 best = None
-            if best and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
+            if best and len(core) >= 2 and difflib.SequenceMatcher(None, raw, best["stationName"]).ratio() >= 0.6:
                 return _merge_same(rows, best), best["stationName"]
     # 「玉林八中」平台写作「玉州区第八中学」：学校简称（八中/一小）按口语搜一次，
     # 全城只有这一个才认，免得「南宁机场」这种整词被抹掉城市名后匹到不相干的站
