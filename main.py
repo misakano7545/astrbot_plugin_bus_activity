@@ -64,11 +64,13 @@ class BusActivity(Star):
     async def bus_fast(self, event: AstrMessageEvent):
         """问公交就直接查直接答，不经过模型判断——模型会漏答、会编「只接了玉林」。"""
         self._ensure_watch()
-        if not BUS_RE.search(event.message_str):
+        # 「<@CA0308D02E977A8606EF36B77DB31115>」里的 0308 会被当成前导零线号进快路
+        s = AT_RE.sub(" ", event.message_str)
+        if not BUS_RE.search(s):
             # 只有「城市名 + 裸号」这一支（「西安616」）：城市得真在表里，不然「今天616」也进来
-            if not detect_city(AT_RE.sub(" ", event.message_str), "", "")[1]:
+            if not detect_city(s, "", "")[1]:
                 return
-        if not looks_like_ask(event.message_str):
+        if not looks_like_ask(s):
             return  # 带线路号的闲聊（「11路那车真挤」）交给模型，别抢成公交问答
         # 引用别人的消息追问（「那 39 路往哪开」）时，城市只在被引用的那句里
         ctx = " ".join(m.message_str for m in event.get_messages()

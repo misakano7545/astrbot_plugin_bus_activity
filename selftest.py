@@ -548,6 +548,12 @@ _st4 = query.stops
 query.stops = lambda cn, kw: [{"stationName": "北京密码小区", "relatedRoutes": ["密101路"]}]
 assert query.pick_stop("北京市", "北京密101路") is None
 query.stops = _st4
+# 「AirPods5和pro3选哪个比较好」：QQ 的 @ 前缀里 CA0308D 让前导零线号命中进快路，
+# 抹掉 @ 之后「pro3」里的 3 又被当成 3 路——数字打头的线名不许粘在英文字母后面
+assert not query.BUS_RE.search(query.AT_RE.sub(" ", "<@CA0308D02E977A8606EF36B77DB31115> AirPods5和pro3选哪个比较好"))
+assert query._msg_line("玉林市", "AirPods5和pro3选哪个比较好", "玉林") is None
+assert query._in_line("AirPods5和pro3", "3") is False
+assert query._in_line("玉林9路", "9") is True
 # 「微信ZFB收眯 一天8OO0」：广告拿 O 冒 0，8OO0 被 ALPHA_PAT 当线号，整句没问法没闲聊词就兜底答站
 assert not query.looks_like_ask("微信ZFB收眯 一天8OO0")
 assert not query.looks_like_ask("收8OO0")

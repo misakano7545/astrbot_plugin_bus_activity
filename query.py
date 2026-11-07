@@ -1352,9 +1352,11 @@ def _msg_line(city_name, msg, city_key=""):
     def _look(names):
         for n in names:
             # 短真线名（夜1 / 微2 / 青金线 / 619）照抄也会被问，别只认四字以上。
-            # 数字两侧要卡边界，否则「13路」里的「3路」会把整句顶掉
+            # 数字两侧要卡边界，否则「13路」里的「3路」会把整句顶掉；
+            # 前面粘着英文字母的也不算（「AirPods5」「pro3」里的数字不是线号）
+            pre = r"(?<![0-9A-Za-z])" if n[:1].isdigit() else r"(?<![0-9])"
             if (len(n) >= 3 or re.search(r"\d", n)) and re.search(
-                    rf"(?<![0-9]){re.escape(n)}(?![0-9])", msg):
+                    rf"{pre}{re.escape(n)}(?![0-9])", msg):
                 return n
         # 简称：「大容山专线」少说了「旅游」。字基本都在、比例够、且全城只有一条对得上才认，
         # 认不出来宁可去查站名，也不能硬塞一条别的线
@@ -1404,7 +1406,9 @@ def _in_line(flat, n):
     i = flat.find(n)
     while i >= 0:
         if (i == 0 or not flat[i - 1].isdigit()) and \
-                (i + len(n) >= len(flat) or not flat[i + len(n)].isdigit()):
+                (i + len(n) >= len(flat) or not flat[i + len(n)].isdigit()) and \
+                not (i and n[:1].isdigit() and flat[i - 1].isascii() and flat[i - 1].isalpha()):
+            # ↑「AirPods5」「pro3」：英文单词尾巴上的数字不是线号
             return True
         i = flat.find(n, i + 1)
     return False
@@ -1420,6 +1424,10 @@ def _exact_line(city_name, msg, want, city_key=""):
         for nm in names:
             # 目录里「张堰一路」是中文数字，用户写「张堰1路」：两边都折成阿拉伯再比
             n = _digitize(norm_line(nm))
+            # 「pro3」里的 3 不是 3 路：数字打头的线名，前面不许粘着英文字母
+            def _ok(m):
+                i = m.start()
+                return not (i and n[:1].isdigit() and flat[i - 1].isascii() and flat[i - 1].isalpha())
             # 句子里把城市名也粘进了线名（「西安环山二号线」）：目录名是它的后缀也算。
             # 只认 head 就是这座城的名字——「安宁12」的「安宁」是线名本身（安宁K12），
             # 当成城市名剥掉会把昆明市区的 12 路答成安宁的车
@@ -1440,7 +1448,7 @@ def _exact_line(city_name, msg, want, city_key=""):
             # 「②」isdecimal 也算数字，可 int() 认不了——目录里真有这种线名，会整句崩掉
             pat = "".join(f"[{d}{cns[int(d)]}]" if d.isascii() and d.isdigit() else re.escape(d)
                           for d in n)
-            if n in flat or re.search(pat, flat):
+            if n in flat or any(_ok(m) for m in re.finditer(pat, flat)):
                 hit.append(nm)
         return hit
 
