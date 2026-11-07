@@ -1414,6 +1414,17 @@ def _in_line(flat, n):
     return False
 
 
+_METRO_PFX = re.compile(r"^(?:地铁快线|地铁|轨道交通|城市轨道|公交|BRT)")
+
+
+def _digit_pat(s):
+    """线名转正则：阿拉伯数字和中文数字等价认（「新乐专一路」的「一」就是 1）。"""
+    cns = "零一二三四五六七八九"
+    # 「②」isdecimal 也算数字，可 int() 认不了——目录里真有这种线名，会整句崩掉
+    return "".join(f"[{d}{cns[int(d)]}]" if d.isascii() and d.isdigit() else re.escape(d)
+                   for d in s)
+
+
 def _exact_line(city_name, msg, want, city_key=""):
     """目录里有更长的真线名整段出现在句子里（「新乐专1路」）就用它，别只拿裸号去匹。"""
     flat, w = _digitize(norm_line(msg)), norm_line(want)
@@ -1439,16 +1450,17 @@ def _exact_line(city_name, msg, want, city_key=""):
             # 「威远3路副线」「云和1路上城门」：比裸号长的真线名整段出现在句子里。
             # 数字两侧卡边界：「玉林99路」不能被目录里的 9 路顶掉
             whole = len(n) > len(w2) and _in_line(flat, n)
+            # 「上海16号线」：目录里叫「地铁16号线」，城市名占了「地铁」的位子
+            bare = _METRO_PFX.sub("", n)
+            if bare != n and (bare == flat or bare in flat):
+                whole = True
             # 「（3路支路）」这种同名不同支的，靠下面按原样名择优
             if not (n == flat or whole or n.endswith(tail) or front
                     or (head and norm_city(head) == norm_city(city_name))):
                 continue
             # 「新乐专一路」的「一」也是数字，得和 1 等价地认
-            cns = "零一二三四五六七八九"
-            # 「②」isdecimal 也算数字，可 int() 认不了——目录里真有这种线名，会整句崩掉
-            pat = "".join(f"[{d}{cns[int(d)]}]" if d.isascii() and d.isdigit() else re.escape(d)
-                          for d in n)
-            if n in flat or any(_ok(m) for m in re.finditer(pat, flat)):
+            if n in flat or any(_ok(m) for m in re.finditer(_digit_pat(n), flat)) \
+                    or (bare != n and any(_ok(m) for m in re.finditer(_digit_pat(bare), flat))):
                 hit.append(nm)
         return hit
 

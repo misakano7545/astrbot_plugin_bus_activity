@@ -554,6 +554,13 @@ assert not query.BUS_RE.search(query.AT_RE.sub(" ", "<@CA0308D02E977A8606EF36B77
 assert query._msg_line("玉林市", "AirPods5和pro3选哪个比较好", "玉林") is None
 assert query._in_line("AirPods5和pro3", "3") is False
 assert query._in_line("玉林9路", "9") is True
+# 「上海16号线」：目录里叫「地铁16号线」，城市名占了「地铁」的位子，两边都不成立就落到没查到
+_cat4, _cit4 = query._catalog, query.cities
+query.cities = lambda: {}
+query._catalog = lambda c: {"buslines": [{"lineName": "地铁16号线"}, {"lineName": "161路"}]}
+assert query._exact_line("上海市", "上海16号线", "上海16号") == "地铁16号线"
+assert query._exact_line("上海市", "上海161路", "161") == "161路"
+query._catalog, query.cities = _cat4, _cit4
 # 「微信ZFB收眯 一天8OO0」：广告拿 O 冒 0，8OO0 被 ALPHA_PAT 当线号，整句没问法没闲聊词就兜底答站
 assert not query.looks_like_ask("微信ZFB收眯 一天8OO0")
 assert not query.looks_like_ask("收8OO0")
