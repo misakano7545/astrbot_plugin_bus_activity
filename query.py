@@ -331,6 +331,8 @@ def looks_like_ask(msg):
         return False
     if not re.search(r"[\u4e00-\u9fa5]", msg):
         return False                 # 一句中文都没有（「baga yalu: k3 4.1 gtp」）不是问公交，是闲聊
+    if _chatty_code(msg):            # 「…那个 h5 起步的啊」：h5 是网页版本，不是线号
+        return False
     if _about_someone(msg):
         return False
     # 「G02到玉林北站叫我」「我的提醒」没有问法是祈使句，但确实是公交（答应了得真去盯）
@@ -358,7 +360,21 @@ def looks_like_ask(msg):
             and not re.search(r"路|线|号|[站车]|公交|巴士|地铁", msg) \
             and not detect_city(msg, "", "")[1] and not ASK.search(msg):
         return False
+    # 「哦，最早是玉林那个 h5 起步的啊」：小写字母+一位数字被 ALPHA_PAT 当线号（h5）。
+    # 目录里小写的线名都是两位数字（南宁 k10路、昆明 Cj10路），一位数字的一个都没有
+    if _chatty_code(msg):
+        return False
     return bool(ASK.search(msg)) or not CHAT.search(msg)
+
+
+def _chatty_code(msg):
+    """句子里那个「像线号」的东西其实是口语里的版本号/型号：「拿玉林那个 h5 起步的」。
+
+    目录里小写线名都是两位数字（k10路、Cj10路），一位数字（h5、k3）一个都没有；
+    这类词只在句子里聊到网页/软件时出现，只要没写「路/线/号」就别当线号。
+    """
+    return bool(re.search(r"(?<![A-Za-z0-9])[a-z]{1,2}\d(?![A-Za-z0-9])", msg or "")) \
+        and not re.search(r"路|线|号", msg or "")
 
 
 def _about_someone(msg):
@@ -3274,6 +3290,10 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
 def answer(msg, default_city, ctx="", key=""):
     """ctx 是引用/上文里的文字，只用来认城市——追问「那 39 路往哪开」靠它。"""
     if CODE_RE.search(msg):      # 群里贴的脚本不查公交，交给模型
+        return ""
+    if _chatty_code(AT_RE.sub(" ", msg)):
+        # 「最早是拿玉林那个 h5 起步的」：h5 不是线号。工具被模型调进来时也别答
+        # 「没查到「玉林那个H5」这条线」，返空让模型正常接话
         return ""
     if _about_someone(AT_RE.sub(" ", msg)):   # 只是跟别人说话（bus_query 也被模型调过）
         return ""

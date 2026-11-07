@@ -566,6 +566,16 @@ assert not query.looks_like_ask("微信ZFB收眯 一天8OO0")
 assert not query.looks_like_ask("收8OO0")
 assert query.looks_like_ask("G02现在有车吗")            # 字母开头的线号不受影响
 assert query.looks_like_ask("佛山614A有车吗")           # 有城市名+问法的照旧
+# 「哦，最早是玉林那个 h5 起步的啊」：h5 是网页版本，不是线号。目录里小写线名都是两位数字
+# （南宁 k10路、昆明 Cj10路），一位数字的一个都没有
+assert query._chatty_code("哦，最早是玉林那个 h5 起步的啊。")
+assert query._chatty_code("最初开始研究这个是拿的玉林的实时公交那个 h5")
+assert not query._chatty_code("s5路")            # 写了「路」就不是口语
+assert not query._chatty_code("南宁k10")          # 两位数字的小写线名照常认
+assert not query.looks_like_ask("哦，最早是玉林那个 h5 起步的啊。")
+assert not query.looks_like_ask("@大肥鱼 最初开始研究这个是拿的玉林的实时公交那个 h5")
+assert query.answer("哦，最早是玉林那个 h5 起步的啊。", "玉林市") == ""   # 别回「没查到「玉林那个H5」」
+assert query.looks_like_ask("南宁k10")
 # 「c2c出呗」：C2C/B2B 这类一两位字母夹一两位数字的缩写不是线号（真线号 C621A 是三位数、
 # B1K 要带「路/线/号」或问法），整句只剩「出呗」这种话时别答成「没查到「C2C」这条线，玉林这边…」
 assert not query.looks_like_ask("c2c出呗")
