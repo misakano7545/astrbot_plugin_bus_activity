@@ -1067,6 +1067,10 @@ query._catalog, query._live_my = _cat4, _lm4
 
 # BRT 的叫法：「北京BRT4」不能落成通州的「T4」（那是另一条线），目录里叫「快速公交4线」。
 # 前缀粘着字母的线名（T4）也不该在「BRT4」里被认出来
+# 「北京BRT4」得进快路：BUS_RE 不认它的时候整个由模型决定要不要调工具，群里就是「查不出来」
+assert query.BUS_RE.search("北京BRT4") and query.BUS_RE.search("厦门BRT1")
+assert query.BUS_RE.search("北京快速公交4线") and query.BUS_RE.search("乌鲁木齐BRT2")
+assert not query.BUS_RE.search("今天吃什么")
 assert query.parse("北京BRT4") == ("BRT4", "北京")
 assert query.parse("北京BRT4号线") == ("BRT4号", "北京")
 assert query.brt_alias("BRT4") == ["快速公交4", "快4", "BRT4号"]
