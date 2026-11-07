@@ -1003,7 +1003,7 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
-TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?(?:公交车|公交|巴士|公车)?(?:线路|线)|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋走|咋坐|咋去|换乘|有直达|直达|路线|的?(?:公交)?线路|的话|附近|周边|周围|(?:还)?要(?:等|坐|乘|多久|几[分站台])|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
+TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|哪[辆部台]|来车|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?(?:公交车|公交|巴士|公车)?(?:线路|线)|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋走|咋坐|咋去|换乘|有直达|直达|路线|的?(?:公交)?线路|的话|附近|周边|周围|(?:还)?要(?:等|坐|乘|多久|几[分站台])|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
 # 问的是「到这一站还要几分钟」：站名没认出来时宁可反问，也别退化成整车清单
 TIMEQ_RE = re.compile(r"等多久|等几分钟|几分钟|还有多久|多久到|还差多久|等几站|几分钟到")
 # 「多久一班」问的是发车间隔，不是到站钟点
@@ -2311,12 +2311,13 @@ def _stop_chelaile(city_name, msg):
 
 
 def render_stop_best(city_name, name, routes):
-    """「X 站哪辆车来得最快」：每条经停线每个方向问该站的到站预测（STATIONORDER），比分钟数。
+    """「X 站哪辆车来得最快 / 哪些线路准备到了」：每条经停线每个方向问该站的到站预测，比分钟数。
+    始发站上游不给到站预测，只给 busToStationTips=等待发车——车就停在站场，那才是能上车的车。
     没有预测的线路单独点名，不能当成「没车」——末班车、刚发车都会空。"""
     to = {}
     for r in _catalog(city_name).get("buslines") or []:
         to[(r.get("lineName"), str(r.get("upperOrDown")))] = r.get("to") or ""
-    hits, blank = [], []
+    hits, wait, blank = [], [], []
     for ln in routes:
         for d in ("1", "2"):
             seq = _station_seq(city_name, ln, d)
@@ -2324,25 +2325,35 @@ def render_stop_best(city_name, name, routes):
                       if (s.get("stationName") or "") == name), None)
             if not i:
                 continue
-            eta = _etas(_live_my(city_name, ln, d, i))
+            pay = _live_my(city_name, ln, d, i)
+            eta = _etas(pay)
             if eta:
                 hits.append((eta[0], ln, to.get((ln, d)) or "", eta[1], eta[2]))
+                continue
+            # 「等待发车」是始发站的写法：到站预测为空，但车就在站里/站前广场（G01 实测）
+            car = next((c for c in pay.get("list") or []
+                        if name and name in (c.get("stationName") or "")), None)
+            tip = next((r.get("busToStationTips") for r in pay.get("routeOnStationRTimeInfoList") or []
+                        if r.get("busToStationTips")), "")
+            if car and tip == "等待发车":
+                wait.append((ln, to.get((ln, d)) or "", car.get("stationName") or name,
+                             car.get("busNumber") or ""))
             elif ln not in blank:
                 blank.append(ln)
-    if not hits:
+    if not hits and not wait:
         return None
     hits.sort(key=lambda h: h[0])
-    out = (f"{name}来得最快的是 {hits[0][1]}"
-           + (f" 往{hits[0][2]}方向" if hits[0][2] else "")
-           + f"：{hits[0][4]} 约 {_clock(hits[0][0])} 到（{max(1, round(hits[0][0]))} 分钟，还有 {hits[0][3]} 站）")
-    for m, ln, dest, cnt, plate in hits[1:]:
-        out += (f"\n其次 {ln}" + (f" 往{dest}方向" if dest else "")
-                + f"：{plate} {max(1, round(m))} 分钟（还有 {cnt} 站）")
+    out = [f"{name} 这会儿："]
+    for ln, dest, st, plate in wait:      # 能直接上车的排前头
+        out.append(f"{ln}" + (f" 往{dest}" if dest else "")
+                   + f"：车已经在{st}等着发车" + (f"（{plate}）" if plate else ""))
+    for m, ln, dest, cnt, plate in hits:
+        out.append(f"{ln}" + (f" 往{dest}方向" if dest else "")
+                   + f"：{plate} 约 {max(1, round(m))} 分钟（还有 {cnt} 站）")
+    blank = [b for b in blank if b not in {w[0] for w in wait} | {h[1] for h in hits}]
     if blank:
-        blank = [b for b in blank if b not in {h[1] for h in hits}]
-    if blank:
-        out += f"\n{'、'.join(blank)} 这会儿没有到站预测（没发车或已过末班）"
-    return out
+        out.append(f"{'、'.join(blank)} 这会儿没有到站预测（没发车或已过末班）")
+    return "\n".join(out)
 
 
 def render_stop(city_key, city_name, msg, src=None):
@@ -2450,7 +2461,7 @@ def render_stop(city_key, city_name, msg, src=None):
 
 
 # 「这站哪路车来得最快／等的最少」：站查询要按实时比，不报线路清单
-BEST_RE = re.compile(r"最快|最少|哪[辆部个条]?先|先到|等得最少|等的最少")
+BEST_RE = re.compile(r"最快|最少|哪[辆部个条]?先|先到|等得最少|等的最少|准备到了|快到了|快到站|来车")
 # 「玉林还有哪条线路有车」这类全城问题没法靠线路号答，得把目录扫一遍。
 # 放在站点判断之后：能认出站名就以站点为准，「十字街有几路车」不会被抢走。
 SWEEP_RE = re.compile(r"哪条|哪几|哪路|还有|在跑|运营")

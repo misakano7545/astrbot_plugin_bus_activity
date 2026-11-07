@@ -1346,7 +1346,19 @@ _lm2, query._live_my = query._live_my, lambda cn, ln, d, order=1: (
                                       "busToStationTime": 4}]} if ln == "1路" else {})
 query._cache.clear()
 _b = query.render_stop_best("玉林市", "丙站", ["1路", "2路"])
-assert "最快的是 1路" in _b and "桂K1" in _b and "4 分钟" in _b and "2路" in _b, _b
+assert _b.splitlines()[0] == "丙站 这会儿：", _b
+assert "1路 往甲站方向：桂K1 约 4 分钟（还有 2 站）" in _b, _b       # 最快的排第一行
+assert "2路 这会儿没有到站预测" in _b, _b                            # 没预测的线单独点名
+# 始发站上游不给到站预测，只给「等待发车」：车就在站里，得报出来，不能算成没车
+_lm3 = query._live_my
+query._live_my = lambda cn, ln, d, order=1: (
+    {"routeOnStationRTimeInfoList": [{"busNumber": "", "busToStationCount": -1,
+                                      "busToStationTips": "等待发车"}],
+     "list": [{"busNumber": "桂K9", "stationName": "丙站站前广场"}]}
+    if ln == "1路" else {})
+_b2 = query.render_stop_best("玉林市", "丙站", ["1路"])
+assert "1路 往甲站：车已经在丙站站前广场等着发车（桂K9）" in _b2, _b2
+query._live_my = _lm3
 query._catalog, query._station_seq, query._live_my = _cat2, _sq, _lm2
 query._cache.clear()
 
