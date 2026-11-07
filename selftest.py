@@ -478,6 +478,15 @@ assert query.parse(query.SRCPRE.sub("", "车来了查询玉林职业技术学院
 # 带线路号的闲聊（「11路那车真挤」）不该被快路抢答，纯报号照答
 assert not query.looks_like_ask("今天坐9路回家累死了")
 assert not query.looks_like_ask("11路那车真挤")
+# 单字母+数字被 ALPHA_PAT 当线号（「用s5注册（」），整句没路/线/站/车也没城市名 → 闲聊；
+# 裸号问法靠城市名放行
+assert not query.looks_like_ask("用s5注册（")
+assert not query.looks_like_ask("这台s5充电")
+assert query.looks_like_ask("s5路")          # 带「路」不算闲聊
+# 城市名认得出时裸号照放行（这里前面桩过城市表，detect_city 得自己给）
+_dc, query.detect_city = query.detect_city, lambda m, p, d: ("深圳", True)
+assert query.looks_like_ask("深圳M470")
+query.detect_city = _dc
 assert not query.looks_like_ask("你觉得G02这名字好听吗")
 assert query.looks_like_ask("11路")
 assert query.looks_like_ask("玉林9路")
