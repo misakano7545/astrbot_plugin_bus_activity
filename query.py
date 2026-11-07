@@ -1014,6 +1014,9 @@ HOP_RE = re.compile(r"从?\s*([^，,。？?！!\s]{2,12}?)\s*"
 # 「A 咋去 B」「A 怎么去 B」：没「到」字，靠疑问词认；只有「去」一个动词的说法太松，不认
 HOP2_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*"
                      r"(?:咋|怎么|怎样|如何|咋样)\s*去\s*([^，,。？?！!\s]{2,12})")
+# 「A 去 B 咋去」：疑问词跑到最后，HOP2 只认「A 咋去 B」这一种语序
+HOP3_RE = re.compile(r"(?:从\s*)?([^，,。？?！!\s]{2,12}?)\s*去\s*"
+                     r"([^，,。？?！!\s]{2,12}?)\s*(?:咋|怎么|怎样|如何)\s*(?:去|走|坐|乘)")
 # 「火车站坐什么车」要把尾巴砍掉再当站名查；「我在十字街」要把脑袋砍掉
 TAIL = re.compile(r"(现在|目前|当前|[坐做]哪[个条路]?|哪[辆部台]|来车|[坐做]啥|怎么坐|坐什么|怎么去|有(?:几|多少)条?(?:公交车|公交|巴士|公车)?(?:线路|线)|哪几条线路|有什么|有哪些|有哪几|多少|几路车|坐几路|怎么走|咋走|咋坐|咋去|换乘|有直达|直达|路线|的?(?:公交)?线路|的话|附近|周边|周围|(?:还)?要(?:等|坐|乘|多久|几[分站台])|还有|有没有|在?哪[里儿]|什么时候|几点到|多久到|还有多久|要多久|多久|最近|吗|呢|啊|等).*$")
 # 问的是「到这一站还要几分钟」：站名没认出来时宁可反问，也别退化成整车清单
@@ -1221,6 +1224,18 @@ def find_stop(city_name, raw):
                 # 上层拿它去对站序，写「职院」一个站都对不上
                 return _merge_same(rows, rows[0]), next(iter(names))
             break
+    # 「税局」这种两字简称：上游的站名搜索要三个字以上才肯给结果（「税局」搜出 0 条，
+    # 「税务局」才出「市税务局」），退到单字再按顺序匹一遍；站名比简称长出三字以上就不认，
+    # 免得「医院」匹到「玉林市第一人民医院」
+    # 「车站」「学校」这种整词都是通用字的，匹到哪个站都是瞎猜
+    if len(core) == 2 and not re.fullmatch(r"[公交汽车火车车站台口路]+|学校", core):
+        rows = [r for r in stops(city_name, core[:1]) or []
+                if r.get("stationName") and len(r["stationName"]) <= 4
+                and _subseq(core, r["stationName"])]
+        names = {r["stationName"] for r in rows}
+        if len(names) == 1:
+            # 返站牌真名（「市税务局」），不是用户的写法「税局」——上层拿它去对线路站序
+            return _merge_same(rows, _bus_row(rows)), next(iter(names))
     return None, raw
 
 
@@ -1231,7 +1246,7 @@ def hop(msg):
         m = None
     if not m:
         # 「玉林火车站咋去北流万达」：没「到」字，靠疑问词+「去」认；光一个「去」太松，不认
-        m = HOP2_RE.search(msg)
+        m = HOP2_RE.search(msg) or HOP3_RE.search(msg)
         if not m or LINE_RE.search(m.group(1)):
             return None
     a = LEAD.sub("", m.group(1).lstrip("从"))   # 「我在十字街咋去火车站」
@@ -1520,11 +1535,8 @@ def render_plan(city_name, a, b):
     shortcut: 只取前 2 个方案，群消息再长没人看；坐标留空，按站名查就够
     """
     info = _ask111(city_name, a, b)
-    # 起点站牌名和用户写法对不上时上游会自己换成附近站（「市体育中心」→「文体人民路口」），
-    # 那种一条线直达的方案不能交回 render_hop——那条线根本不从用户说的站发车
     ra = (find_stop(city_name, a)[0] or {}).get("stationName")
     if not info:
-        # 群里说的是「玉林汽车总站」，平台站牌就写「汽车总站」——名字对不上上游排不出方案
         rb = (find_stop(city_name, b)[0] or {}).get("stationName")
         if ra or rb:
             info = _ask111(city_name, ra or a, rb or b)

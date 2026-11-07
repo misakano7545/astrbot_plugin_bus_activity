@@ -529,6 +529,20 @@ _st2 = query.stops
 query.stops = lambda cn, kw: [{"stationName": "玉林北站", "relatedRoutes": ["G01路"]}] if kw == "玉林北站" else []
 assert query.pick_stop("玉林市", "玉林北站有哪几路车") == "玉林北站"
 query.stops = _st2
+# 「玉林汽车总站去税局咋去」：疑问词在最后，HOP2 只认「A咋去B」这一种语序
+assert query.hop("玉林汽车总站去税局咋去") == ("玉林汽车总站", "税局")
+assert query.hop("汽车总站去玉林北站咋坐") == ("汽车总站", "玉林北站")
+# 「税局」：上游站名搜索要 3 个字以上，两字简称退到单字再按顺序匹（「税局」⊂「市税务局」），
+# 返回的得是站牌真名，上层拿它去对线路站序；全城匹到不止一个站就不认
+_st3 = query.stops
+query.stops = lambda cn, kw: (
+    [{"stationName": "市税务局", "relatedRoutes": ["9路"]},
+     {"stationName": "市人社局", "relatedRoutes": ["3路"]}] if kw == "税" else [])
+assert query.find_stop("玉林市", "税局") == (query._merge_same(
+    [{"stationName": "市税务局", "relatedRoutes": ["9路"]}],
+    {"stationName": "市税务局", "relatedRoutes": ["9路"]}), "市税务局")
+assert query.find_stop("玉林市", "车站") == (None, "车站")     # 整个词都是通用字，不认
+query.stops = _st3
 # 上一条问过 9 路，再来一句带站点的「车来了查XX校区」：别拿上一条的线路号答
 _ql, _cit2, _rst = query.query, query.cities, query.render_stop
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
