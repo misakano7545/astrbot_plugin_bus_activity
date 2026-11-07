@@ -482,6 +482,7 @@ assert not query.looks_like_ask("11路那车真挤")
 # 裸号问法靠城市名放行
 assert not query.looks_like_ask("用s5注册（")
 assert not query.looks_like_ask("这台s5充电")
+assert not query.looks_like_ask("2F有车吗")    # 短代号 + 问法词，没写路/线/号也没城市名
 assert query.looks_like_ask("s5路")          # 带「路」不算闲聊
 # 城市名认得出时裸号照放行（这里前面桩过城市表，detect_city 得自己给）
 _dc, query.detect_city = query.detect_city, lambda m, p, d: ("深圳", True)

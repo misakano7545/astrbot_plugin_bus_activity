@@ -273,10 +273,11 @@ def looks_like_ask(msg):
     # 「我在汽车总站等1路和G02」：第一人称+所在站，是站在站台上问车；「我」被 CHAT 当成闲聊了
     if re.search(r"我在.{0,12}(?:站|路口|广场|公园|医院|学校|门口|桥)", msg):
         return True
-    # 「用s5注册（」：s5 被 ALPHA_PAT 认成线号，可整句没有路/线/站/车、也没写城市名，
-    # 就是群友在聊别的（注册、装驱动）。裸号问法（「深圳M470」）靠城市名放行
-    if ALPHA_RE.search(msg) and not re.search(r"路|线|[站车]|公交|巴士|地铁|查|坐|等", msg) \
-            and not detect_city(msg, "", "")[1]:
+    # 「用s5注册（」「2F有车吗」「E4呢」：两位的「字母+数字」被认成线号，可整句没写「路/线/号」、
+    # 也没城市名，不知道是哪座城的线，答了只会是「没查到 2F，玉林这边有的是…」
+    # （G02 / M470 / 聊城KS7 这种带多位数字的仍算线号）
+    if re.search(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,2}\d|\d{1,2}[A-Za-z])(?![A-Za-z0-9])", msg) \
+            and not re.search(r"路|线|号", msg) and not detect_city(msg, "", "")[1]:
         return False
     return bool(ASK.search(msg)) or not CHAT.search(msg)
 
