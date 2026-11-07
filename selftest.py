@@ -1067,6 +1067,21 @@ query._catalog, query._live_my = _cat4, _lm4
 
 # BRT 的叫法：「北京BRT4」不能落成通州的「T4」（那是另一条线），目录里叫「快速公交4线」。
 # 前缀粘着字母的线名（T4）也不该在「BRT4」里被认出来
+# 目录把一个名字写两条线（连云港「B1路/B1路夜」、郑州「888路/郑州-中牟」）：问 B1 要命中它，
+# 不能被同城的 B11/B12K/B1K 那堆前缀候选顶成「没这条线」
+assert query._slash_parts("B1路/B1路夜") == ["B1", "B1夜"]
+assert query._slash_parts("888路/郑州-中牟") == ["888", "郑州-中牟"]
+_cat6, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": n, "upperOrDown": "1", "from": "A", "to": "B"}
+    for n in ("B1路/B1路夜", "B11路", "B12K线", "B13路", "B1K线")]}
+_pk = query._pick([(r["lineName"], r) for r in query._catalog("x")["buslines"]], "B1")
+assert [n for n, _ in _pk] == ["B1路/B1路夜"], _pk
+assert [n for n, _ in query._pick([(r["lineName"], r) for r in query._catalog("x")["buslines"]], "B11")] == ["B11路"]
+_r6 = query.render("连云港", "B1", {"source": "掌上公交", "line": "B1路/B1路夜",
+    "groups": [("在海一方公园", [("苏GA9356", "光明小区", 61, "")])], "note": ""})
+render_pick = _r6.startswith("有，B1路 现在 1 辆在路上"), _r6
+query._catalog = _cat6
+assert render_pick[0], render_pick[1]
 # 「北京BRT4」得进快路：BUS_RE 不认它的时候整个由模型决定要不要调工具，群里就是「查不出来」
 assert query.BUS_RE.search("北京BRT4") and query.BUS_RE.search("厦门BRT1")
 assert query.BUS_RE.search("北京快速公交4线") and query.BUS_RE.search("乌鲁木齐BRT2")

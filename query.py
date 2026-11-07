@@ -166,6 +166,14 @@ def norm_city(name):
     return short if len(short) >= MIN_CITY_KEY else s
 
 
+def _slash_parts(name):
+    """目录里一个名字写两条线时（连云港「B1路/B1路夜」、郑州「888路/郑州-中牟」），斜杠两边各算一条。
+
+    返回各段的归一化名，问「B1」就靠它命中「B1路/B1路夜」。
+    """
+    return [norm_line(x) for x in re.split(r"[/／]", name or "") if x.strip()]
+
+
 # BRT 的叫法三家各写各的：车来了北京叫「快速公交4线」、掌上厦门叫「BRT1号线」，
 # 群里人写「BRT4」「快速公交4」「快4」。同一个号，得互相认得，否则
 # 「北京BRT4」只能靠模糊匹配落到通州的 T4 路上（假答案）
@@ -464,6 +472,11 @@ def _pick(catalog, want):
     exact = [c for c in catalog if norm_line(c[0]) == want]
     if exact:
         return exact
+    # 一个名字里写着两条线：连云港把昼夜两班写在一起「B1路/B1路夜」，郑州「888路/郑州-中牟」
+    # 是两城联营。斜杠两边各自算全等，问「B1」要命中它，不能被下面那堆 B11/B12/B1K 顶掉
+    seg = [c for c in catalog if want in _slash_parts(c[0])]
+    if seg:
+        return seg
     # 目录把号写在括号里（「大容山旅游专线（28路）」），归一化时括号连同号一起被剥掉，
     # 拿裸号 28 去比永远「没这条线」
     if want.isdigit():
@@ -972,6 +985,12 @@ def render(city_key, want, res, veh="", dir=""):
             return f"没查到「{want}」这条线" + (f"，{city_key}这边有的是 {near}" if near else "")
         return e                                      # 其余文案本身已经是人话
     line = res["line"]
+    # 目录把两条线写在一个名字里（连云港「B1路/B1路夜」）：用户问的是哪一段就写哪一段，
+    # 抬头直接甩「B1路/B1路夜 现在 6 辆」像在读目录
+    if "/" in line or "／" in line:
+        parts = [p.strip() for p in re.split(r"[/／]", line) if p.strip()]
+        shown = next((p for p in parts if norm_line(p) == norm_line(want)), "")
+        line = shown or parts[0]
     # 车来了目录里的线名是裸号（湛江「9」），群里念出来像半句话：大陆的加个「路」，
     # 香港/澳门的线号本来就不带「路」（506、B8）
     if line.isdigit() and norm_city(city_key) not in ("香港", "澳门"):
