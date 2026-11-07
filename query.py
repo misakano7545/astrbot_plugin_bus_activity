@@ -190,6 +190,26 @@ def brt_alias(want):
     return [x for x in dict.fromkeys(out) if x != norm_line(want)]
 
 
+def _place_head(msg):
+    """线号前面那个词是不是地名（不是站名）：「惠州博罗233路」的「博罗」、「安宁区8路」的「安宁区」。
+
+    博罗这类县名不带区/县后缀，光看后缀认不出；拿它当站名搜会命中「博罗天虹」，
+    然后回一句「233路 不经过博罗天虹」——问车的人读这个没意义。
+    """
+    head = re.split(r"\d", (msg or "").strip(), 1)[0].strip()
+    head = re.sub(r"^(?:帮我|麻烦|请问|问一下|查一下|查下|看看|看一下|查询)", "", head).strip()
+    if not head:
+        return False
+    if head.endswith(("区", "县")):
+        return True
+    rest = head
+    for k in sorted(cities(), key=len, reverse=True):
+        if rest.startswith(k):
+            rest = rest[len(k):]
+            break
+    return bool(rest) and (rest in DIST_BARE or rest in DISTRICTS or rest in cities())
+
+
 def _district_city(text):
     """「元氏火车站」里带的是裸县名：翻成所在地级市，比落回默认城强。"""
     hits = [b for b, v in DIST_BARE.items() if v and b in (text or "")]
@@ -982,7 +1002,12 @@ def render(city_key, want, res, veh="", dir=""):
                 return ghost
             # 光说「没查到」，模型就会自己解释成「这个数据源没有这城市的线路」（泉州 K502 就是这样）
             near = _near(city_key, want)
-            return f"没查到「{want}」这条线" + (f"，{city_key}这边有的是 {near}" if near else "")
+            # 线名自带地名（博罗233）时，近似线名也在那个地名下面（博罗1路…），
+            # 说「惠州这边有的是」会被读成全惠州的线，写「博罗这边」才对得上
+            head = re.match(r"[^\d]{2,4}", want)
+            where = (head.group(0) if head and near and all(
+                n.startswith(head.group(0)) for n in near.split("、")) else city_key)
+            return f"没查到「{want}」这条线" + (f"，{where}这边有的是 {near}" if near else "")
         return e                                      # 其余文案本身已经是人话
     line = res["line"]
     # 目录把两条线写在一个名字里（连云港「B1路/B1路夜」）：用户问的是哪一段就写哪一段，
@@ -1917,6 +1942,10 @@ def render_at(city_key, city_name, want, msg, veh="", tally=None, at=""):
     # 「安宁区8路」「东胜区 8路 夜班车」：线号前面那个词是行政区名，不是站名。
     # 拿它去匹会匹到「安宁区医院」「东胜区党校」，然后答一句「8路 不经过…」——用户问的是车
     if re.split(r"\d", msg.strip(), 1)[0].strip().endswith(("区", "县")):
+        return None
+    # 「惠州博罗233路」：博罗是县名，可它不带区/县后缀（上和上面那条查的同一个坑）。
+    # 拿「博罗」搜站会命中「博罗天虹」，然后答「233路 不经过博罗天虹」——用户问的是车
+    if _place_head(msg):
         return None
     if not station_name:
         return None
@@ -3104,9 +3133,17 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
             return cat.get("msg") or ""
         # 前缀被 PREFIX_RE 截短过（「新乐专1路」→「庄新乐专」），目录里有真线名就用真的
         # 点名单（「城巴1」）时不能纠：香港掌上目录里只有一个 1 路（九巴的），纠过去就答错公司
-        full = None if op else _exact_line(name, msg, num, city_key)
+        # 「博罗233路」也不能纠：句子里那个「233路」是惠城—惠阳的线，博罗没有 233，
+        # 纠过去就把同城的另一条线当成博罗的车报（跟县级市那条分支一个道理）
+        county_ns = bool(prefix) and norm_city(prefix) != city_key and any(
+            (r.get("lineName") or "").startswith(prefix) for r in cat.get("buslines") or [])
+        full = None if (op or county_ns) else _exact_line(name, msg, num, city_key)
         if full:
             wants = [norm_line(full)]      # wants 里存的向来是归一化后的号
+        if county_ns:
+            # 目录里这个县的线路自成一套（博罗1路、博罗222路…）：只认带县名的写法，
+            # 裸号是同城的另一条线，不能拿来顶
+            wants = [w for w in wants if w.startswith(prefix)] or [prefix + num]
     last["line"] = wants[0]
     # 「2路到汽车总站叫我」：答应了就得真在后台盯着，别只给一句实时就完
     if key and name and WATCH_RE.search(msg):
@@ -3162,6 +3199,15 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
     # 那是别的城市的同号车，别拿本城的 1 路顶掉，也别回「没查到「1」」；这名字自己看不出城市，问
     w = _written_name(msg, wants[0]) if city_key not in msg else ""
     if w and (txt.startswith("没查到") or norm_line(w) != norm_line(str(res.get("line") or ""))):
+        # 「博罗233路」：博罗是惠州的下辖县，问题不在「这是哪座城市的线」，
+        # 而是博罗自己没有 233 路（惠州 233 路跑的是惠城—惠阳那边）
+        host = _district_city(w)
+        if host and norm_city(host) == city_key:
+            own = [r["lineName"] for r in (_catalog(name or "") or {}).get("buslines") or []
+                   if (r.get("lineName") or "").startswith(w.rstrip("路" + "线"))]
+            return (f"{w.rstrip('路') if w.endswith('路') else w} 在{norm_city(host)}没有这条线"
+                    + (f"；{norm_city(host)}{w[:2]}这边有的是 {'、'.join(dict.fromkeys(own))}" if own[:4] else "")
+                    + ("" if own else f"（{norm_city(city_key)}目录里是另一条同号的线，别混了）"))
         return (f"「{w}」{norm_city(city_key)}这边没这条，这是哪座城市的线？"
                 f"带上城市名我再查（像「广州{w}」）")
     # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
@@ -3232,6 +3278,14 @@ def answer(msg, default_city, ctx="", key=""):
     # 「泉州公交11路」「泉州公交K502」：前缀截到的是「泉州公交」，去掉「公交」才是城市名，
     # 留着就会拼成「泉州公交K502」这种不存在的线
     prefix = re.sub(r"公交$", "", prefix)
+    # 「惠州博罗233路」：前缀里粘着城市名（惠州 + 博罗县），线名里只写县名。
+    # 不剥掉会拼成「惠州博罗233」命中不了，还会把「博罗」当站名，答成「233路 不经过博罗天虹」
+    for _ck in sorted(cities(), key=len, reverse=True):
+        _rest = prefix[len(_ck):]
+        if prefix.startswith(_ck) and len(_rest) >= 2 and (
+                _rest in DIST_BARE or _rest in DISTRICTS or _district_city(_rest)):
+            prefix = _rest
+            break
     # 「济宁城际公交C601a路」的「城际」是叫法不是线名（目录里叫 C601路），留着会答成「没查到「城际C601A」」
     if prefix in ("城际", "城乡", "市郊", "城市", "市域"):
         prefix = ""

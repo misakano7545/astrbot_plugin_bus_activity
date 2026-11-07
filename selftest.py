@@ -1067,6 +1067,27 @@ query._catalog, query._live_my = _cat4, _lm4
 
 # BRT 的叫法：「北京BRT4」不能落成通州的「T4」（那是另一条线），目录里叫「快速公交4线」。
 # 前缀粘着字母的线名（T4）也不该在「BRT4」里被认出来
+# 「惠州博罗233路」：博罗是惠州下辖县，不是站名。以前拿「博罗」搜站命中「博罗天虹」，
+# 回一句「233路 不经过博罗天虹」——惠州 233 路跑的是惠城—惠阳，跟博罗没关系
+_cit8, query.cities = query.cities, lambda: {"惠州": {"mygolbs": "惠州市"}}
+assert query._place_head("惠州博罗233路") and query._place_head("博罗233路")
+assert query._place_head("安宁区8路")
+assert not query._place_head("玉林火车站9路")     # 真站名照样当站问
+assert not query._place_head("玉林9路")
+_p11, query.pick_stop = query.pick_stop, lambda cn, m: "博罗天虹"   # 上游只有名字相近的站
+assert query.render_at("惠州", "惠州市", "233", "惠州博罗233路") is None
+assert query.render_at("惠州", "惠州市", "233", "我在博罗天虹等233路")
+query.pick_stop = _p11
+query.cities = _cit8
+_cat7, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": n, "upperOrDown": "1", "from": "A", "to": "B"}
+    for n in ("233路", "博罗1路", "博罗128路", "博罗222路")]}
+# 县名自成一套时别拿同城裸号顶：「博罗233」不是「233路」
+assert [n for n, _ in query._pick([(r["lineName"], r) for r in query._catalog("x")["buslines"]],
+                                  "博罗233")] == []
+assert [n for n, _ in query._pick([(r["lineName"], r) for r in query._catalog("x")["buslines"]],
+                                  "博罗128")] == ["博罗128路"]
+query._catalog = _cat7
 # 目录把一个名字写两条线（连云港「B1路/B1路夜」、郑州「888路/郑州-中牟」）：问 B1 要命中它，
 # 不能被同城的 B11/B12K/B1K 那堆前缀候选顶成「没这条线」
 assert query._slash_parts("B1路/B1路夜") == ["B1", "B1夜"]
