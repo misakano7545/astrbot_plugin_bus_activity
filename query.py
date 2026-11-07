@@ -284,6 +284,12 @@ def looks_like_ask(msg):
     if re.search(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,2}\d|\d{1,2}[A-Za-z])(?![A-Za-z0-9])", msg) \
             and not re.search(r"路|线|号", msg) and not detect_city(msg, "", "")[1]:
         return False
+    # 「微信ZFB收眯 一天8OO0」：广告把 O 当 0 写，「8OO0」被 ALPHA_PAT 当成线号，
+    # 整句没问法词也没闲聊词就落进兜底。数字和字母混排的（8OO0/9999x/9KB/3D打印/5G网络/601B2）
+    # 没公交字眼也没城市名就不是问公交；G02/M470/DK401 字母开头的线号不受影响
+    if re.search(r"(?<![A-Za-z0-9])\d+[A-Za-z]+\d*(?![A-Za-z0-9])", msg) \
+            and not re.search(r"路|线|号|[站车]|公交|地铁", msg) and not detect_city(msg, "", "")[1]:
+        return False
     return bool(ASK.search(msg)) or not CHAT.search(msg)
 
 

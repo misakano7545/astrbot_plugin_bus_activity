@@ -543,6 +543,11 @@ assert query.find_stop("玉林市", "税局") == (query._merge_same(
     {"stationName": "市税务局", "relatedRoutes": ["9路"]}), "市税务局")
 assert query.find_stop("玉林市", "车站") == (None, "车站")     # 整个词都是通用字，不认
 query.stops = _st3
+# 「微信ZFB收眯 一天8OO0」：广告拿 O 冒 0，8OO0 被 ALPHA_PAT 当线号，整句没问法没闲聊词就兜底答站
+assert not query.looks_like_ask("微信ZFB收眯 一天8OO0")
+assert not query.looks_like_ask("收8OO0")
+assert query.looks_like_ask("G02现在有车吗")            # 字母开头的线号不受影响
+assert query.looks_like_ask("佛山614A有车吗")           # 有城市名+问法的照旧
 # 上一条问过 9 路，再来一句带站点的「车来了查XX校区」：别拿上一条的线路号答
 _ql, _cit2, _rst = query.query, query.cities, query.render_stop
 query.cities = lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
