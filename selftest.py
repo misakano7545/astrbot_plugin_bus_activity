@@ -520,6 +520,10 @@ assert query.answer("晚上吃点啥呢", "玉林市") == ""
 query._up_fail[0] = _uf
 # 「车来了查X校区的线路」：数据源和动词不能留在站名里；点名车来了就扫车来了的站表
 assert list(query._cands("玉林市", "车来了查广西医科大玉林校区的线路")) == ["广西医科大玉林校区"]
+# 「那你去查南宁朝阳广场的公交线路」：LEAD 只剥开头，「那」「你」剥完才露出「去查」；
+# 裸「查」也得剥（「查桥站」这种真站名不剥：后面不到 4 个字）
+assert "南宁朝阳广场" in list(query._cands("南宁市", "那你去查南宁朝阳广场的公交线路"))
+assert list(query._cands("无锡市", "查桥站有哪些公交")) == ["查桥站"]
 # 「玉林北站有哪几路车」：城市名剥掉只剩「北站」搜不到，得再拿原样那句试一次
 _st2 = query.stops
 query.stops = lambda cn, kw: [{"stationName": "玉林北站", "relatedRoutes": ["G01路"]}] if kw == "玉林北站" else []
