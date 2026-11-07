@@ -1220,6 +1220,10 @@ _nb = query.render_fleet("北流", "北流市", "105")
 query._catalog = _oc
 assert "北流105路 建档了 1 种车型：甲 X1" in _nb, _nb
 assert _seen_r == ["玉林市"], _seen_r      # 落父城、且用带「市」的名字（fleet 按这个字符串筛）
+# 「用车来了查」只点了源名：上一条的线得接着用（源名剥空 = 追问上一条），没有就反问
+# （返空会让模型自己编一份「车来了这边只有 3 条」）
+assert query.answer("用车来了查", "玉林市", "", "zz-src") == "查哪条线？报个线名，我换个源再查"
+assert "查哪条线" not in (query.answer("车来了", "玉林市", "", "zz-src") or "")
 # 「安宁12」两家实时都没收，可这条线真实存在：不能回「没这条」
 _bp2 = types.SimpleNamespace(
     region_id=lambda cn: 34,

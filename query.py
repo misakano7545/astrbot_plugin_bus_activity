@@ -3086,7 +3086,9 @@ def answer(msg, default_city, ctx="", key=""):
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车。
     # 但「用车来了查化州-湛江线」也带「查」，那是点名的另一条文字线名（parse 认不出带「-」的），
     # 当成追问上一条就会答成上一轮的 506——只有指着上一条说（这个/那条）或整句只剩追问词时才续
-    _bare = re.sub(r"[看查询数据接口一下怎么样呢吗的了，。？?！!\s]", "", SRCPRE.sub("", raw))
+    # 源名本身也要剥：「用车来了查」剥完是空的，就是「换个源再问一遍上一条」
+    _bare = re.sub(r"[看查询数据接口一下怎么样呢吗的了，。？?！!\s]", "",
+                   re.sub(r"用车来了|车来了|掌上公交|掌上|巴士派迪|派迪", "", SRCPRE.sub("", raw)))
     inherited = False
     if src and not line and last.get("line") and re.search(r"看|查|数据|接口", raw) and (
             re.search(r"这个|那个|这条|那条|该线|这路|那路", raw) or len(_bare) <= 3):
@@ -3370,4 +3372,8 @@ def answer(msg, default_city, ctx="", key=""):
                 return f"「{hint}」是哪座城的线？说个城市名我再查"
     # 这一句只给「刚刚真的没连上、而且问的是公交」的情况：以前按时间窗判断，
     # 任何一句闲聊都会收到「上游没响应」，成了「彻底变成问公交工具」的由来
+    # 「用车来了查」只点了源名、没线名，上一条也没留下线：反问一句。
+    # 返空的话模型会自己编一份「车来了这边只有 3 条」（07:19 那次就是）
+    if src and not line and not _bare and re.search(r"查|看|用|一下", raw):
+        return "查哪条线？报个线名，我换个源再查"
     return "上游这会儿没响应，过会儿再问" if (BUS_RE.search(msg) and _up_fail[0] >= t0) else ""
