@@ -298,6 +298,29 @@ assert not _g9["unknown"] and "上游不给" not in _g9["note"], _g9
 query._window = _w0
 query._live_my, query._first_last, query._station_seq, query._catalog = _lm, _fl, _seq, _cat
 
+# 「河池20路」：这线就一辆车在跑（07:00–17:00 / 08:00–18:00），车回场待发那阵两家同时看不到它，
+# 只回「线路还在跑，只是车机没报位置」被群友读成「查不到」。把两个方向的首末班带上自证
+assert query._hours_note([("岜仑路口", "07:00", "17:00"), ("龙江桥头", "08:00", "18:00")]) \
+    == "往岜仑路口 07:00–17:00、往龙江桥头 08:00–18:00"
+assert query._hours_note([]) == ""
+assert query._hours_note([("A", "07:00", ""), ("B", "08:00", "18:00")]) == "往B 08:00–18:00"
+_lm, _fl, _cat = query._live_my, query._first_last, query._catalog
+_w0, query._window = query._window, lambda f, l: "open"     # 在运营窗口内才走这条路
+query._live_my = lambda c, n, d, order=1: {"status": "1", "hasReal": "1",
+                                           "msg": "获取实时数据成功", "list": []}
+query._first_last = lambda c, l, d: ("07:00", "17:00") if d == "1" else ("08:00", "18:00")
+query._catalog = lambda c: {"buslines": [
+    {"lineName": "20路", "upperOrDown": "1", "from": "龙江桥头", "to": "岜仑路口"},
+    {"lineName": "20路", "upperOrDown": "2", "from": "岜仑路口", "to": "龙江桥头"}]}
+_g20 = query._mygolbs("河池市", "20")
+assert _g20["note"] == "线路还在跑，只是车机没报位置（往岜仑路口 07:00–17:00、往龙江桥头 08:00–18:00）", _g20["note"]
+assert query.render("x", "20", _g20) == "20路 这会儿没车，" + _g20["note"], query.render("x", "20", _g20)
+# 拿不到首末班时别硬编括号，仍回原来那句
+query._first_last = lambda c, l, d: ("", "")
+assert query._mygolbs("河池市", "20")["note"] == "线路还在跑，只是车机没报位置"
+query._window = _w0
+query._live_my, query._first_last, query._catalog = _lm, _fl, _cat
+
 # issue #8：前缀是线路名的一部分，明写城市也不丢；前缀自己就是城市时以它为准
 _cap, _q = [], query.query
 query.query = lambda ck, wants, src=None, veh="": (_cap.append((ck, wants)), {"error": "没这条线路"})[1]

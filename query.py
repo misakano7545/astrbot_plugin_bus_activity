@@ -647,6 +647,16 @@ def _window_note(w):
                                    for lab, f, l, _ in rows)
 
 
+def _hours_note(w):
+    """[(方向名, 首班, 末班)] → 「往岜仑路口 07:00–17:00、往龙江桥头 08:00–18:00」。
+
+    没车时那句「线路还在跑」太空：「河池20路」只有一辆车，回场待发那阵两家都看不到它，
+    只回「没车」会被读成查不到。带上两个方向的首末班，至少知道它什么时候有班。
+    """
+    return "、".join((f"往{lab} " if lab else "") + f"{f}–{l}"
+                    for lab, f, l in w if f and l)
+
+
 _seq_payload = mygolbs.seq_payload
 _first_last = mygolbs.first_last
 _price = mygolbs.price
@@ -756,6 +766,12 @@ def _mygolbs(city_name, want):
             note = _wn
         elif live_known:
             note = "线路还在跑，只是车机没报位置"
+            # 「河池20路」这种定班线就一辆车在跑，车回场待发时两家同时看不到它，
+            # 只回一句「没车」群友读成「查不到」。把两个方向的首末班带上，
+            # 至少能自证这条线在、什么时候有班（实测 20 路 07:00–17:00 / 08:00–18:00）
+            hours = _hours_note(wins)
+            if hours:
+                note += "（" + hours + "）"
     return {"source": "掌上公交", "line": hit[0][1]["lineName"], "groups": groups,
             "note": note, "unknown": unknown, "pos": pos}
 
