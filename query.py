@@ -1231,6 +1231,17 @@ def render(city_key, want, res, veh="", dir=""):
             ghost = render_ghost(city_key, (cities().get(city_key) or {}).get("mygolbs"), want)
             if ghost:
                 return ghost
+            # 「河池606路」：目录里它叫「宜州606路（快班）」/「（普班）」——号是对的，只是多了县名和
+            # 快慢班。回「没查到 606 这条线」是假话（明明有两条）。按号挑出来让用户选，
+            # 只有一条就直接答
+            tail = _number_tails(city_key, want)
+            if len(tail) == 1:
+                one = tail[0]
+                return render(city_key, norm_line(one), query(city_key, [norm_line(one)]))
+            if len(tail) > 1:
+                shown = "、".join(tail)
+                return (f"{city_key}这边 {want + '路' if want.isdigit() else want} 有 {len(tail)} 条："
+                        f"{shown}。要哪条？带上快慢班或者直接写全名我就查")
             # 光说「没查到」，模型就会自己解释成「这个数据源没有这城市的线路」（泉州 K502 就是这样）
             near = _near(city_key, want)
             # 线名自带地名（博罗233）时，近似线名也在那个地名下面（博罗1路…），
@@ -1307,6 +1318,35 @@ def render(city_key, want, res, veh="", dir=""):
     return "\n".join(rows)
 
 
+def _number_tails(city_key, want):
+    """本城目录里号对得上、只是多了地名/快慢班前缀后缀的线名。
+
+    「河池606路」→ 宜州606路（快班）、宜州606路（普班）；「河池603路」→ 宜州603路。
+    号码要是一个完整的号（两侧不粘数字），后面最多跟一个「快/普」，别把 18 当成 8。
+    """
+    w = norm_line(want)
+    if not w:
+        return []
+    name = (cities().get(city_key) or {}).get("mygolbs")
+    rows = (_catalog(name).get("buslines") or []) if name else []
+    out = []
+    for r in rows:
+        ln = r.get("lineName") or ""
+        n = norm_line(ln)
+        if not n or n == w:
+            continue
+        i = n.find(w)
+        while i >= 0:
+            before_ok = i == 0 or not (n[i - 1].isdigit() and w[:1].isdigit())
+            rest = n[i + len(w):]
+            if before_ok and rest in ("", "快", "普"):
+                if ln not in out:
+                    out.append(ln)
+                break
+            i = n.find(w, i + 1)
+    return out
+
+
 def _ask_name(want, line):
     """没车这句的抬头按用户问的号写。
 
@@ -1323,7 +1363,8 @@ def _ask_name(want, line):
         # 只在地名前缀上括注（金城江15）；「双誉公交C61」那种公司前缀不加，
         # 那是同一条线的运营方，括起来只是噪音。按归一化后的名字算前缀长度，
         # 「金城江K2」减「K2」正好是「金城江」，别拿原串长度去截（「路」字会错位）
-        if _is_place(ln[: len(ln) - len(wl)]):
+        # 线名自己已经带括号说明（「宜州606路（快班）」）时也别再套一层
+        if "（" not in line and "(" not in line and _is_place(ln[: len(ln) - len(wl)]):
             # 「K2」这类纯字母数字的线号，群里念的时候都带「路」（K2路、M372路）
             shown = want + "路" if re.fullmatch(r"[A-Za-z0-9]+", want) else want
             return f"{shown}（{line}）"

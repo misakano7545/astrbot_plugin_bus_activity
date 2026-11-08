@@ -1155,6 +1155,23 @@ _st = {"source": "掌上公交", "line": "8路", "groups": [("御景龙庭", [])
 _t11 = query.render("河池", "8", _st)
 assert _t11.startswith("8路 的实时车这会儿没取到") and "这会儿没车" not in _t11, _t11
 query.chelaile, query.cities, query._catalog = _cl11, _cit11, _cat11
+# 「河池606路」：号是对的，目录里叫「宜州606路（快班）」/「（普班）」。回「没查到 606 这条线」
+# 是假话——明明有两条。按号挑出来让用户选；只有一条就直接答（河池603 → 宜州603路）
+_cat14, _cit14 = query._catalog, query.cities
+query.cities = lambda: {"河池": {"mygolbs": "河池市"}}
+query._catalog = lambda cn: {"buslines": [
+    {"lineName": n, "upperOrDown": "1", "from": "A", "to": "B"}
+    for n in ("宜州606路（快班）", "宜州606路（普班）", "宜州603路", "金城江18", "金城江8")]}
+assert [n for n in query._number_tails("河池", "606")] == ["宜州606路（快班）", "宜州606路（普班）"]
+assert query._number_tails("河池", "603") == ["宜州603路"]
+assert query._number_tails("河池", "8") == ["金城江8"]        # 金城江18 不算 8
+assert query._number_tails("河池", "18") == ["金城江18"]
+assert query._number_tails("河池", "607") == []
+_t14 = query.render("河池", "606", {"error": "没这条线路"})
+assert "606路 有 2 条" in _t14 and "快班" in _t14 and "普班" in _t14, _t14
+query._catalog, query.cities = _cat14, _cit14
+# 线名自己带括号说明时别再套一层：「宜州606路（快班）」不要写成「606快（宜州606路（快班））」
+assert query._ask_name("606快", "宜州606路（快班）") == "宜州606路（快班）"
 # 快慢班：掌上把定性词写进括号「宜州606路（快班）」，车来了写尾巴「宜州606路快线」，
 # 用户写「宜州606快线」。以前括号连同「快班」一起剥掉，快慢两条线都变成「宜州606」，
 # 谁都不等，转去车来了又只有 -5，于是答成「查不到实时车」——可掌上明明有 3 辆车
