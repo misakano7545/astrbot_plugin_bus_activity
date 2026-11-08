@@ -776,6 +776,18 @@ def _chelaile(city_id, want):
     # state=-5 是「这城根本不给实时车辆」：北京全城都是 -5（1路/52路/300快内/快速公交1线
     # 一起验过），desc 只剩「首班…末班…」。当成「这会儿没车」报是假消息（BRT4 19:26 明明在跑），
     # 照实说上游不给车辆位置，把时刻表和站数补上
+    if states and all(s == -2 for s in states) and not any(g for _, g in groups):
+        # -2 = 临时停运/暂无车辆时间（河池金城江15 就是这样）：desc 原文「暂无车辆时间」
+        # 直接甩给群友等于没说，先把状态说清，再看能不能补站数
+        n = 0
+        if hit_ids:
+            try:
+                n = len(chelaile.stations(city_id, next(iter(hit_ids.values()))))
+            except Exception:
+                n = 0
+        res["paused"] = True
+        res["note"] = ("车来了那边这条线标的是" + (f"「{desc}」" if desc else "「临时停运」")
+                       + "（停运状态）" + (f"，这条线 {n} 站" if n else ""))
     if states and all(s == -5 for s in states) and not any(g for _, g in groups):
         res["unknown"] = True
         ck = next((k for k, v in cities().items() if (v or {}).get("chelaile") == city_id), "")
@@ -876,6 +888,29 @@ def _union(a, b):
     return dict(a, groups=groups, source=f'{a["source"]}+{b["source"]}')
 
 
+def _merge_blank(a, others):
+    """两家都没车时把两家的说法合起来。
+
+    河池 15 路：掌上「线路还在跑，只是车机没报位置」+ 车来了「暂无车辆时间」（临时停运）。
+    只留先到的那家，等于把另一家的信息丢掉——哪家先挂全看当时网络。
+    """
+    notes = []
+    for r in [a] + list(others):
+        note = (r.get("note") or r.get("desc") or "").strip()
+        if note and note not in notes:
+            notes.append(note)
+    # 一家说「临时停运」、另一家说「线路还在跑只是没报位置」，两句放一起就是自相矛盾。
+    # 停运是更强的信号（车来了按发车计划判的），留它一句，别把"还在跑"也念出来
+    if any("停运" in n for n in notes):
+        notes = [n for n in notes if not re.search(r"线路还在(?:跑|运营)", n)] or notes
+    out = dict(a)
+    if notes:
+        out["note"] = "；".join(notes)
+    # 全城都不给实时才算 unknown：另一家只是这条线没数据时别栽给整城
+    out["unknown"] = bool(a.get("unknown")) and all(r.get("unknown") for r in others)
+    return out
+
+
 def query(city_key, wants, src=None, veh=""):
     """两家依次试，都有车就按 GPS 合起来报（一家可能少报一两辆）。
 
@@ -885,6 +920,7 @@ def query(city_key, wants, src=None, veh=""):
     """
     ent = cities().get(city_key) or {}
     tried, blank, near, fallback, others, best, second = [], None, None, None, {}, None, None
+    blanks = []
     order = ("chelaile", "mygolbs") if PREFER_CL.get(city_key) else ("mygolbs", "chelaile")
     if src:
         order = (src,) + tuple(s for s in order if s != src)
@@ -935,12 +971,17 @@ def query(city_key, wants, src=None, veh=""):
                 # 掌上这座城没实时（unknown），记下来，下一问直接先问车来了
                 if got.get("unknown") and ent.get("chelaile"):
                     PREFER_CL[city_key] = True
-                blank = blank or got
+                # 两家都没车时两家的说法都要留着：河池 15 路掌上一挂，
+                # 就只剩车来了那句「暂无车辆时间」，首末班和站数全丢了
+                if blank is None:
+                    blank = got
+                else:
+                    blanks.append(got)
         if best:
             if second:
                 break
         elif blank:
-            return blank           # 有这条线，只是当下两端都没车
+            return _merge_blank(blank, blanks) if blanks else blank   # 有这条线，只是当下两端都没车
     if not ent:
         # 城市表里没这个键：要么名字写错，要么两家都不覆盖，别把话说成「两家都没有」
         return {"error": "这个城市名没认出来，写全称或把城市补在路线前面试试"}
@@ -1119,7 +1160,10 @@ def render(city_key, want, res, veh="", dir=""):
             return (f"{line} 没有实时车辆位置，地铁不上报车机"
                     + (f"；{n}" if n else "，站表和首末班能查"))
         tail = res.get("note") or res.get("desc") or ""
-        head = f"{line} 查不到实时车" if res.get("unknown") else f"{line} 这会儿没车"
+        # 抬头写用户问的那个号：「河池15路」别答成「金城江15」（目录名多带了个地名，
+        # 群友会以为查的是另一条线）
+        head = _ask_name(want, line)
+        head = f"{head} 查不到实时车" if res.get("unknown") else f"{head} 这会儿没车"
         return head + ("，" + tail if tail else "")
     multi = sum(1 for _, b in groups if b) > 1      # 只有一个方向有车时不念空方向
     many = len(groups) > 4                          # 支线网络，空方向属于噪音
@@ -1133,6 +1177,27 @@ def render(city_key, want, res, veh="", dir=""):
             continue
         rows.append((f"往{label}：" if label else "") + "，".join(_car(*b) for b in buses))
     return "\n".join(rows)
+
+
+def _ask_name(want, line):
+    """没车这句的抬头按用户问的号写。
+
+    河池目录里叫「金城江15」，群友问的是「河池15路」——抬头直接写「金城江15」会让人以为
+    查的是另一条线。目录名只是多带了地名前缀时，写成「15路（金城江15）」把两边的说法都留着；
+    完全不同的叫法（BRT4 ↔ 快速公交4线）就照目录写，那是同一个号的不同写法。
+    """
+    if not want:
+        return line
+    wl, ln = norm_line(want), norm_line(line or "")
+    if not wl or wl == ln:
+        return line
+    if ln.endswith(wl) and len(ln) > len(wl):
+        # 只在地名前缀上括注（金城江15）；「双誉公交C61」那种公司前缀不加，
+        # 那是同一条线的运营方，括起来只是噪音
+        extra = line[: len(line) - len(want)]
+        if _is_place(extra):
+            return f"{want + '路' if want.isdigit() else want}（{line}）"
+    return line
 
 
 def _near(city_key, want, n=4):

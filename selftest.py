@@ -1126,6 +1126,36 @@ _r6 = query.render("连云港", "B1", {"source": "掌上公交", "line": "B1路/
 render_pick = _r6.startswith("有，B1路 现在 1 辆在路上"), _r6
 query._catalog = _cat6
 assert render_pick[0], render_pick[1]
+# 「河池15路」：目录里叫「金城江15」（金城江是河池市区）。抬头不能直接甩目录名，
+# 也不能给公司前缀加括号（双誉公交C61 是同一条线的运营方，括起来只是噪音）
+assert query._ask_name("15", "金城江15") == "15路（金城江15）"
+assert query._ask_name("C61", "双誉公交C61") == "双誉公交C61"
+assert query._ask_name("9", "9路") == "9路"
+assert query._ask_name("BRT4", "快速公交4") == "快速公交4"
+# 两家都没车时两家的话都得留着；但「临时停运」和「线路还在跑」放一起自相矛盾，留停运那句
+_mb = query._merge_blank(
+    {"source": "掌上公交", "line": "15路", "groups": [("A", [])], "note": "线路还在跑，只是车机没报位置"},
+    [{"source": "车来了", "line": "金城江15", "groups": [("B", [])],
+      "note": "车来了那边这条线标的是「暂无车辆时间」（停运状态），这条线 30 站"}])
+assert "停运" in _mb["note"] and "线路还在跑" not in _mb["note"], _mb["note"]
+_mb2 = query._merge_blank(
+    {"source": "掌上公交", "line": "9路", "groups": [("A", [])], "note": "线路还在跑，只是车机没报位置"},
+    [{"source": "车来了", "line": "9", "groups": [("B", [])], "desc": "本线路末班时间已过"}])
+assert "末班时间已过" in _mb2["note"] and "还在跑" in _mb2["note"], _mb2["note"]
+# 车来了 state=-2（临时停运/暂无车辆时间）：desc 原文甩给群友等于没说
+class _FakeCL2:
+    def lines(self, cid):
+        return [("金城江15", "p1"), ("金城江15", "p2")]
+    def live(self, cid, lid):
+        return {"state": -2, "desc": "暂无车辆时间", "to": "凌霄村委", "buses": []}
+    def stations(self, cid, lid):
+        return ["s"] * 30
+_cl10, _cit10 = query.chelaile, query.cities
+query.chelaile = _FakeCL2()
+_r11 = query._chelaile("300", "15")
+query.chelaile, query.cities = _cl10, _cit10
+assert _r11.get("paused") and "停运状态" in (_r11.get("note") or ""), _r11.get("note")
+assert "暂无车辆时间" in _r11["note"] and "30 站" in _r11["note"], _r11["note"]
 # 「快速公交1线」的「公交」是线名的一部分（厦门叫「快1路」）：剥掉就剩「快速」，
 # 拼成「快速1」查不到，最后落到同城的 1 路——那是另一条线
 assert query._is_place("博罗") and query._is_place("博罗县") and query._is_place("安宁")
