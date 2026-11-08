@@ -1614,9 +1614,10 @@ def _exact_line(city_name, msg, want, city_key=""):
             # 「威远3路副线」「云和1路上城门」：比裸号长的真线名整段出现在句子里。
             # 数字两侧卡边界：「玉林99路」不能被目录里的 9 路顶掉
             whole = len(n) > len(w2) and _in_line(flat, n)
-            # 「上海16号线」：目录里叫「地铁16号线」，城市名占了「地铁」的位子
+            # 「上海16号线」：目录里叫「地铁16号线」，城市名占了「地铁」的位子。
+            # 剥完得是完整的一个号：「武汉鄂101路」里的「1」不是「BRT1路」的号
             bare = _METRO_PFX.sub("", n)
-            if bare != n and (bare == flat or bare in flat):
+            if bare != n and (bare == flat or _in_line(flat, bare)):
                 whole = True
             # 「（3路支路）」这种同名不同支的，靠下面按原样名择优
             if not (n == flat or whole or n.endswith(tail) or front
@@ -1624,7 +1625,7 @@ def _exact_line(city_name, msg, want, city_key=""):
                 continue
             # 「新乐专一路」的「一」也是数字，得和 1 等价地认
             if n in flat or any(_ok(m) for m in re.finditer(_digit_pat(n), flat)) \
-                    or (bare != n and any(_ok(m) for m in re.finditer(_digit_pat(bare), flat))):
+                    or (bare != n and _in_line(flat, bare)):
                 hit.append(nm)
         return hit
 

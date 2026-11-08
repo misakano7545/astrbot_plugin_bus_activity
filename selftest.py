@@ -1077,6 +1077,19 @@ query._catalog, query._live_my = _cat4, _lm4
 
 # BRT 的叫法：「北京BRT4」不能落成通州的「T4」（那是另一条线），目录里叫「快速公交4线」。
 # 前缀粘着字母的线名（T4）也不该在「BRT4」里被认出来
+# 「武汉鄂101路」：目录里 BRT1路 的「BRT」被当成「地铁/公交」那类前缀剥掉，剥完剩「1」，
+# 而「1」又出现在 101 里面 → 把 BRT1 当成用户问的线，答成「BRT1路 有 6 辆」。
+# 剥完得是完整的一个号（两侧不粘数字）才算
+assert not query._in_line("武汉鄂101路", "1")
+assert query._in_line("上海16号", "16号")
+assert query._exact_line("上海市", "上海16号线", "16号", "上海") == "地铁16号线"
+_cat9, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": n, "upperOrDown": "1", "from": "A", "to": "B"}
+    for n in ("BRT1路", "101路-鄂州华洪公交")]}
+assert query._exact_line("武汉市", "武汉鄂101路", "101", "武汉") is None
+assert [n for n, _ in query._pick([(r["lineName"], r) for r in query._catalog("x")["buslines"]],
+                                  "101")] == ["101路-鄂州华洪公交"]
+query._catalog = _cat9
 # 「惠州博罗233路」：博罗是惠州下辖县，不是站名。以前拿「博罗」搜站命中「博罗天虹」，
 # 回一句「233路 不经过博罗天虹」——惠州 233 路跑的是惠城—惠阳，跟博罗没关系
 _cit8, query.cities = query.cities, lambda: {"惠州": {"mygolbs": "惠州市"}}
