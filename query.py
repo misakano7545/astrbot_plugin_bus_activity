@@ -1773,6 +1773,22 @@ def hop(msg):
     return a, TAIL.sub("", m.group(2)).rstrip("的了")
 
 
+def _generic_word(text):
+    """只有称呼、没有具体站名/地名：「公交」「巴士」「公交车」不是站，别拿去搜站。
+
+    玉林站表里真有个站叫「公交二车队」，拿「公交」去模糊匹就把这条线列出来了——
+    MisakaNo 在群里回了一句「公交？」，插件答「公交二车队 车来了这边有 1 条线路：…」。
+    """
+    t = re.sub(r"[，,。.？?！!、~\s啊呢吧吗的了]", "", text or "")
+    # 一层层剥：「公交车」「公交线路」剥一次还剩「车」/「线路」，得剥到不再变
+    while True:
+        r = re.sub(r"^(?:公交|巴士|地铁|轨道交通|客运|线路|车|站|台|公司|线路)", "", t)
+        if r == t:
+            break
+        t = r
+    return not t
+
+
 def _cands(city_name, msg):
     """从整句里抠出可能的站名：按标点切片，逐片砍掉「我在/坐什么」。"""
     city = norm_city(city_name)
@@ -1814,7 +1830,7 @@ def _cands(city_name, msg):
             # 「中化泉州公司」这种同名不同地的站
             core = re.sub(r"(公交)?(车?站|台)?$", "", c) or c
             if len(c) >= 2 and norm_city(c) != city and norm_city(core) != city \
-                    and not LINE_RE.search(c):
+                    and not LINE_RE.search(c) and not _generic_word(c):
                 yield c
 
 
@@ -3631,6 +3647,10 @@ def answer(msg, default_city, ctx="", key=""):
         # 「没查到「玉林那个H5」这条线」，返空让模型正常接话
         return ""
     if _about_someone(AT_RE.sub(" ", msg)):   # 只是跟别人说话（bus_query 也被模型调过）
+        return ""
+    # 「公交？」「巴士」这种只有称呼的一句，是对话里的反问，不是在问某条线/某个站。
+    # 玉林站表里有个「公交二车队」，以前会答「公交二车队 车来了这边有 1 条线路：3 红十字会医院 ↔ 公交二车队」
+    if _generic_word(msg):
         return ""
     # 微信的引用整段是 XML：真要答的那句在 <title>，被引用的话在 <refermsg><content>
     if "<refermsg>" in msg or "<appmsg>" in msg:

@@ -1543,6 +1543,21 @@ assert query.parse("北流105配车") == ("105", "北流"), query.parse("北流1
 # 「这是抓的档案站吗」只有个「站」字，不是公交问句——反问成「「这是抓的档案站」这个站没查到」就抢了闲聊
 assert query.BUS_RE.search("这是抓的档案站吗") is None
 assert query.answer("这是抓的档案站吗", "玉林市") == ""
+# 「公交？」：只有称呼的一句是对话里的反问。玉林站表里有个站叫「公交二车队」，
+# 以前拿「公交」去模糊匹站，答「公交二车队 车来了这边有 1 条线路：3 红十字会医院 ↔ 公交二车队」
+assert query._generic_word("公交？") and query._generic_word("巴士") and query._generic_word("公交车")
+assert query._generic_word("公交线路") and query._generic_word("公交。")
+assert not query._generic_word("公交二车队")      # 真站名照旧能查
+assert not query._generic_word("玉林公交公司")
+assert query.answer("公交？", "玉林市") == ""
+assert query.answer("公交", "玉林市") == ""
+# 站名里带「公交」的照旧要答（这条走车来了模糊匹站）
+_cs9, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "128"}}
+_cl9, query.chelaile = query.chelaile, types.SimpleNamespace(
+    lines=lambda cid: [("3", "l1"), ("9", "l2")],
+    stations=lambda cid, lid: ["红十字会医院", "公交二车队"] if lid == "l1" else ["火车站"])
+assert "公交二车队" in (query.render_stop("玉林", "玉林市", "公交二车队 有哪几路") or "")
+query.cities, query.chelaile = _cs9, _cl9
 assert query.LIVE_Q.search("西安930路有什么配车，现在线上几辆车")
 assert not query.LIVE_Q.search("西安930路配了几辆车"), "配了几辆车 不是问实时"
 _seen_r = []
