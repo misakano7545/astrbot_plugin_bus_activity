@@ -1190,6 +1190,30 @@ def _variants(city_key, want):
     return list(dict.fromkeys(n for n in rows if pat.fullmatch(norm_line(n))))[:4]
 
 
+def _place_gap(city_key, want):
+    """这城目录里一条带这个县区名的线都没有 → 这家数据源根本没覆盖那块。
+
+    「昆山165路」：昆山属苏州，可苏州目录 1558 条线里没有一条昆山的（车来了 1916 条也没有）。
+    只说「两家都没收这条」会被群友读成插件坏了；说清是哪块没覆盖才有用。
+    """
+    m = re.match(r"^([\u4e00-\u9fa5]{2,4})(?=\d|[A-Za-z])", want or "")
+    if not m:
+        return ""
+    place = m.group(1)
+    if norm_city(place) == norm_city(city_key):
+        return ""
+    # 得是这座城的县级市/区县：「武汉鄂101」里的「武汉鄂」不是地名
+    owner = DIST_BARE.get(place) or DISTRICTS.get(place) or ""
+    if not owner or norm_city(owner) != norm_city(city_key):
+        return ""
+    ent = cities().get(city_key) or {}
+    rows = [r.get("lineName") or "" for r in (_catalog(ent["mygolbs"]).get("buslines") or [])] \
+        if ent.get("mygolbs") else []
+    if not rows and ent.get("chelaile"):
+        rows = [n for n, _ in chelaile.lines(ent["chelaile"])]
+    return "" if any(place in n for n in rows) else place
+
+
 def render_ghost(city_key, city_name, want):
     """两家实时都没收这条线时，回落巴士派迪的建档目录。
     「安宁12」两家都没有，可这条线真实存在——回「没这条」就是把数据源缺口说成了事实错误。"""
@@ -1207,7 +1231,9 @@ def render_ghost(city_key, city_name, want):
             hit = buspedia.find_line(cid, nm) or buspedia.find_line_fuzzy(cid, nm)
             if hit:
                 l = hit[0]
-                term = (l.get("term") or [""])[0].replace("<>", " ↔ ")
+                # 建档里偶尔混进 markdown 强调（昆山165路 的 term 就是「*通医线*」）：
+                # 群里看到星号只会以为是格式坏了
+                term = (l.get("term") or [""])[0].replace("<>", " ↔ ").replace("*", "").strip()
                 if not term:
                     continue
                 if not l.get("active"):
@@ -1215,10 +1241,16 @@ def render_ghost(city_key, city_name, want):
                     if alt:
                         return (f"{l['name']} 这个号已经不跑了，同一条线现在叫 {alt}（{term}）\n"
                                 + render(city_key, norm_line(alt), query(city_key, [norm_line(alt)])))
-                if _exact_line(city_name, want, None):
+                if _exact_line(city_name, want, want):
                     # 目录里明明有这条，只是刚才实时没报上来——不能说成「两家都没收」
                     return (f"{l['name']} 这城目录里有这条线，刚才两家实时都没报来车；建档资料是 {term}"
                             "\n（首末站查得到，实时的到站时间那两家刚才没给）")
+                gap = _place_gap(city_key, want)
+                if gap:
+                    # 县市自己那套线路压根没进这城目录（昆山的线不挂在苏州目录下）
+                    return (f"{l['name']} 掌上公交和车来了都没收{gap}的线路——{gap}这块两家都没覆盖，"
+                            f"只有建档资料：{term}"
+                            "\n（首末站查得到，实时的到站时间那两家没有）")
                 return (f"{l['name']} 掌上公交和车来了都没收这条，建档资料是 {term}"
                         + ("" if l.get("active") else "（记的是已停运）")
                         + "\n（首末站查得到，实时的到站时间那两家没有）")
@@ -1876,7 +1908,9 @@ def _exact_line(city_name, msg, want, city_key=""):
                     or (head and norm_city(head) == norm_city(city_name))):
                 continue
             # 「新乐专一路」的「一」也是数字，得和 1 等价地认
-            if n in flat or any(_ok(m) for m in re.finditer(_digit_pat(n), flat)) \
+            # 边界必须卡：`n in flat` 那种裸包含会让「16」匹进「昆山165」，
+            # 于是「昆山165路」被答成「16路 这城目录里有这条线」——纯属胡认
+            if _in_line(flat, n) or any(_ok(m) for m in re.finditer(_digit_pat(n), flat)) \
                     or (bare != n and _in_line(flat, bare)):
                 hit.append(nm)
         return hit

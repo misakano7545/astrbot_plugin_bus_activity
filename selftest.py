@@ -1559,6 +1559,30 @@ query.buspedia = types.SimpleNamespace(
     models=lambda uid: [], comp_name=lambda uid: "", fleet=lambda *a, **k: [])
 assert "丙 ↔ 丁" in (query.render_ghost("佛山", "佛山市", "佛256") or "")
 assert query.render_ghost("安宁", "昆明市", "安宁99") is None
+# 「昆山165路」：苏州目录 1558 条里没有 165（车来了 1916 条也没有），可「16」正好是「165」的前半截，
+# 裸包含一匹就把 16 路认成用户问的线，还说「这城目录里有这条线」——纯属胡认
+_cc4, _cat4, _bp4 = query.cities, query._catalog, query.buspedia
+query.cities = lambda: {"苏州": {"mygolbs": "苏州市", "chelaile": "011"},
+                        "惠州": {"mygolbs": "惠州市"}, "武汉": {"mygolbs": "武汉市"}}
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("16路", "165路")]}
+assert query._exact_line("苏州市", "昆山165", "昆山165") is None
+assert query._exact_line("苏州市", "165路", "165路") == "165路"
+# 县市自己那套线路没进这城目录：说清「哪块没覆盖」，别只回「两家都没收这条」
+assert query._place_gap("苏州", "昆山165") == "昆山"
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("博罗233路", "233路")]}
+assert query._place_gap("惠州", "博罗233") == ""       # 博罗的线就挂在惠州目录下
+assert query._place_gap("武汉", "鄂101") == ""         # 「武汉鄂」不是地名
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("16路", "165路")]}
+query.buspedia = types.SimpleNamespace(
+    region_id=lambda cn: 148,
+    find_line=lambda cid, nm: ([{"name": "昆山165路", "term": ["*通医线*"], "active": True}]
+                               if nm.startswith("昆山165") else []),
+    find_line_fuzzy=lambda cid, nm: [],
+    models=lambda uid: [], comp_name=lambda uid: "", fleet=lambda *a, **k: [])
+_gk = query.render_ghost("苏州", "苏州市", "昆山165") or ""
+assert "昆山这块两家都没覆盖" in _gk and "*" not in _gk, _gk
+assert "通医线" in _gk, _gk
+query.cities, query._catalog, query.buspedia = _cc4, _cat4, _bp4
 # 建档记成「已停运」的老号，同城目录里起讫对得上的是它现在的号（苏州 55 → 555）
 _oc2 = query._catalog
 query._catalog = lambda c: {"buslines": [{"lineName": "555路", "from": "南环桥（华东装饰城）",
