@@ -231,9 +231,44 @@ def _is_place(name):
     return bool(re.search(r"[区县市旗镇盟州]$", s)) and len(s) >= 2
 
 
+# 区县名后面跟这些字，说明它是在当地方说（「元氏火车站」「博罗233」），不是被夹在更长的词里
+_PLACE_TAIL = re.compile(r"^(?:火车站|汽车站|高铁站|客运站|站|路口|路|街|大道|镇|乡|村|桥|"
+                         r"小区|广场|公园|医院|学校|中学|小学|大学|机场|码头|门|口)")
+# 区县名前面跟这些字，说明是「我在/到/从 X」那种说法
+_PLACE_LEAD = "我在到从去至的和与、在"
+
+
+def _at_place_boundary(text, name):
+    """区县名在 text 里是不是「当地方说」的位置，而不是被夹在更长的词里。
+
+    「金龙湾」里的「龙湾」是温州市龙湾区，可它前面粘着「金」——那是站名金龙湾，不是地名。
+    句首、前面是标点/空格/「我在到从」、后面接地名后缀（站、路口）或线路号，这几种才算地名。
+    只看右边不够：「金龙湾」的「龙湾」正好在句尾。
+    """
+    if not name:
+        return False
+    text = text or ""
+    i = text.find(name)
+    while i >= 0:
+        j = i + len(name)
+        lead_ok = (i == 0 or (not ("\u4e00" <= text[i - 1] <= "\u9fff"))
+                   or text[i - 1] in _PLACE_LEAD)
+        tail_ok = (j < len(text) and ((text[j].isascii() and text[j].isalnum())
+                                      or _PLACE_TAIL.match(text[j:])))
+        # 后面接地名后缀（「机场一号航站楼元氏火车站」）比前面重要：那本身是个完整站名
+        if i == 0 or tail_ok or (lead_ok and j >= len(text)):
+            return True
+        i = text.find(name, i + 1)
+    return False
+
+
 def _district_city(text):
-    """「元氏火车站」里带的是裸县名：翻成所在地级市，比落回默认城强。"""
-    hits = [b for b, v in DIST_BARE.items() if v and b in (text or "")]
+    """「元氏火车站」里带的是裸县名：翻成所在地级市，比落回默认城强。
+
+    光看「区县名有没有出现在句子里」会把站名撕成地名（见 _at_place_boundary），
+    所以两侧的边界必须卡住。
+    """
+    hits = [b for b, v in DIST_BARE.items() if v and _at_place_boundary(text, b)]
     if not hits:
         return None
     key = norm_city(DIST_BARE[max(hits, key=len)])
@@ -480,13 +515,13 @@ def detect_city(msg, prefix, default_city):
     if prefix and prefix in idx:
         return prefix, True
     # 区县名在句子里也能猜：「南海区8路」「伦教街道办事处公交线路」这类掌上不认区县当城市名
-    dd = [k for k in DISTRICTS if k in msg]
+    dd = [k for k in DISTRICTS if _at_place_boundary(msg, k)]
     if dd:
         key = norm_city(DISTRICTS[max(dd, key=len)])
         if key in idx:
             return key, True
     # 群里写的是裸县名：「新郑站有什么线路」里没有「新郑市」，districts.json 的键带「市」
-    bb = [k for k, v in DIST_BARE.items() if v and k in msg]
+    bb = [k for k, v in DIST_BARE.items() if v and _at_place_boundary(msg, k)]
     if bb:
         key = norm_city(DIST_BARE[max(bb, key=len)])
         if key in idx:
@@ -1211,7 +1246,14 @@ def _place_gap(city_key, want):
         if ent.get("mygolbs") else []
     if not rows and ent.get("chelaile"):
         rows = [n for n, _ in chelaile.lines(ent["chelaile"])]
-    return "" if any(place in n for n in rows) else place
+    if any(place in n for n in rows):
+        return ""        # 那个县市的线就挂在父城目录里（博罗233路）
+    # 「东胜区8路」「南海区8路」：区名只是行政区，目录里就是裸号 8路——号在就说明这城管着它，
+    # 不能因为线名里没写「东胜区」就说这块没覆盖
+    num = (want or "")[m.end():]
+    if any(_tail_line(norm_line(n), norm_line(num)) or norm_line(n) == norm_line(num) for n in rows):
+        return ""
+    return place
 
 
 def render_ghost(city_key, city_name, want):
@@ -3727,7 +3769,10 @@ def answer(msg, default_city, ctx="", key=""):
                     # 别写「查不了」：main.py 的 FALSE_CLAIM 会把这句当假话整句吞掉，用户啥也收不到
                     # 前缀不是地名（「玉高附中」这种口语站名）时说人家整座城没数据是撒谎，点名是哪个站没找到
                     if not re.search(r"[市县区州旗盟]$", prefix):
-                        return f"{bn or base}站表里没查到「{prefix}」这个站"
+                        # 「金龙湾来8路没有。」：站名对了、城市不对。别只说「站表里没有」——
+                        # 这站可能在别的城（金龙湾在河池8路线上），让用户补城市
+                        return (f"{bn or base}站表里没查到「{prefix}」这个站，"
+                                f"说个城市名我再查（像「河池{prefix}」）")
                     return f"{prefix}这座城暂时没有公交数据，掌上和车来了都没覆盖"
                 city_key = norm_city(prefix)
     if not city_key:

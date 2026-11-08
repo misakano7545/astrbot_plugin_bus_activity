@@ -1373,6 +1373,17 @@ _c8, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"},
                                            "石家庄": {"mygolbs": "石家庄市"}}
 assert query._district_city("机场一号航站楼元氏火车站") == "石家庄"
 assert query._district_city("玉林北站") is None          # 撞名的裸名不收，别乱猜
+# 「金龙湾来8路没有。」：金龙湾是站名，里面的「龙湾」是温州市龙湾区。区县名被夹在更长的词里
+# 不算地名——之前整句被当成温州的事，答「金龙湾来8 在温州没有这条线（温州目录里是另一条同号的线）」
+assert query._district_city("金龙湾") is None
+assert query._district_city("金龙湾来") is None
+assert query._district_city("金龙湾来8路没有。") is None
+_cdz, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市"}, "温州": {"mygolbs": "温州市"},
+                                           "石家庄": {"mygolbs": "石家庄市"}}
+assert query._district_city("我在龙湾8路") == "温州"      # 真在说地名时才认
+assert query.detect_city("金龙湾来8路没有。", "金龙湾", "玉林市") == (None, False)   # 别当成某座城明写
+assert query.detect_city("在龙湾站等8路", "龙湾", "玉林市") == ("温州", True)
+query.cities = _cdz
 _rh8, query.render_hop = query.render_hop, lambda ck, nm, got, **kw: f"HOP:{ck}" if ck == "石家庄" else None
 _rp8, query.render_plan = query.render_plan, lambda nm, a, b: ""
 assert query.answer("从机场一号航站楼到元氏火车站怎么走", "玉林市", key="k-d8") == "HOP:石家庄"
@@ -1570,16 +1581,21 @@ assert query.render_ghost("安宁", "昆明市", "安宁99") is None
 # 裸包含一匹就把 16 路认成用户问的线，还说「这城目录里有这条线」——纯属胡认
 _cc4, _cat4, _bp4 = query.cities, query._catalog, query.buspedia
 query.cities = lambda: {"苏州": {"mygolbs": "苏州市", "chelaile": "011"},
-                        "惠州": {"mygolbs": "惠州市"}, "武汉": {"mygolbs": "武汉市"}}
-query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("16路", "165路")]}
+                        "惠州": {"mygolbs": "惠州市"}, "武汉": {"mygolbs": "武汉市"},
+                        "鄂尔多斯": {"mygolbs": "鄂尔多斯市"}}
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("16路", "65路", "136路", "865路")]}
 assert query._exact_line("苏州市", "昆山165", "昆山165") is None
-assert query._exact_line("苏州市", "165路", "165路") == "165路"
+assert query._exact_line("苏州市", "16路", "16路") == "16路"
 # 县市自己那套线路没进这城目录：说清「哪块没覆盖」，别只回「两家都没收这条」
 assert query._place_gap("苏州", "昆山165") == "昆山"
+# 但区名只是行政区、目录里就是这个裸号时不能这么说：「东胜区8路」在鄂尔多斯目录里就是 8路
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("8路", "K1路")]}
+assert query._place_gap("鄂尔多斯", "东胜区8") == ""
+assert query._place_gap("鄂尔多斯", "东胜区99") == "东胜区"     # 这个号确实没有
 query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("博罗233路", "233路")]}
 assert query._place_gap("惠州", "博罗233") == ""       # 博罗的线就挂在惠州目录下
 assert query._place_gap("武汉", "鄂101") == ""         # 「武汉鄂」不是地名
-query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("16路", "165路")]}
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("16路", "65路")]}
 query.buspedia = types.SimpleNamespace(
     region_id=lambda cn: 148,
     find_line=lambda cid, nm: ([{"name": "昆山165路", "term": ["*通医线*"], "active": True}]

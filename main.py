@@ -83,6 +83,11 @@ class BusActivity(Star):
             return
         if not text:
             return  # 没认出城市/站名/线路，交给 LLM 那一路
+        # 这一句已经由 bus_query 工具答过一遍了：快路是并发跑的，上游慢的时候会比模型晚几秒回来，
+        # 再发一次就是群里看到的两条重复回答（「金龙湾来8路没有。」模型一条、快路一条）
+        if getattr(event, "_bus_tool_used", False):
+            logger.info(f"公交直答跳过（这轮工具已答）: {event.message_str[:30]}")
+            return
         logger.info(f"公交直答: {event.message_str[:30]} -> {text[:60]}")
         event._bus_hit = True       # 这一轮的数据是插件给的，模型复述插件腔就不算编
         yield event.plain_result(text)
@@ -142,6 +147,7 @@ class BusActivity(Star):
         logger.info(f"公交查询: {question[:30]} -> {(text or '没查到')[:60]}")
         if text:
             event._bus_hit = True
+            event._bus_tool_used = True   # 告诉并发的快路：这句答过了，别再发一遍
             return text
         # 答不上来也必须给一句话：返 None 模型手里没料就直接沉默，群里看着像机器人死了。
         # 但别一律说「问一句是哪座城」——用户只是在吐槽刚才答得乱，模型会顺势编成
