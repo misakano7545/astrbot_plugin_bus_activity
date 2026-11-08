@@ -3943,7 +3943,10 @@ def answer(msg, default_city, ctx="", key=""):
     if name:
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
         pl = re.search(r"车牌|号牌", msg)
-        if pl or (SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg)):
+        # 「你们那还有多少车是纯发动机的」不是问哪条线在跑，是问车辆本身（车型/动力）——
+        # 这个数据两家实时接口都没有，扫全城只会回一句「玉林市这会儿有 20 条线在跑」
+        if pl or (SWEEP_RE.search(msg) and not re.search(r"站|几路|哪路", msg)
+                  and not re.search(r"发动机|柴油|汽油|纯电|新能源|车型|配车|座位|空调", msg)):
             # 「这四条线路哪条在跑」范围是刚才那个站，不是全城：引用里那句站表也算
             sname, only = _stop_lines(name, msg + " " + ctx)
             # 没引用的紧接追问（「那这四条线路哪条在跑」）靠指示词认，别把「全城还有哪些在跑」也收窄

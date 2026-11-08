@@ -1551,6 +1551,13 @@ assert not query._generic_word("公交二车队")      # 真站名照旧能查
 assert not query._generic_word("玉林公交公司")
 assert query.answer("公交？", "玉林市") == ""
 assert query.answer("公交", "玉林市") == ""
+# 「你们那还有多少车是纯发动机的」问的是车辆本身（动力/车型），不是哪条线在跑：
+# 别扫全城回「玉林市这会儿有 20 条线在跑」，两家实时接口根本没这个字段
+_sw12, query.render_sweep = query.render_sweep, lambda city, plates=False, only=None: "SWEEP"
+_rs12, query.render_stop = query.render_stop, lambda *a, **k: None
+assert query.answer("你们那还有多少车是纯发动机的", "玉林市") == ""
+assert query.answer("玉林还有哪条线路在跑", "玉林市") == "SWEEP"      # 真问在跑就照旧扫
+query.render_sweep, query.render_stop = _sw12, _rs12
 # 站名里带「公交」的照旧要答（这条走车来了模糊匹站）
 _cs9, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "128"}}
 _cl9, query.chelaile = query.chelaile, types.SimpleNamespace(
