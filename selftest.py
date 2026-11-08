@@ -1112,6 +1112,13 @@ _cat9, query._catalog = query._catalog, lambda cn: {"buslines": [
 assert query._exact_line("武汉市", "武汉鄂101路", "101", "武汉") is None
 assert [n for n, _ in query._pick([(r["lineName"], r) for r in query._catalog("x")["buslines"]],
                                   "101")] == ["101路-鄂州华洪公交"]
+# 「武汉913」：同一处裸包含，目录里 BRT1 剥成「1」正好在 913 里 → 答成「BRT1路 有 6 辆」，
+# 车是雄楚大道 BRT 那批，站名全对不上。913 里没有独立的「1」，不能匹
+query._catalog = lambda cn: {"buslines": [
+    {"lineName": n, "upperOrDown": "1", "from": "A", "to": "B"} for n in ("913路", "1路", "BRT1路")]}
+assert query._exact_line("武汉市", "武汉913", "913") == "913路"
+assert query._exact_line("武汉市", "武汉1路", "1") == "1路"          # 别被更长的 BRT1 顶掉
+assert query._exact_line("武汉市", "武汉BRT1", "BRT1") == "BRT1路"   # 用户自己写了 BRT 就认
 query._catalog = _cat9
 # 「惠州博罗233路」：博罗是惠州下辖县，不是站名。以前拿「博罗」搜站命中「博罗天虹」，
 # 回一句「233路 不经过博罗天虹」——惠州 233 路跑的是惠城—惠阳，跟博罗没关系
