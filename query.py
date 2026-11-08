@@ -802,6 +802,28 @@ def _static_my(city_name, wants):
     return None
 
 
+def _my_terminals(city_name, want):
+    """掌上目录里这条线的终点站名（两个方向都算），用来跟车来了的「往X」对账。"""
+    rows = (_catalog(city_name).get("buslines") or []) if city_name else []
+    w = norm_line(want)
+    out = set()
+    for r in rows:
+        if norm_line(r.get("lineName") or "") == w:
+            for k in ("from", "to"):
+                if r.get(k):
+                    out.add(r[k])
+    return out
+
+
+def _same_terminals(tos, terms):
+    """车来了那条线的终点跟掌上这条线的终点对得上吗（站名写法两家不完全一样，互相包含就算）。"""
+    for t in tos:
+        for m in terms:
+            if t and m and (t in m or m in t):
+                return True
+    return False
+
+
 def _chelaile(city_id, want):
     rows = _cached("catalog-cl", city_id, CATALOG_TTL, lambda: chelaile.lines(city_id))
     # 「香港城巴1」：同号五家公司各有车，点了名就只留这一家（名字里的括号就是公司）
@@ -814,9 +836,32 @@ def _chelaile(city_id, want):
         return None
     name = hit[0][0]
     # 车来了把城里的县市写进线名（河池：「金城江8」「宜州8」），掌上却是裸号「8路」。
-    # 本城目录里另有裸号这条线时，那个带地名的就是邻县的另一条，不能拿来顶
+    # 名字对不上时不能直接丢：金城江8 就是 8 路本身（终点 御景龙庭/公共交通公司 一致），
+    # 宜州8 才是别的线（终点 东门商场/新火车站）。靠终点站对账，下面拿到 to 再判。
+    terms = set()
     if norm_line(name) != norm_line(want) and _bare_line_exists(city_id, want):
-        return None
+        ck = _city_of_chelaile(city_id)
+        terms = _my_terminals((cities().get(ck) or {}).get("mygolbs") if ck else "", want)
+        if terms:
+            # 名字撞上的可能不止一条（河池 8：「宜州8」和「金城江8」），按终点站挑出同一趟车
+            cands = [(n, l) for n, l in rows
+                     if n == name or _tail_line(norm_line(n), norm_line(want))]
+            picked = None
+            for nm in dict.fromkeys(n for n, _ in cands):
+                ids = [l for n, l in cands if n == nm]
+                try:
+                    tos = [_cached("live-cl", (city_id, i), LIVE_TTL,
+                                   lambda x=i: chelaile.live(city_id, x)).get("to") for i in ids]
+                except Exception:
+                    continue
+                if _same_terminals(tos, terms):
+                    picked = nm
+                    break
+            if not picked:
+                return None      # 终点都不对：那个县市自己的另一条线
+            hit = [(n, l) for n, l in cands if n == picked]
+            name = picked
+            terms = set()        # 已经挑完，下面不用再判
     # 目录是方向级的：同一条线上下行是两个 lineId，全查再合并（见 issue #6）。
     # 香港一个「1」对应五家公司（九巴/城巴/屿巴/新界小巴/港岛小巴），名字里的括号
     # 就是公司，按名字分组查，别取前两条（前两条可能分属两家，混着报）。
@@ -834,6 +879,8 @@ def _chelaile(city_id, want):
             states.append(d.get("state"))
             hit_ids[nm] = line_id
     # 多家公司同名时抬头别写成「1（九巴） 有 7 辆」，那不是一家的车
+    if terms and not _same_terminals([lab for lab, _ in groups], terms):
+        return None      # 终点对不上：这是那个县市自己的另一条线（宜州8），不是用户问的 8 路
     res = {"source": "车来了", "line": re.sub(r"[（(].*?[)）]", "", name)
            if len({n for n, _ in hit}) > 1 else name, "groups": groups, "desc": desc,
            "pos": pos}
@@ -1242,7 +1289,8 @@ def render(city_key, want, res, veh="", dir=""):
     many = len(groups) > 4                          # 支线网络，空方向属于噪音
     if many:                                        # 「25路(五大队观太)」不代表别的支线，抬头去掉括号
         line = re.sub(r"[（(].*?[)）]", "", line)
-    rows = [f"有，{line} 现在 {total} 辆在路上" if not veh else f"{veh} 在 {line} 上："]
+    rows = [f"有，{_ask_name(want, line)} 现在 {total} 辆在路上" if not veh
+            else f"{veh} 在 {_ask_name(want, line)} 上："]
     for label, buses in groups:
         if not buses:
             if multi and label and not many:
@@ -1266,10 +1314,12 @@ def _ask_name(want, line):
         return line
     if ln.endswith(wl) and len(ln) > len(wl):
         # 只在地名前缀上括注（金城江15）；「双誉公交C61」那种公司前缀不加，
-        # 那是同一条线的运营方，括起来只是噪音
-        extra = line[: len(line) - len(want)]
-        if _is_place(extra):
-            return f"{want + '路' if want.isdigit() else want}（{line}）"
+        # 那是同一条线的运营方，括起来只是噪音。按归一化后的名字算前缀长度，
+        # 「金城江K2」减「K2」正好是「金城江」，别拿原串长度去截（「路」字会错位）
+        if _is_place(ln[: len(ln) - len(wl)]):
+            # 「K2」这类纯字母数字的线号，群里念的时候都带「路」（K2路、M372路）
+            shown = want + "路" if re.fullmatch(r"[A-Za-z0-9]+", want) else want
+            return f"{shown}（{line}）"
     return line
 
 

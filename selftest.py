@@ -1155,6 +1155,36 @@ _st = {"source": "掌上公交", "line": "8路", "groups": [("御景龙庭", [])
 _t11 = query.render("河池", "8", _st)
 assert _t11.startswith("8路 的实时车这会儿没取到") and "这会儿没车" not in _t11, _t11
 query.chelaile, query.cities, query._catalog = _cl11, _cit11, _cat11
+# 「河池K2路」：车来了叫「金城江K2路」（金城江=河池市区），是同一趟车，
+# 抬头要写用户问的号，别直接甩「金城江K2路」——群里看着像答了另一条线
+assert query._ask_name("K2", "金城江K2路") == "K2路（金城江K2路）"
+assert query._ask_name("15", "金城江15") == "15路（金城江15）"
+# 名字对不上时靠终点站认亲：金城江8 就是 8 路（终点 御景龙庭/公共交通公司 一致），
+# 宜州8 不是（终点 东门商场/新火车站）
+assert query._same_terminals(["御景龙庭（六圩中学）"], {"御景龙庭（六圩中学）", "公共交通公司"})
+assert query._same_terminals(["碧桂园（金城江）"], {"高铁站", "碧桂园"})
+assert not query._same_terminals(["东门商场", "新火车站（宜州）"], {"御景龙庭（六圩中学）", "公共交通公司"})
+class _FakeCL4:
+    LINES = [("宜州8", "y1"), ("宜州8", "y2"), ("金城江8", "j1"), ("金城江8", "j2")]
+    TO = {"y1": "东门商场", "y2": "新火车站（宜州）",
+          "j1": "御景龙庭（六圩中学）", "j2": "公共交通公司"}
+    def lines(self, cid):
+        return list(self.LINES)
+    def live(self, cid, lid):
+        return {"state": 0, "desc": "", "to": self.TO[lid], "buses": [("x", "S", 1)], "pos": {}}
+_cl12, _cit12, _cat13 = query.chelaile, query.cities, query._catalog
+query.chelaile = _FakeCL4()
+query.cities = lambda: {"河池": {"mygolbs": "河池市", "chelaile": "309"}}
+query._catalog = lambda cn: {"buslines": [
+    {"lineName": "8路", "upperOrDown": "1", "from": "公共交通公司", "to": "御景龙庭（六圩中学）"},
+    {"lineName": "8路", "upperOrDown": "2", "from": "御景龙庭（六圩中学）", "to": "公共交通公司"}]}
+_r12 = query._chelaile("309", "8")
+assert _r12 and _r12["line"] == "金城江8", _r12      # 认到同一趟车，不是宜州8
+query.cities = lambda: {"河池": {"mygolbs": "河池市", "chelaile": "311"}}
+query._catalog = lambda cn: {"buslines": [
+    {"lineName": "8路", "upperOrDown": "1", "from": "A", "to": "完全不同的终点"}]}
+assert query._chelaile("311", "8") is None          # 终点全不对：不认
+query.chelaile, query.cities, query._catalog = _cl12, _cit12, _cat13
 # 「河池15路」：目录里叫「金城江15」（金城江是河池市区）。抬头不能直接甩目录名，
 # 也不能给公司前缀加括号（双誉公交C61 是同一条线的运营方，括起来只是噪音）
 assert query._ask_name("15", "金城江15") == "15路（金城江15）"
