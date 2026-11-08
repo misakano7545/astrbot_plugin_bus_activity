@@ -1021,6 +1021,56 @@ def _veh(bus, veh):
     return veh in str((bus or ("",))[0])
 
 
+# 「现在呢」「到哪了」这类纯追问：用户上一句问的是某一辆车时，接着问的还是那辆
+_FOLLOW_VEH = re.compile(r"到哪|在哪|哪儿|走了|跑到|这辆|那辆|它|呢")
+
+
+def _vehicle_talk(msg):
+    """短句里在问「那辆车现在到哪」：没写线号，指的是上一句那条线上的某辆车。
+
+    「现在513去哪里了」「现在呢」「那辆呢」都算；「现在几点了」「晚上吃点啥呢」不算——
+    没有车号、也没有「这辆/那辆/它」指着某一辆，就是闲聊。
+    """
+    m = re.sub(r"[，,。.？?！!、~\s]", "", msg or "")
+    if len(m) > 14 or re.search(r"路|站|车票|票价|几点|多久", m):
+        return False
+    if re.search(r"\d{2,5}", m):
+        return bool(re.search(r"到哪|在哪|哪儿|去哪|哪了|走了|跑到|现在|呢", m))
+    return bool(re.search(r"(?:这辆|那辆|它)(?:呢|到哪|在哪|哪了|走了|跑到)", m)
+                or m in ("现在呢", "呢", "到哪了", "在哪"))
+
+
+def _veh_from(res, msg):
+    """句子里夹着的车号（车来了报自编号 513，掌上报车牌）能对上哪一辆。
+
+    以前只认「G02的512」「…车」这两种写法，用户说「现在513去哪里了」「513高新产业园那辆车」
+    一个都匹不上，于是整条线的车全报出来——问一辆、回两辆，要的那辆还混在里头。
+    """
+    ids = [str(b[0]) for _, bs in (res.get("groups") or []) for b in bs if b]
+    if not ids or not msg:
+        return ""
+    # 「玉林G02 桂K12623D 到哪了」：整块车牌，直接对
+    pm = PLATE_RE.search(msg)
+    if pm:
+        hit = [i for i in ids if pm.group(1) in i or i in pm.group(1)]
+        if len(hit) == 1:
+            return hit[0]
+    for m in re.finditer(r"(?<![\dA-Za-z])(\d{2,5})(?![\dA-Za-z])", msg):
+        tok, nxt = m.group(1), msg[m.end():m.end() + 1]
+        if nxt in ("路", "线", "号") or (m.start() and msg[m.start() - 1] in "号线路"):
+            continue                      # 513路 / G02 是线号，不是车号
+        hit = [i for i in ids if i == tok]
+        if len(hit) == 1:
+            return hit[0]
+    # 车牌里的数字（「12623 那辆车」）：后面粘着字母 D 也算，够长才不会把 02 当成 G02 的号
+    for m in re.finditer(r"(?<!\d)(\d{4,5})(?!\d)", msg):
+        tok = m.group(1)
+        hit = [i for i in ids if tok in i]
+        if len(hit) == 1:
+            return hit[0]
+    return ""
+
+
 def _union(a, b):
     """两家报在路上的车不完全一样（6路实测 掌上 12、车来了 13，各自都有对方没报的车），
     只报一家就必然差一两辆——这就是「有时候漏车或者多车」的来源。
@@ -1404,7 +1454,7 @@ def render(city_key, want, res, veh="", dir=""):
     if many:                                        # 「25路(五大队观太)」不代表别的支线，抬头去掉括号
         line = re.sub(r"[（(].*?[)）]", "", line)
     rows = [f"有，{_ask_name(want, line)} 现在 {total} 辆在路上" if not veh
-            else f"{veh} 在 {_ask_name(want, line)} 上："]
+            else f"{veh} 这辆在 {_ask_name(want, line)} 上："]
     for label, buses in groups:
         if not buses:
             if multi and label and not many:
@@ -3610,6 +3660,24 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
     vm = VEH_RE.search(msg)
     veh = next((g for g in vm.groups() if g), "") if vm else ""
     res = query(city_key, wants, src, veh)
+    if not veh and not res.get("error"):
+        # 句子里夹着车号（「现在513去哪里了」）：拿实时清单里的车号对一遍，对上哪辆就只报哪辆
+        veh = _veh_from(res, msg)
+        if not veh:
+            # 「现在呢」「到哪了」：上一句问的就是某一辆车，接着问的还是那辆（半小时内）
+            if (last.get("veh") and last.get("line") == wants[0]
+                    and time.time() - (last.get("veh_t") or 0) < 1800
+                    and len(msg) <= 12 and _FOLLOW_VEH.search(msg)
+                    and any(_veh(b, last["veh"]) for _, bs in res.get("groups") or [] for b in bs)):
+                veh = last["veh"]
+    if veh:
+        last["veh"], last["veh_t"] = veh, time.time()
+        # 车号是分源记的（车来了报自编号 514、掌上报车牌桂K12623D）：追问得接着用它那一家的源，
+        # 换一家这个号对不上任何一辆，用户问的那辆就丢了
+        last["veh_src"] = "chelaile" if res.get("source") == LABEL["chelaile"] else "mygolbs"
+    else:
+        last.pop("veh", None)
+        last.pop("veh_src", None)
     txt = render(city_key, wants[0], res, veh, _dir(msg))
     # 点名车来了、可这条线只有掌上有：别让掌上的车冒充车来了的
     if src and res.get("source") == LABEL["mygolbs" if src == "chelaile" else "chelaile"]:
@@ -3670,6 +3738,8 @@ def answer(msg, default_city, ctx="", key=""):
     raw = msg
     sm = SRC_RE.search(msg)
     src = ("chelaile" if sm.group("cl") else "buspedia" if sm.group("bp") else "mygolbs") if sm else None
+    if src:
+        last["src"] = src
     # 「用掌上公交查G02路」：「掌上公交查」不是城市名，别让前缀截出「上公交」当城
     msg = SRCPRE.sub("", msg)
     # 提醒的撤单和查看不需要线路号，先接走（答应了盯车，就得让它停得掉）
@@ -3693,6 +3763,14 @@ def answer(msg, default_city, ctx="", key=""):
         # 但本句问的是全城（「还有没有在跑的线路」「每辆车的车牌」）时不能拿引用里那一路顶替——
         # 引用的是「还有 5 条在跑」，parse(ctx) 会随便挑一条线答成它的实时
         line = parse(ctx)
+    # 「现在513去哪里了」「现在呢」：没写线号，问的是上一句那条线上某辆车现在到哪。
+    # 以前这里不认，落到站名那条路，最后返空——群里一声不吭，模型就自己编。
+    if not line and last.get("line") and _vehicle_talk(msg):
+        line = (last["line"], "")
+        # 上一句点名了源（「用车来了查 g02」）就接着用它：两家的车号体系不一样，
+        # 换成掌上以后 514 这个自编号对不上任何一辆，用户问的那辆就丢了
+        if not src and (last.get("veh_src") or last.get("src")):
+            src = last.get("veh_src") or last["src"]
     # 「从车来了的那个看一下数据」没写线路号：说的就是上一条问的那路车。
     # 但「用车来了查化州-湛江线」也带「查」，那是点名的另一条文字线名（parse 认不出带「-」的），
     # 当成追问上一条就会答成上一轮的 506——只有指着上一条说（这个/那条）或整句只剩追问词时才续
@@ -3826,6 +3904,10 @@ def answer(msg, default_city, ctx="", key=""):
             return render_selfno(city_key, name, pm.group(1))
         return render_plate(name, pm.group(1))
     got = hop(msg)
+    # 「玉林G02 桂K12623D 到哪了」：HOP_RE 按「到」切成「从桂K12623D到哪」，答成换乘方案。
+    # 车牌/车号 + 到哪 问的是那辆车的位置，不是换乘
+    if pm or _vehicle_talk(msg):
+        got = None
     # 「有一条线路查不到实时信息我就不写出来了（）」：HOP_RE 按「到」切出两个假站名，
     # 整句没问法、两个端点也不在站表里——是吐槽，不是问路，别抢答（交给模型接话）
     if (got and name and not re.search(r"[?？]|怎么|咋|如何|怎样|哪|多少|多久|几站|[坐乘搭]", msg)
