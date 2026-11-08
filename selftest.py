@@ -1155,6 +1155,16 @@ _st = {"source": "掌上公交", "line": "8路", "groups": [("御景龙庭", [])
 _t11 = query.render("河池", "8", _st)
 assert _t11.startswith("8路 的实时车这会儿没取到") and "这会儿没车" not in _t11, _t11
 query.chelaile, query.cities, query._catalog = _cl11, _cit11, _cat11
+# 快慢班：掌上把定性词写进括号「宜州606路（快班）」，车来了写尾巴「宜州606路快线」，
+# 用户写「宜州606快线」。以前括号连同「快班」一起剥掉，快慢两条线都变成「宜州606」，
+# 谁都不等，转去车来了又只有 -5，于是答成「查不到实时车」——可掌上明明有 3 辆车
+assert query.norm_line("宜州606路（快班）") == "宜州606快"
+assert query.norm_line("宜州606路快线") == query.norm_line("宜州606快线") == "宜州606快"
+assert query.norm_line("宜州606路（普班）") == query.norm_line("宜州606路普线") == "宜州606普"
+assert query.norm_line("宜州606路（快班）") != query.norm_line("宜州606路（普班）")
+assert query.norm_line("地铁快线R101路") == query.norm_line("地铁快R101路")
+assert query.norm_line("6路夜班") == "6夜班"          # 夜班/夜线不受影响
+assert query.parse("宜州606快线") == ("606快", "宜州")
 # 「河池K2路」：车来了叫「金城江K2路」（金城江=河池市区），是同一趟车，
 # 抬头要写用户问的号，别直接甩「金城江K2路」——群里看着像答了另一条线
 assert query._ask_name("K2", "金城江K2路") == "K2路（金城江K2路）"
