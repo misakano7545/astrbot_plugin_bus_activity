@@ -1126,6 +1126,35 @@ _r6 = query.render("连云港", "B1", {"source": "掌上公交", "line": "B1路/
 render_pick = _r6.startswith("有，B1路 现在 1 辆在路上"), _r6
 query._catalog = _cat6
 assert render_pick[0], render_pick[1]
+# 「河池8路」：车来了把县市写进线名（宜州8 / 金城江8），掌上是裸号 8路。
+# 不能在裸号匹配时挑 shortest 撞上邻县的宜州8——那是另一条线，车也不能并进来
+assert query._tail_line("金城江8", "8") and query._tail_line("宜州8", "8")
+assert not query._tail_line("金城江18", "8")      # 1 和 8 挨着，读作 18
+assert query._tail_line("永嘉51", "51") and not query._tail_line("永嘉151", "51")
+class _FakeCL3:
+    def lines(self, cid):
+        return [("宜州8", "y1"), ("宜州8", "y2"), ("金城江8", "j1"), ("金城江18", "k1")]
+    def live(self, cid, lid):
+        return {"state": 0, "desc": "", "to": "X", "buses": [("宜1", "S", 10)], "pos": {}}
+_cl11, _cit11, _cat11 = query.chelaile, query.cities, query._catalog
+query.chelaile = _FakeCL3()
+query.cities = lambda: {"河池": {"mygolbs": "河池市", "chelaile": "307"}}
+query._catalog = lambda cn: {"buslines": [
+    {"lineName": "8路", "upperOrDown": "1", "from": "A", "to": "B"},
+    {"lineName": "15路", "upperOrDown": "1", "from": "A", "to": "B"}]}
+assert query._chelaile("307", "8") is None       # 本城有裸号 8路，宜州8 是另一条
+assert query._chelaile("307", "金城江8") is not None
+_cat12 = query._catalog
+query._catalog = lambda cn: {"buslines": [
+    {"lineName": "永嘉51", "upperOrDown": "1", "from": "A", "to": "B"}]}
+assert query._chelaile("307", "51") is None      # 目录里没有裸号 51
+query._catalog = _cat12
+# 实时取不到时只用目录回一份：抬头按用户问的号，说明是「没取到」而不是「没车」
+_st = {"source": "掌上公交", "line": "8路", "groups": [("御景龙庭", [])],
+       "note": "06:05 起、末班 22:30、32 站", "stale": True}
+_t11 = query.render("河池", "8", _st)
+assert _t11.startswith("8路 的实时车这会儿没取到") and "这会儿没车" not in _t11, _t11
+query.chelaile, query.cities, query._catalog = _cl11, _cit11, _cat11
 # 「河池15路」：目录里叫「金城江15」（金城江是河池市区）。抬头不能直接甩目录名，
 # 也不能给公司前缀加括号（双誉公交C61 是同一条线的运营方，括起来只是噪音）
 assert query._ask_name("15", "金城江15") == "15路（金城江15）"
@@ -1151,9 +1180,10 @@ class _FakeCL2:
     def stations(self, cid, lid):
         return ["s"] * 30
 _cl10, _cit10 = query.chelaile, query.cities
+_bl10, query._bare_line_exists = query._bare_line_exists, lambda cid, want: False
 query.chelaile = _FakeCL2()
-_r11 = query._chelaile("300", "15")
-query.chelaile, query.cities = _cl10, _cit10
+_r11 = query._chelaile("308", "15")
+query.chelaile, query.cities, query._bare_line_exists = _cl10, _cit10, _bl10
 assert _r11.get("paused") and "停运状态" in (_r11.get("note") or ""), _r11.get("note")
 assert "暂无车辆时间" in _r11["note"] and "30 站" in _r11["note"], _r11["note"]
 # 「快速公交1线」的「公交」是线名的一部分（厦门叫「快1路」）：剥掉就剩「快速」，

@@ -512,6 +512,17 @@ def _covered(raw):
     return r.get("status") == "1" and bool(r.get("buslines"))
 
 
+def _tail_line(name, want):
+    """name 以 want 结尾，且 want 是一个完整的号（前面不粘数字）。
+
+    「金城江8」算「8」，「金城江18」不算——1 和 8 挨着，读作 18。
+    """
+    if not name.endswith(want):
+        return False
+    i = len(name) - len(want)
+    return i == 0 or not (name[i - 1].isdigit() and want[:1].isdigit())
+
+
 def _pick(catalog, want):
     """目录里挑线路：先全等，再唯一前缀，最后按短优先消歧。
 
@@ -543,8 +554,8 @@ def _pick(catalog, want):
     near = [c for c in catalog if norm_line(c[0]).startswith(want)]
     if not near:
         # 「永嘉51路」「忻州201路」：城名/县名写在线名里，用户只写裸号，靠尾巴对上。
-        # 取名字最短的那批，「永嘉51」不能被「永嘉151」顶掉
-        near = [c for c in catalog if norm_line(c[0]).endswith(want)]
+        # 取名字最短的那批，「永嘉51」不能被「永嘉151」顶掉（数字前面粘着数字的不算）
+        near = [c for c in catalog if _tail_line(norm_line(c[0]), want)]
         if near:
             short = min(len(norm_line(c[0])) for c in near)
             near = [c for c in near if len(norm_line(c[0])) == short]
@@ -742,6 +753,55 @@ def _mygolbs(city_name, want):
             "note": note, "unknown": unknown, "pos": pos}
 
 
+def _city_of_chelaile(city_id):
+    return next((k for k, v in cities().items() if (v or {}).get("chelaile") == city_id), "")
+
+
+def _bare_line_exists(city_id, want):
+    """这城的掌上目录里有没有跟 want 同名的那条线（裸号写法）。"""
+    ck = _city_of_chelaile(city_id)
+    my = (cities().get(ck) or {}).get("mygolbs") if ck else ""
+    if not my:
+        return False
+    rows = _catalog(my).get("buslines") or []
+    return any(norm_line(r.get("lineName") or "") == norm_line(want) for r in rows)
+
+
+def _static_my(city_name, wants):
+    """实时取不到时，只用目录（起讫/站数）回一份——总比「上游没响应」强。
+
+    河池 8 路：有车有站表，只是刚才那一步超时；说清「这条线在、实时没取到」比换一条邻县的线答强。
+    """
+    if not city_name:
+        return None
+    rows = _catalog(city_name).get("buslines") or []
+    for want in wants:
+        hit = [r for r in rows if norm_line(r.get("lineName") or "") == norm_line(want)]
+        if not hit:
+            continue
+        line = hit[0]["lineName"]
+        groups = [(r.get("to") or "", []) for r in hit]
+        note = ""
+        first, last = "", ""
+        try:
+            first, last = _first_last(city_name, line, str(hit[0].get("upperOrDown") or "1"))
+        except Exception:
+            pass
+        n = 0
+        try:
+            n = len(_station_seq(city_name, line, str(hit[0].get("upperOrDown") or "1")))
+        except Exception:
+            n = 0
+        bits = [f"{first} 起、末班 {last}"] if first and last else []
+        if n:
+            bits.append(f"{n} 站")
+        if bits:
+            note = "、".join(bits)
+        return {"source": "掌上公交", "line": line, "groups": groups, "note": note,
+                "stale": True}
+    return None
+
+
 def _chelaile(city_id, want):
     rows = _cached("catalog-cl", city_id, CATALOG_TTL, lambda: chelaile.lines(city_id))
     # 「香港城巴1」：同号五家公司各有车，点了名就只留这一家（名字里的括号就是公司）
@@ -753,6 +813,10 @@ def _chelaile(city_id, want):
     if not hit:
         return None
     name = hit[0][0]
+    # 车来了把城里的县市写进线名（河池：「金城江8」「宜州8」），掌上却是裸号「8路」。
+    # 本城目录里另有裸号这条线时，那个带地名的就是邻县的另一条，不能拿来顶
+    if norm_line(name) != norm_line(want) and _bare_line_exists(city_id, want):
+        return None
     # 目录是方向级的：同一条线上下行是两个 lineId，全查再合并（见 issue #6）。
     # 香港一个「1」对应五家公司（九巴/城巴/屿巴/新界小巴/港岛小巴），名字里的括号
     # 就是公司，按名字分组查，别取前两条（前两条可能分属两家，混着报）。
@@ -992,6 +1056,12 @@ def query(city_key, wants, src=None, veh=""):
         return dict(fallback, veh_others=others)
     if near:
         return near
+    if tried:
+        # 两家都没答上来（多半是实时那一步超时）：目录里真有这条线就照实说「在，实时没取到」，
+        # 别只回一句「上游没响应」，更别拿邻县的同号线顶（河池 8 路 ↔ 宜州8）
+        st = _static_my(ent.get("mygolbs"), wants)
+        if st:
+            return st
     if tried and all("异常" in t for t in tried):
         return {"error": "上游这会儿没响应，过会儿再问"}
     if tried:
@@ -1163,6 +1233,9 @@ def render(city_key, want, res, veh="", dir=""):
         # 抬头写用户问的那个号：「河池15路」别答成「金城江15」（目录名多带了个地名，
         # 群友会以为查的是另一条线）
         head = _ask_name(want, line)
+        if res.get("stale"):
+            # 目录里这条线在，只是实时那一步没取到：别说成「这会儿没车」，那是另一种意思
+            return f"{head} 的实时车这会儿没取到，{tail}" if tail else f"{head} 的实时车这会儿没取到"
         head = f"{head} 查不到实时车" if res.get("unknown") else f"{head} 这会儿没车"
         return head + ("，" + tail if tail else "")
     multi = sum(1 for _, b in groups if b) > 1      # 只有一个方向有车时不念空方向
