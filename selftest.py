@@ -1582,6 +1582,11 @@ query.buspedia = types.SimpleNamespace(
 _gk = query.render_ghost("苏州", "苏州市", "昆山165") or ""
 assert "昆山这块两家都没覆盖" in _gk and "*" not in _gk, _gk
 assert "通医线" in _gk, _gk
+# 建档那站这会儿连不上时，也得分得清「没查到」和「这块没覆盖」——别列一堆苏州本地的 16路/65路
+query.buspedia = types.SimpleNamespace(region_id=lambda cn: None, find_line=lambda *a: [],
+                                      find_line_fuzzy=lambda *a: [])
+_grs = query.render("苏州", "昆山165", {"error": "没这条线路"})
+assert "昆山的线路掌上公交和车来了都没覆盖" in _grs and "16路" not in _grs, _grs
 query.cities, query._catalog, query.buspedia = _cc4, _cat4, _bp4
 # 建档记成「已停运」的老号，同城目录里起讫对得上的是它现在的号（苏州 55 → 555）
 _oc2 = query._catalog

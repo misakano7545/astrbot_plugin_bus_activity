@@ -1291,6 +1291,12 @@ def render(city_key, want, res, veh="", dir=""):
                 return (f"{city_key}这边 {want + '路' if want.isdigit() else want} 有 {len(tail)} 条："
                         f"{shown}。要哪条？带上快慢班或者直接写全名我就查")
             # 光说「没查到」，模型就会自己解释成「这个数据源没有这城市的线路」（泉州 K502 就是这样）
+            # 县市那套线没进父城目录时先说这个：昆山的线一条都不在苏州目录里，
+            # 列一堆苏州本地的 16路/65路 只会让人以为插件匹错了
+            gap = _place_gap(city_key, want)
+            if gap:
+                return (f"没查到「{want}」这条线——{gap}的线路掌上公交和车来了都没覆盖，"
+                        f"{city_key}目录里一条{gap}的线都没有，得用{gap}本地的公交 App")
             near = _near(city_key, want)
             # 线名自带地名（博罗233）时，近似线名也在那个地名下面（博罗1路…），
             # 说「惠州这边有的是」会被读成全惠州的线，写「博罗这边」才对得上
