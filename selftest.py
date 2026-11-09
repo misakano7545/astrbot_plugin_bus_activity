@@ -627,6 +627,23 @@ _card = ' [卡片消息] 小程序 {"appid":"wx1234567890","url":"https://x?t=20
 assert query.NOT_TEXT.search(_card) and query.answer(_card, "玉林市") == ""
 assert query.answer('<img src="file://C:/x/nt_data/Emoji/2026-11/Ori/47d71be6.jpg" />', "玉林市") == ""
 assert query.answer("[图片]", "玉林市") == "" and query.answer("[表情][图片]", "玉林市") == ""
+# baka86bot 的 B 站卡片：<attachmentType=…>识别：哔哩哔哩，【4K】…杭州公交520路…（2026 / 11 全在里面）
+_bili = ('<attachmentType="image/jpeg",attachmentIndex=0,description="x">识别：哔哩哔哩，'
+         '【4K】【南浦交社·2026·公交】杭州公交520路（钱江新城总站-武林广场西）')
+assert query.NOT_TEXT.search(_bili) and query.answer(_bili, "玉林市") == ""
+# 只甩一条链接（分享视频）不是提问：不能顺着上一句的线路回「有，17路 现在 5 辆在路上」
+_lk = query._last("")
+_keep = dict(_lk)
+_lk.update({"city": "玉林", "line": "17"})
+assert query.answer("https://www.bilibili.com/video/av117584997391050?p=1", "玉林市") == ""
+assert query.answer("https://example.com/a", "玉林市") == ""
+# 链接后面真带了问题还是照答
+assert query._lines("https://x.cn/a 杭州520路还有车吗") == [("520", "杭州")]
+_lk.clear(); _lk.update(_keep)
+# 【4K】是清晰度，不是 4K 路（以前会答成「有，4路 现在 5 辆在路上」）
+assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
+assert query._lines("【1080P】520路") == [("520", "")]
+
 assert not query.NOT_TEXT.search("查看北流城南站方向还有没有")   # 微信 appmsg 要解析出 title，不能整段丢
 assert query._veh_tokens("2026 那辆车") == [] and query._veh_tokens("2025年") == []
 assert query._veh_tokens("48542557 到哪") == ["48542557"]        # 武汉车号就是长数字

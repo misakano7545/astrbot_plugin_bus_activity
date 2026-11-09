@@ -444,6 +444,8 @@ def _lines(msg):
         if m.start() < end:            # 「131路区间」先匹到「131路」，别再算一条
             continue
         end = m.end()
+        if RES_RE.match((m.group("alpha") or "") + (m.group("qual") or "")):
+            continue                    # 【4K】是视频清晰度，不是 4K 路
         num = (m.group("nnum") + m.group("nqual")) if m.group("nnum") else \
             (m.group("inum") + m.group("iqual")) if m.group("inum") else \
             (m.group("alpha") or m.group("num") or m.group("zero") or m.group("metro") or m.group("brt")
@@ -1684,7 +1686,17 @@ MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
 # 可一旦进了 answer 就会当成「432路 + 2026 号车」去查（还顺手扫了全城）。
 NOT_TEXT = re.compile(r"\[卡片消息\]|\[小程序\]|小程序\s*\{|appid"
                       r"|\[图片\]|\[表情\]|\[语音\]|\[文件\]|\[视频\]|\[Image|"
-                      r"file://|nt_data|\.png\b|\.gif\b")
+                      r"file://|nt_data|\.png\b|\.gif\b"
+                      # AstrBot 把图片消息整段转成 <attachmentType="image/jpeg",attachmentIndex=0,…>识别：…
+                      # 里面还带「哔哩哔哩 / 播放 / 弹幕」这些视频卡片字段，同样是非文本
+                      r'|<attachmentType|attachmentIndex=|description="'
+                      r"|哔哩哔哩|bilibili\.com|b23\.tv")
+# 单独一条链接（分享的视频/新闻）不是问句
+URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.I)
+RES_RE = re.compile(r"^(?:[248]K|[124]080[Pp]|[0-9]{3,4}[Pp])$")
+# 【4K】【1080P】是视频清晰度，不是 4K 路 / 1080 路。整句里先抹掉，
+# 不然后面 _msg_line 会在「4K」里匹到 4 路
+RES_WORD = re.compile(r"(?<![\dA-Za-z])(?:[248]K|[124]080[Pp]|[0-9]{3,4}[Pp])(?![A-Za-z])")
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐|往)")
 # 只剥带数据源的写法：「查桥站」这种真站名不能被「查」吃掉
 SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上|巴士派迪|派迪)\s*[，,、:：]?\s*"
@@ -4208,9 +4220,13 @@ def answer(msg, default_city, ctx="", key=""):
     # 整段里全是 appid、时间、文件路径，别当公交问句去查
     if NOT_TEXT.search(msg):
         return ""
+    # 只甩了一条链接：剥掉链接一个字都不剩，是分享不是提问。
+    # 以前会顺着上一句的线路回「有，17路 现在 5 辆在路上」，完全不是人问的东西
+    if URL_RE.search(msg) and len(re.findall(r"[\u4e00-\u9fff]", URL_RE.sub(" ", msg))) < 2:
+        return ""
     last = _last(key)
     t0 = time.time()
-    msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
+    msg = RES_WORD.sub(" ", MARKUP_RE.sub(" ", AT_RE.sub(" ", msg)))
     qm = QUOTE_RE.search(msg)
     if qm:
         # 引用内容只当上下文：引用「G02 现在 2 辆」再问「桂K06833D 自编号是啥」，G02 会把车牌问题顶掉
