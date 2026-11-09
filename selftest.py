@@ -644,6 +644,23 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 「那查询527」/「527呢」：这城没有 527 这条线时，527 只能是车号（自编号），得去全城找，
+# 不能返空（返空群里一声不吭，模型就自己编「玉林没有这个线路号」）
+assert query._num_is_line("玉林", "玉林市", "17") is True     # 玉林真有 17 路
+assert query._num_is_line("玉林", "玉林市", "527") is False
+_sn0, query.render_selfno = query.render_selfno, (
+    lambda ck, cn, tok, line="", mk=None: f"[全城找 {tok}]")
+_csR, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+_cfR, query._catalog = query._catalog, lambda cn: {"buslines": [{"lineName": "17路", "upperOrDown": "1"}]}
+for _m in ("那查询527", "527呢", "查询527"):
+    _o = query.answer(_m, "玉林市")
+    assert _o == "[全城找 527]", (_m, _o)
+# 有这条线时走线路（不能被车号分支抢走）
+assert query.answer("那查询17", "玉林市") != "[全城找 17]"
+# 算术题/别的数字不能被拿去全城找车
+assert query.answer("9999x 8123等于多少", "玉林市") == ""
+query.render_selfno, query.cities, query._catalog = _sn0, _csR, _cfR
+
 # 问一句「武汉地铁12号线」不能把整城标成「掌上没实时」：
 # 武汉车来了只收了 22 条通学线，一旦跳过掌上，全城线路都答成「两家实时都没报来车」
 _csP, query.cities = query.cities, lambda: {"武汉": {"mygolbs": "武汉市", "chelaile": "11036"}}

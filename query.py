@@ -866,6 +866,23 @@ def _bare_line_exists(city_id, want):
     return any(norm_line(r.get("lineName") or "") == norm_line(want) for r in rows)
 
 
+def _num_is_line(city_key, city_name, want):
+    """这城目录里有没有这个号的线路。
+
+    「527」在成都是线路，在玉林只能是车号——所以「查询527」不能一刀切当线路（会回
+    「没查到「527」这条线」），也不能一刀切当车号（成都就问错了）。"""
+    w = norm_line(want)
+    try:
+        if any(norm_line(r.get("lineName") or "") == w
+               or w in _slash_parts(r.get("lineName") or "")
+               for r in _catalog(city_name).get("buslines") or []):
+            return True
+    except Exception:
+        pass
+    cid = (cities().get(city_key) or {}).get("chelaile")
+    return bool(cid and _bare_line_exists(cid, w))
+
+
 def _static_my(city_name, wants):
     """实时取不到时，只用目录（起讫/站数）回一份——总比「上游没响应」强。
 
@@ -3464,6 +3481,8 @@ def _plate_index(city_name, cap=PLATE_MAX, budget=SCAN_BUDGET, start=0):
     idx, core = {}, {}
     done, t0 = start, time.time()
     jobs = jobs[start:start + cap]
+    # 小城（玉林 46 个方向）别因为 6 秒预算只翻一半就让人再问一遍
+    budget = max(budget, 20.0) if total <= 120 else budget
 
     def fetch(j):
         return _live_my(city_name, j[0], j[1]).get("list") or []
@@ -3547,6 +3566,9 @@ def _selfno_index(city_id, cap=SELFNO_MAX, start=0, budget=SCAN_BUDGET):
         return nm, d.get("to") or "", d.get("buses") or []
 
     done, t0 = start, time.time()
+    # 小城（玉林 46 个方向）别因为 6 秒预算只翻一半就让人再问一遍：
+    # 翻完剩下的只差一两秒，一次答完比「再问一次我接着往后扫」有用
+    budget = max(budget, 20.0) if total <= 120 else budget
     with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
         for i in range(0, len(jobs), 40):
             chunk = jobs[i:i + 40]
@@ -4523,6 +4545,20 @@ def answer(msg, default_city, ctx="", key=""):
                 return f"自编号 {num.group()} 是哪条线上的？报个线路名（比如 9路）我就能查出这辆车跑到哪了"
         if out:
             return out
+    # 「那查询527」「527呢」：这城没有 527 这条线，527 就只能是车号（自编号）。
+    # 以前这里直接返空，群里一声不吭，模型只好自己编「玉林没有这个线路号，你得说几路」
+    if not line and name and not re.search(r"车|辆|号|路|线", msg):
+        _vt2 = _veh_tokens(msg)
+        # 整句剥掉「那/查/看一下/呢」之后只剩这个号，才算在问它：
+        # 「9999x 8123等于多少」也带数字，不能拿去全城找车
+        _rest = re.sub(r"^(?:那|这|再|帮我|给我|麻烦)?\s*"
+                       r"(?:查询|查一下|查查|查|看看|看|问一下|问|搜一下|搜)?\s*", "", msg.strip())
+        _rest = re.sub(r"(?:呢|吗|啊|呀|吧|的位置|在哪|到哪)$", "", _rest).strip()
+        if _vt2 and _rest in (_vt2[0], _vt2[0] + "号") \
+                and not _num_is_line(city_key, name, _vt2[0]):
+            out = render_selfno(city_key, name, _vt2[0])
+            if out:
+                return out
     if line:
         # 「车来了查XX校区的线路」带站点，别因为上一条问过 9 路就答成 9 路
         if inherited and name:
