@@ -610,6 +610,11 @@ assert query._veh_tokens("G02") == []
 
 # 「石家庄43路7376到哪了」：线号在前、车号在后，车号不能被前一个「路」字挡掉
 assert query._veh_tokens("石家庄43路7376到哪了") == ["7376"]
+# 「是，397号车」这种不带路/线的车号问法得能进快路，不然只剩模型一条路、它会反口问是哪一路的
+assert query.BUS_RE.search("是，397号车") and query.BUS_RE.search("397号车")
+assert query.BUS_RE.search("397号")
+assert not query.BUS_RE.search("3号门怎么走")     # 门/楼/口 不是车
+assert not query.BUS_RE.search("2号楼在哪")
 assert query._veh_tokens("玉林G02 397号车到哪了") == ["397"]
 # 位数就对不上时不做几百个方向的白扫：直接按形状说清（昆明车号都是 5 位）
 assert query._id_hint({"chelaile": ["51434", "04387"]}, "4449").startswith("（这城车号是 5 位")
