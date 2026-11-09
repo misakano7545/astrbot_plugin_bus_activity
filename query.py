@@ -3937,6 +3937,13 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
             else:
                 _v2 = VEH2_RE.search(msg)
                 out = render_at(city_key, name, w, msg, _v2.group(1) if _v2 else "")
+                # 「玉林北站要等多久才能等到G02」：站名整段在线号前面时 parse 把它当前缀取走了，
+                # 取站那一步就从整句里抠不出干净的站名（抠出来的是「玉林北站要等多久才能等」），
+                # 于是反口问「是哪一站等」。前缀真在这城站表里就拿它当站名再问一遍
+                if not out and prefix and norm_city(prefix) != city_key \
+                        and find_stop(name, prefix)[0]:
+                    out = render_at(city_key, name, w, msg,
+                                    _v2.group(1) if _v2 else "", at=prefix)
                 # 「玉林九中的3路等多久」站名没认出来：站在站台问钟点的人读「每辆车离它旁边那站多远」没用
                 if not out and TIMEQ_RE.search(msg) and not INTERVAL_RE.search(msg):
                     return f"{w + '路' if w.isdigit() else w} 是哪一站等？说个站名我给几分钟"

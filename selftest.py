@@ -575,6 +575,21 @@ assert query._one("玉林", "玉林市", "G02", "", "现在呢", None, True, _lw
 query.query, query.render, query._selfno_mate, query._catalog = _lq2, _lr2, _ms2, _ocs
 query._line_ids = _lid2
 
+# 「玉林北站要等多久才能等到G02」：站名整段在线号前面时 parse 把它当前缀取走了，
+# 取站那步从整句里抠出来的是「玉林北站要等多久才能等」，于是反口问「是哪一站等」。
+# 前缀真在站表里就拿它当站名再问一遍
+_rss, query.render_at = query.render_at, lambda ck, cn, w, m, veh="", tally=None, at="": (
+    f"AT[{at}]" if at else None)
+_fss, query.find_stop = query.find_stop, lambda cn, s: (
+    ({"stationName": s}, s) if s == "玉林北站" else (None, s))
+_qstr, query.query = query.query, lambda *a, **k: {"error": "没这条"}
+assert query._one("玉林", "玉林市", "G02", "玉林北站", "玉林北站要等多久才能等到G02",
+                  None, True, {}) == "AT[玉林北站]"
+# 前缀不是站名时别硬当站问，照旧反口问他
+assert query._one("玉林", "玉林市", "G02", "玉林九中", "玉林九中3路等多久",
+                  None, True, {}).endswith("是哪一站等？说个站名我给几分钟")
+query.render_at, query.find_stop, query.query = _rss, _fss, _qstr
+
 # 「530呢」：本线没这辆车时去全城其它线路找，别只丢一句「没跑这辆」
 _cs14, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "zd440"}}
 _pi_keep2, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX: ({}, 46, 46)
