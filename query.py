@@ -3824,7 +3824,7 @@ def render_veh_stop(city_key, city_name, veh, stop, line=""):
         if not cands:
             more = "，再问一次我接着往后扫" if "只翻了前" in (span or "") else ""
             return "".join(x for x in (span + "，" if span else "",
-                                       "这会儿没看到 %s 在路上——多半停场或者收车了" % veh, more))
+                                       "这会儿没看到%s 在路上——多半停场或者收车了" % veh, more))
     for ln in cands:
         real = _line_real(city_name, ln) or ln
         where = _veh_on(city_name, real, veh)
@@ -3833,14 +3833,17 @@ def render_veh_stop(city_key, city_name, veh, stop, line=""):
         d, cur, cur_i = where
         to = _line_to(city_name, real, d)
         label = _line_label(ln)
-        here = "现在在 %s%s" % (cur, "（往%s）" % to if to else "")
+        # 抬头必须是这台车的号：写成「G02路 到玉林北站还有 10 站」读起来像在说整条线
+        # （下一班、最快那辆），用户问的是这一台
+        head = "%s（%s%s）" % (veh, label, " 往" + to if to else "")
+        here = "这会儿在 %s" % cur
         seq = [s.get("stationName") or "" for s in _station_seq(city_name, real, d)]
         tgt = next((k + 1 for k, s in enumerate(seq) if s == stop), None) \
             or next((k + 1 for k, s in enumerate(seq) if stop in s), None)
         if not tgt:
-            return "%s %s，但它这个方向不经过「%s」" % (label, here, stop)
+            return "%s这个方向不经过「%s」，%s" % (head, stop, here)
         if cur_i and cur_i >= tgt:
-            return "%s 已经过了「%s」，%s" % (label, stop, here)
+            return "%s已经过了「%s」，%s" % (head, stop, here)
         pay = _live_my(city_name, real, d, tgt)
         row = next((r for r in pay.get("routeOnStationRTimeInfoList") or []
                     if _id_eq(str(r.get("busNumber") or ""), veh)
@@ -3851,12 +3854,14 @@ def render_veh_stop(city_key, city_name, veh, stop, line=""):
             except (TypeError, ValueError):
                 mins = 0
             cnt = int(row.get("busToStationCount") or 0)
-            return "%s 到「%s」还有 %d 站，约 %d 分钟（%s）" % (label, stop, cnt, max(1, mins), here)
+            return "%s到「%s」还有 %d 站，约 %d 分钟；%s（这一台自己的到站预测）" % (
+                head, stop, cnt, max(1, mins), here)
         est = _run(pay, max(0, cur_i - 1), max(1, tgt - 1)) if cur_i else 0
         if est:
-            return "%s 到「%s」还有 %d 站，按这一段路况估约 %d 分钟（上游没给这辆车单独的到站预测，%s）" % (
-                label, stop, tgt - cur_i, max(1, int(round(est))), here)
-        return "%s %s，上游这会儿没给它的到站预测" % (label, here)
+            return ("%s到「%s」还有 %d 站，按这段路况估约 %d 分钟；%s"
+                    "（上游没给这一台单独的预测，是按路段均速推的）" % (
+                        head, stop, tgt - cur_i, max(1, int(round(est))), here))
+        return "%s %s，上游这会儿没给它的到站预测" % (head, here)
     return ""
 
 

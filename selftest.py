@@ -661,6 +661,14 @@ def _live_e(cn, ln, d, order=1):
 _lvE, query._live_my = query._live_my, _live_e
 _o = query.render_veh_stop("玉林", "玉林市", "桂K11878D", "玉林北站", "G02")
 assert "还有 2 站" in _o and "6 分钟" in _o, _o          # 上游给了这辆车单独的预测
+assert _o.startswith("桂K11878D"), _o      # 抬头必须是这一台，不能写成「G02路 还有 2 站」（像在说整条线）
+# 同一条线上有两台车时，只取问的那一台的预测（别把别台的 1 分钟报成它的）
+_rt_other = dict(_rt, busNumber="桂K99999D", busToStationCount=1, busToStationTime=1.0)
+query._live_my = lambda cn, ln, d, order=1: {
+    "list": [{"busNumber": "桂K11878D", "stationName": "市政广场"}],
+    "routeOnStationRTimeInfoList": ([_rt_other, _rt] if order > 3 else [])}
+_o3 = query.render_veh_stop("玉林", "玉林市", "桂K11878D", "玉林北站", "G02")
+assert "还有 2 站" in _o3 and "6 分钟" in _o3 and "1 分钟" not in _o3, _o3
 assert "已经过了" in query.render_veh_stop("玉林", "玉林市", "桂K11878D", "汽车总站", "G02")
 assert "不经过" in query.render_veh_stop("玉林", "玉林市", "桂K11878D", "飞机场", "G02")
 # 上游没给这辆车的预测时按路段估，别一声不吭
