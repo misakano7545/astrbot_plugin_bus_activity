@@ -610,6 +610,27 @@ assert query._veh_tokens("G02") == []
 
 # 「石家庄43路7376到哪了」：线号在前、车号在后，车号不能被前一个「路」字挡掉
 assert query._veh_tokens("石家庄43路7376到哪了") == ["7376"]
+# 同一个号扫完一遍没找到，10 分钟内别重复扫（群里那五条 240/600/920… 就是这么滚出来的）
+_mem = ("veh-miss", "玉林", "88888")
+query._cache.pop(_mem, None)
+_cs16, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+_ch16, query._city_hits = query._city_hits, lambda ck, cn, tok, line="", mk=None: ([], "全城 46 个方向都翻了", "")
+_r1 = query.render_veh_city("玉林", "玉林市", "88888", "G02")
+_r2 = query.render_veh_city("玉林", "玉林市", "88888", "G02")
+assert "没看到 88888" in _r1 and "刚查过一遍" in _r2, (_r1, _r2)
+query.cities, query._city_hits = _cs16, _ch16
+query._cache.pop(_mem, None)
+
+# 卡片/小程序/图片整段不当公交问句：里面全是 appid、时间、文件路径，
+# 一旦进了解析就会当成「432路 + 2026 号车」去查，还顺手扫了全城（群里那五条就是这么来的）
+_card = ' [卡片消息] 小程序 {"appid":"wx1234567890","url":"https://x?t=2026&line=432&id=520"}'
+assert query.NOT_TEXT.search(_card) and query.answer(_card, "玉林市") == ""
+assert query.answer('<img src="file://C:/x/nt_data/Emoji/2026-11/Ori/47d71be6.jpg" />', "玉林市") == ""
+assert query.answer("[图片]", "玉林市") == "" and query.answer("[表情][图片]", "玉林市") == ""
+assert not query.NOT_TEXT.search("查看北流城南站方向还有没有")   # 微信 appmsg 要解析出 title，不能整段丢
+assert query._veh_tokens("2026 那辆车") == [] and query._veh_tokens("2025年") == []
+assert query._veh_tokens("48542557 到哪") == ["48542557"]        # 武汉车号就是长数字
+assert query._veh_tokens("8A9E8AA8 到哪") == ["8A9E8AA8"]
 # 「是，397号车」这种不带路/线的车号问法得能进快路，不然只剩模型一条路、它会反口问是哪一路的
 assert query.BUS_RE.search("是，397号车") and query.BUS_RE.search("397号车")
 assert query.BUS_RE.search("397号")

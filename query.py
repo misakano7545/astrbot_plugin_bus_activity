@@ -1097,9 +1097,20 @@ def _veh_tokens(msg):
             continue                      # 513路 / G02线 是线号
         if nxt == "号" and after[1:2] != "车":
             continue                      # 397号线 是线号，「397号车」是车
-        if _id_kind(tok):
+        if _id_kind(tok) and not _not_veh_num(tok):
             out.append(tok)
     return list(dict.fromkeys(out))
+
+
+def _not_veh_num(tok):
+    """这些数字不是车号：年份（2026）、QQ/手机号、文件大小、时间戳。
+
+    卡片消息里全是这种数字，当成车号就会去扫全城找一辆不存在的车。
+    """
+    t = str(tok)
+    # 只挡年份：「2026 那辆车」里的 2026 是时间。长数字不能挡——武汉的车号就是
+    # 48542557、8A9E8AA8 这种，挡了它们就永远查不到车
+    return len(t) == 4 and t.isdigit() and t[:2] in ("19", "20")
 
 
 def _veh_from(res, msg, city_key="", city_name="", line=""):
@@ -1668,6 +1679,12 @@ WX_TITLE = re.compile(r"<title>(.*?)</title>", re.S)
 WX_REF = re.compile(r"<refermsg>.*?<content>(.*?)</content>.*?</refermsg>", re.S)
 # 图片/文件消息的占位标签：「description"eyJ0ZXh0…」里的 base64 长得像「yJ0 路」
 MARKUP_RE = re.compile(r"<attachment[^>]*>|\[图片\]|\[Image[^\]]*\]", re.I)
+# 非文本消息：QQ 的卡片/小程序、图片表情文件、微信 appmsg、file:// 路径。
+# 这些整段里全是 appid、时间戳、文件路径，抽出来的数字既不像线号也不像车号，
+# 可一旦进了 answer 就会当成「432路 + 2026 号车」去查（还顺手扫了全城）。
+NOT_TEXT = re.compile(r"\[卡片消息\]|\[小程序\]|小程序\s*\{|appid"
+                      r"|\[图片\]|\[表情\]|\[语音\]|\[文件\]|\[视频\]|\[Image|"
+                      r"file://|nt_data|\.png\b|\.gif\b")
 LEAD = re.compile(r"^(我?在|我?从|去|到|等|坐|往)")
 # 只剥带数据源的写法：「查桥站」这种真站名不能被「查」吃掉
 SRCPRE = re.compile(r"^(?:从|用)?(?:车来了|掌上公交|掌上|巴士派迪|派迪)\s*[，,、:：]?\s*"
@@ -3169,6 +3186,7 @@ PLATE_MAX = 2600      # 深圳 2310 个方向，够了；北京 3477 / 上海 32
 SCAN_BUDGET = 6.0     # 临时找一辆车时一次最多扫这么久，到点就报「只翻了前 N 个方向」，下次接着扫
 SCAN_WORKERS = 32     # 全城找车是"问一辆车在哪"，并发给高些：昆明 680 个方向 24 并发 18.6 秒
 IDX_TTL = 300         # 全城车号索引攒在缓存里，5 分钟内再问接着用、接着往后扫
+VEH_MISS_TTL = 600    # 全城扫完没这辆车：10 分钟内同一个号不再扫一遍
 PLATE_TTL = 60
 
 
@@ -3710,6 +3728,11 @@ def render_veh_city(city_key, city_name, veh, line="", my_kinds=None):
     """
     if not veh:
         return ""
+    memo = ("veh-miss", city_key, str(veh))
+    hit = _cache.get(memo)
+    if hit and time.time() - hit[0] < VEH_MISS_TTL:
+        return (u"刚查过一遍，这会儿没看到 %s 在路上——多半停场或者收车了"
+                u"（%d 分钟内同一个号不重复扫全城）" % (veh, int(VEH_MISS_TTL / 60)))
     hits, span, hint = _city_hits(city_key, city_name, str(veh), line, my_kinds)
     if hits:
         bits = u"、".join(_line_label(nm) + (u"（往%s，刚过%s）" % (to, st.strip()) if to and st else u"")
@@ -3717,6 +3740,8 @@ def render_veh_city(city_key, city_name, veh, line="", my_kinds=None):
         return u"不过它这会儿在其它线上：%s" % bits
     more = u"，再问一次我接着往后扫" if span and u"只翻了前" in span else u""
     lead = (span + u"，") if span else u""
+    if span and u"只翻了前" not in span:
+        _cache[memo] = (time.time(), 1)      # 全城翻完了还没有：记一笔，别每次问都重扫
     return u"%s这会儿没看到 %s 在路上——多半停场或者收车了%s%s" % (lead, veh, hint, more)
 
 
@@ -4179,6 +4204,10 @@ def answer(msg, default_city, ctx="", key=""):
             ctx = (ctx + " " + html.unescape(re.sub(r"<[^>]+>", " ", rm.group(1)))).strip()
         tm = WX_TITLE.search(msg)
         msg = html.unescape(tm.group(1)) if tm else re.sub(r"<[^>]+>", " ", msg)
+    # 卡片/小程序/图片/文件（微信 XML 上面已经取出正文，这里只看剩下的）：
+    # 整段里全是 appid、时间、文件路径，别当公交问句去查
+    if NOT_TEXT.search(msg):
+        return ""
     last = _last(key)
     t0 = time.time()
     msg = MARKUP_RE.sub(" ", AT_RE.sub(" ", msg))
@@ -4217,7 +4246,9 @@ def answer(msg, default_city, ctx="", key=""):
         line = parse(ctx)
     # 「现在513去哪里了」「现在呢」：没写线号，问的是上一句那条线上某辆车现在到哪。
     # 以前这里不认，落到站名那条路，最后返空——群里一声不吭，模型就自己编。
-    if not line and last.get("line") and _vehicle_talk(msg):
+    # 句子里自己带着车号（「玉林397号车在哪」）就别沿用上一句的线路：
+    # 上一句问的是重庆470，这句会被答成「没查到「470」这条线」，明明问的是 397 号车
+    if not line and last.get("line") and _vehicle_talk(msg) and not _veh_tokens(msg):
         line = (last["line"], "")
         # 上一句点名了源（「用车来了查 g02」）就接着用它：两家的车号体系不一样，
         # 换成掌上以后 514 这个自编号对不上任何一辆，用户问的那辆就丢了
