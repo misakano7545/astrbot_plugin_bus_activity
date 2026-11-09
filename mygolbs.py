@@ -25,6 +25,8 @@ HEADERS = {
 }
 CITY_TTL, CATALOG_TTL, LIVE_TTL = 6 * 3600, 3600, 20
 CACHE_MAX = 2048
+# 出错响应在缓存里最多留这么久（秒）：宁可多问一次上游，也别让一次抖动顶一小时
+ERR_TTL = 30
 
 # 两个源共用的 TTL 缓存，key 是 (kind, key)，别一个 kind 存两种形状
 cache = {}
@@ -45,6 +47,12 @@ def cached(kind, key, ttl, fn):
     val = fn()
     # 网络抖动别进缓存：catalog 一挂就是一小时查不到车，全是这条缓存留的
     if isinstance(val, dict) and val.get("error") and "detail" in val:
+        return val
+    # 上游自己回的错（status 非 1，比如「当前城市暂无法提供公交查询」）以前照 ttl 存一小时：
+    # 武汉那次目录偏了一下，后续一小时内所有线路都走了「目录里没这条」的路
+    if isinstance(val, dict) and val.get("error"):
+        keep = min(ttl, ERR_TTL)
+        cache[(kind, key)] = (time.time() - (ttl - keep), val)
         return val
     # 过期键长期占位会让 cache 一直涨，顺手清掉同一个 kind 下的过期项，超上限再整体淘汰
     if len(cache) >= CACHE_MAX:

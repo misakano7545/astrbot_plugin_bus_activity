@@ -644,6 +644,27 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 上游回的错不能按一小时缓存：武汉 325 那次目录偏了一下，之后一小时内全城都「目录里没这条」
+_bad = {"status": -2, "msg": "当前城市暂无法提供公交查询", "error": True}
+query.mygolbs.cache.pop(("t-err", "k"), None)
+query.mygolbs.cached("t-err", "k", 3600, lambda: _bad)
+_t = query.mygolbs.cache[("t-err", "k")][0]
+assert query.time.time() - _t > 3000, query.time.time() - _t          # 只剩 30 秒有效期，不是一小时
+assert query.mygolbs.cached("t-err", "k", 3600, lambda: {"status": "1"}) is _bad  # 30 秒内仍复用
+query.mygolbs.cache.pop(("t-err", "k"), None)
+# 目录里缺这条线时不能直接说「没这条」：再问一次关键词搜索（CMD=114）
+_cat0, query._catalog = query._catalog, lambda cn: {"buslines": [], "status": "1", "msg": ""}
+_ln0, query.mygolbs.lines = query.mygolbs.lines, (
+    lambda cn, kw="": ([{"lineName": "325路", "to": "博学路潮海村", "upperOrDown": "1"}]
+                       if kw == "325" else []))
+_lv0, query._live_my = query._live_my, (
+    lambda cn, ln, d, *a, **k: {"status": "1", "msg": "获取实时数据成功!", "hasReal": "1",
+                                "list": [{"busNumber": "8DD2BB52", "stationName": "四新南路",
+                                          "statusType": "2", "busToStationNiheDistance": 120}]})
+_r = query._mygolbs("武汉市", "325")
+assert not _r.get("error") and _r["groups"][0][1], _r
+query._catalog, query.mygolbs.lines, query._live_my = _cat0, _ln0, _lv0
+
 # 「去天安门做几路」：做=坐 的手滑，尾巴砍不掉就整句当站名搜 → 「这个站没查到」
 _tm = query.TAIL.sub("", query.LEAD.sub("", "去天安门做几路"))
 assert _tm == "天安门", _tm

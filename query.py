@@ -765,6 +765,18 @@ def _mygolbs(city_name, want):
     rows = cat.get("buslines") or []
     hit = _pick_city_line([(r["lineName"], r) for r in rows], want, city_name)
     if not hit:
+        # 目录（CMD=119）偶尔给的是残缺/过期的一份：只凭它就说「没这条」会把数据源缺口说成
+        # 事实错误（武汉 325 路那次就这么被答成「两家实时都没报来车」）。
+        # 关键词搜索（CMD=114）按 KEYWORD 直接给行，带 to/upperOrDown，能当目录用
+        try:
+            alt = [r for r in mygolbs.lines(city_name, want) or [] if r.get("lineName")]
+        except Exception:
+            alt = []
+        if alt:
+            hit = _pick_city_line([(r["lineName"], r) for r in alt], want, city_name)
+            if hit:
+                rows = alt
+    if not hit:
         # 没有就报候选，别让「沛县 1 路」这种（只有 11/17/18 路）答成「没这条线」
         near = sorted({r["lineName"] for r in rows
                        if norm_line(r["lineName"]).startswith(want)})[:4]
