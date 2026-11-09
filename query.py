@@ -1243,7 +1243,11 @@ def query(city_key, wants, src=None, veh=""):
             # 掌上这座城整城不给车辆位置（hasReal=0，北京/成都），上一问已经知道了，
             # 现在两家都要问，跳过它省一整轮
             # 只跳过裸号：带汉字前缀的线名（新郑12、东胜8）只有掌上的目录认，车来了那边是裸号体系
-            if source == "mygolbs" and PREFER_CL.get(city_key) and not re.search(r"[\u4e00-\u9fa5]", want):
+            # 而且必须等车来了真的答上来才跳过：武汉车来了只收了 22 条通学线，
+            # 跳过掌上=整城没有数据源。实测问完「武汉地铁12号线」后，武汉所有线路
+            # （10路/325路/706路）全被答成「这城目录里有这条线，两家实时都没报来车」
+            if source == "mygolbs" and PREFER_CL.get(city_key) and not re.search(r"[\u4e00-\u9fa5]", want) \
+                    and (best or blank):
                 continue
             # 县级市借父城的车来了 id：「吴川9路」不能拿湛江市区的 9 路顶
             if source == "chelaile" and ent.get("_borrow") and not re.search(r"[\u4e00-\u9fa5]", want):
@@ -1278,8 +1282,12 @@ def query(city_key, wants, src=None, veh=""):
                 others[LABEL[source]] = [str(b[0]) for _, bs in got["groups"] for b in bs]
                 continue
             if got:
-                # 掌上这座城没实时（unknown），记下来，下一问直接先问车来了
-                if got.get("unknown") and ent.get("chelaile"):
+                # 掌上这座城没实时（unknown），记下来，下一问直接先问车来了。
+                # 地铁/轨道交通不算：地铁不上报车机是全行业如此，跟这座城有没有实时无关。
+                # 以前问一句「武汉地铁12号线」就把武汉整城标成「掌上没实时」，
+                # 之后武汉所有公交线路都不再问掌上（而那城车来了只收了 22 条通学线）
+                if got.get("unknown") and ent.get("chelaile") \
+                        and not re.search(r"地铁|轨道交通|号线", got.get("line") or ""):
                     PREFER_CL[city_key] = True
                 # 两家都没车时两家的说法都要留着：河池 15 路掌上一挂，
                 # 就只剩车来了那句「暂无车辆时间」，首末班和站数全丢了

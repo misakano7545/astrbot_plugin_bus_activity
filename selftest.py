@@ -644,6 +644,32 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 问一句「武汉地铁12号线」不能把整城标成「掌上没实时」：
+# 武汉车来了只收了 22 条通学线，一旦跳过掌上，全城线路都答成「两家实时都没报来车」
+_csP, query.cities = query.cities, lambda: {"武汉": {"mygolbs": "武汉市", "chelaile": "11036"}}
+_mgP, query._mygolbs = query._mygolbs, lambda cn, w: {
+    "source": "掌上公交", "line": "地铁12号线", "groups": [], "note": "", "unknown": True, "pos": {}}
+_clP, query._chelaile = query._chelaile, lambda cid, w: None
+query.PREFER_CL.pop("武汉", None)
+query.query("武汉", ["地铁12号线"])
+assert "武汉" not in query.PREFER_CL, query.PREFER_CL        # 地铁不算这座城没实时
+# 真公交线（掌上整城 hasReal=0）才记
+query._mygolbs = lambda cn, w: {"source": "掌上公交", "line": "8路", "groups": [], "note": "",
+                                "unknown": True, "pos": {}}
+query.query("武汉", ["8路"])
+assert query.PREFER_CL.get("武汉") is True
+# 就算标了「先问车来了」，车来了没这条时也必须回落掌上，不能整城查不到
+_got = []
+def _mg10(cn, w):
+    _got.append(w)
+    return {"source": "掌上公交", "line": "10路", "pos": {},
+            "groups": [("汉口火车站", [("BDCE8BC0", "鹦鹉大道", 120, "2")])], "note": "", "unknown": False}
+query._mygolbs = _mg10
+_r10 = query.query("武汉", ["10"])
+assert _got == ["10"] and any(g for _, g in _r10["groups"]), (query.PREFER_CL, _r10)
+query.cities, query._mygolbs, query._chelaile = _csP, _mgP, _clP
+query.PREFER_CL.pop("武汉", None)
+
 # 上游回的错不能按一小时缓存：武汉 325 那次目录偏了一下，之后一小时内全城都「目录里没这条」
 _bad = {"status": -2, "msg": "当前城市暂无法提供公交查询", "error": True}
 query.mygolbs.cache.pop(("t-err", "k"), None)
