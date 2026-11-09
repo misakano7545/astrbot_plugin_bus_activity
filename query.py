@@ -129,7 +129,8 @@ JUNK_TAIL = re.compile(r"(?:看看|查查|看看有|看|查|有|的|了|来|台|
 # 不单独算信号；实词、线号、数据源名才是。
 # 完整车牌：省简称 + 字母 + 5 位（普通）或 6 位（新能源，闽A17997D）
 PLATE_PAT = (r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云藏陕甘青宁新]"
-             r"\s*[A-Z]\s*[A-Z0-9]{4,6}(?![A-Za-z0-9])")
+             r"\s*[A-Za-z]\s*[A-Za-z0-9]{4,6}(?![A-Za-z0-9])")
+# 「桂k11878d」全小写也要认（群里就这么打），统一大写后再往下走
 BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
     # 「北京BRT4」「厦门BRT1」：群里就这么写，不加这条快路压根不触发，全靠模型想起来调工具
@@ -1120,7 +1121,7 @@ def _veh_tokens(msg):
     """句子里所有像车号的东西（车牌、纯数字自编号、8A9E8AA8 这种机器号），按出现顺序。"""
     out = []
     for pm in PLATE_RE.finditer(msg or ""):
-        out.append(pm.group(1))
+        out.append(pm.group(1).upper())
     for m in re.finditer(r"(?<![\dA-Za-z])([0-9][0-9A-Za-z]{2,9})(?![\dA-Za-z])", msg or ""):
         tok, nxt = m.group(1), (msg or "")[m.end():m.end() + 1]
         after = (msg or "")[m.end():m.end() + 2]
@@ -3774,6 +3775,91 @@ def _scan_span(spans):
             else u"只翻了前 %d 个方向（全城 %d 个）" % (scan, tot))
 
 
+def _stop_after_dao(text):
+    """「什么时候到玉林北站」「到玉林北站还有几站」里「到」后面那个站名。
+
+    不能直接交给 pick_stop：_cands 的 TAIL 里有「什么时候.*$」，整段被它吃空，
+    「桂K11878D 什么时候到玉林北站」就一个站名也取不出来。"""
+    m = re.search(r"(?:到|去|往|进)\s*([\u4e00-\u9fa5A-Za-z0-9（）()]{2,14})", text or "")
+    if not m:
+        return ""
+    return re.sub(r"(还有|还要|多久|几站|什么时候|几点|能到|吗|呢|啊|呀|吧).*$", "",
+                  m.group(1)).strip()
+
+
+def _veh_on(city_name, line, veh):
+    """这条线哪个方向上有这辆车 → (方向, 当前站名, 当前站序 1 基)。"""
+    for d in ("1", "2"):
+        for c in _live_my(city_name, line, d).get("list") or []:
+            if _id_eq(str(c.get("busNumber") or ""), str(veh)):
+                seq = [s.get("stationName") or "" for s in _station_seq(city_name, line, d)]
+                st = c.get("stationName") or ""
+                i = next((k + 1 for k, s in enumerate(seq) if s == st), None) or 0
+                return d, st, i
+    return None
+
+
+def _line_to(city_name, line, d):
+    for r in _catalog(city_name).get("buslines") or []:
+        if norm_line(r.get("lineName") or "") == norm_line(line) and str(r.get("upperOrDown")) == d:
+            return r.get("to") or ""
+    return ""
+
+
+def render_veh_stop(city_key, city_name, veh, stop, line=""):
+    """特定车辆到特定站还有多久：「桂K11878D 什么时候到玉林北站」。
+
+    掌上 CMD=104 带 STATIONORDER 时，routeOnStationRTimeInfoList 里**每辆车**都有到该站的
+    预测（busToStationTime / busToStationCount / busNumber）——按车号挑那一行就行，
+    不用自己按均速估。以前整个插件没有这条路径，问「某车某站」只能落到换乘或整线实时。
+    """
+    if not veh or not stop:
+        return ""
+    veh, stop = str(veh), stop.strip()
+    cands = [line] if line else []
+    span = ""
+    if not cands:
+        hits, span, _hint = _city_hits(city_key, city_name, veh)
+        cands = list(dict.fromkeys(h[1] for h in hits))[:3]
+        if not cands:
+            more = "，再问一次我接着往后扫" if "只翻了前" in (span or "") else ""
+            return "".join(x for x in (span + "，" if span else "",
+                                       "这会儿没看到 %s 在路上——多半停场或者收车了" % veh, more))
+    for ln in cands:
+        real = _line_real(city_name, ln) or ln
+        where = _veh_on(city_name, real, veh)
+        if not where:
+            continue
+        d, cur, cur_i = where
+        to = _line_to(city_name, real, d)
+        label = _line_label(ln)
+        here = "现在在 %s%s" % (cur, "（往%s）" % to if to else "")
+        seq = [s.get("stationName") or "" for s in _station_seq(city_name, real, d)]
+        tgt = next((k + 1 for k, s in enumerate(seq) if s == stop), None) \
+            or next((k + 1 for k, s in enumerate(seq) if stop in s), None)
+        if not tgt:
+            return "%s %s，但它这个方向不经过「%s」" % (label, here, stop)
+        if cur_i and cur_i >= tgt:
+            return "%s 已经过了「%s」，%s" % (label, stop, here)
+        pay = _live_my(city_name, real, d, tgt)
+        row = next((r for r in pay.get("routeOnStationRTimeInfoList") or []
+                    if _id_eq(str(r.get("busNumber") or ""), veh)
+                    and int(r.get("busToStationCount") or -1) >= 0), None)
+        if row:
+            try:
+                mins = int(round(float(row.get("busToStationTime") or 0)))
+            except (TypeError, ValueError):
+                mins = 0
+            cnt = int(row.get("busToStationCount") or 0)
+            return "%s 到「%s」还有 %d 站，约 %d 分钟（%s）" % (label, stop, cnt, max(1, mins), here)
+        est = _run(pay, max(0, cur_i - 1), max(1, tgt - 1)) if cur_i else 0
+        if est:
+            return "%s 到「%s」还有 %d 站，按这一段路况估约 %d 分钟（上游没给这辆车单独的到站预测，%s）" % (
+                label, stop, tgt - cur_i, max(1, int(round(est))), here)
+        return "%s %s，上游这会儿没给它的到站预测" % (label, here)
+    return ""
+
+
 def render_veh_city(city_key, city_name, veh, line="", my_kinds=None):
     """这条线上没这辆车时，去全城其它线路找它（两家都翻，号是什么格式都认）。
 
@@ -4440,6 +4526,18 @@ def answer(msg, default_city, ctx="", key=""):
             return out
     # 「闽A17997D 在哪」：只给车牌没给线路，全城逐线翻一遍找这辆
     # 「深圳M470路粤B08269D自编号」带了线路名，问的仍是自编号，别答成实时车
+    # 「桂K11878D 什么时候到玉林北站」：带车号 + 目标站，问的是这辆车到那站还有多久。
+    # 以前 HOP_RE 把它切成「从「什么时候」到「玉林北站」」，答成「没查到换乘方案」
+    _vt2 = _veh_tokens(msg)
+    if _vt2 and re.search(r"什么时候|几时|几点|多久|几站|还要|能到|到站", msg):
+        _rest = msg
+        for _t in _vt2:
+            _rest = _rest.replace(_t, " ")
+        _st = (_stop_after_dao(_rest) or (pick_stop(name, _rest) if name else "")) if name else ""
+        if _st:
+            out = render_veh_stop(city_key, name, _vt2[0], _st, line[0] if line else "")
+            if out:
+                return out
     if pm and (not line or SELFNO_RE.search(msg)):
         if SELFNO_RE.search(msg):
             return render_selfno(city_key, name, pm.group(1))

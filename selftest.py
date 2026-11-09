@@ -644,6 +644,35 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 特定车辆到特定站：「桂k11878d 什么时候到玉林北站」
+# 小写车牌也要认（群里打全小写），不然整句认不出车号，落到换乘
+assert query._veh_tokens("桂k11878d 什么时候到玉林北站") == ["桂K11878D"]
+assert query._stop_after_dao(" 什么时候到玉林北站") == "玉林北站"
+assert query._stop_after_dao(" 到玉林北站还有几站") == "玉林北站"
+_seq = [{"stationName": x} for x in ("汽车总站", "市政广场", "文化广场", "玉林北站")]
+_seq0, query._station_seq = query._station_seq, lambda cn, ln, d: _seq
+_catE, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "G02路", "upperOrDown": "1", "to": "玉林北站", "from": "汽车总站"}]}
+_rt = {"routeName": "G02路", "stationName": "玉林北站", "busToStationCount": 2,
+       "busToStationTime": 6.0, "busNumber": "桂K11878D"}
+def _live_e(cn, ln, d, order=1):
+    lst = [{"busNumber": "桂K11878D", "stationName": "市政广场", "statusType": "2"}]
+    return {"list": lst, "routeOnStationRTimeInfoList": [_rt] if order > 3 else []}
+_lvE, query._live_my = query._live_my, _live_e
+_o = query.render_veh_stop("玉林", "玉林市", "桂K11878D", "玉林北站", "G02")
+assert "还有 2 站" in _o and "6 分钟" in _o, _o          # 上游给了这辆车单独的预测
+assert "已经过了" in query.render_veh_stop("玉林", "玉林市", "桂K11878D", "汽车总站", "G02")
+assert "不经过" in query.render_veh_stop("玉林", "玉林市", "桂K11878D", "飞机场", "G02")
+# 上游没给这辆车的预测时按路段估，别一声不吭
+_rt2 = dict(_rt, busNumber="桂K00000D")
+query._live_my = lambda cn, ln, d, order=1: {"list": [{"busNumber": "桂K11878D", "stationName": "市政广场"}],
+                                             "routeOnStationRTimeInfoList": [_rt2] if order > 3 else [],
+                                             "dislist": [{"d": 1000}, {"d": 1000}],
+                                             "speedlist": [{"speed": 300}, {"speed": 300}]}
+_o2 = query.render_veh_stop("玉林", "玉林市", "桂K11878D", "玉林北站", "G02")
+assert "估约" in _o2 and "分钟" in _o2, _o2
+query._station_seq, query._catalog, query._live_my = _seq0, _catE, _lvE
+
 # 「那查询527」/「527呢」：这城没有 527 这条线时，527 只能是车号（自编号），得去全城找，
 # 不能返空（返空群里一声不吭，模型就自己编「玉林没有这个线路号」）
 assert query._num_is_line("玉林", "玉林市", "17") is True     # 玉林真有 17 路
