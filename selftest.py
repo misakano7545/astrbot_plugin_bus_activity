@@ -505,6 +505,21 @@ _pl = {"groups": [("甲", [("桂K12623D", "x", 1)]), ("乙", [("桂K12682D", "y"
 assert query._veh_from(_pl, "玉林G02 桂K12623D 到哪了") == "桂K12623D"
 assert query._veh_from(_pl, "桂K12682D 到哪") == "桂K12682D"
 assert query._veh_from(_pl, "G02还有几辆") == ""
+# 513 这种是**自编号**（车来了那套），掌上那份报的是车牌：直接匹不上时按 GPS 配一次两家的号
+_mate_keep = query._selfno_mate
+query._selfno_mate = lambda ck, cn, line: ({"K12627D": ("513", 30), "K12623D": ("511", 120)}, {})
+_plate_res = {"groups": [("甲", [("桂K12627D", "x", 1)]), ("乙", [("桂K12623D", "y", 2)])]}
+assert query._veh_from(_plate_res, "现在513去哪里了", "玉林", "玉林市", "G02路") == "桂K12627D"
+assert query._veh_from(_plate_res, "513高新产业园那辆车", "玉林", "玉林市", "G02路") == "桂K12627D"
+_sn_res = {"groups": [("甲", [("513", "x", 1)]), ("乙", [("511", "y", 2)])]}
+assert query._veh_from(_sn_res, "桂K12623D 到哪了", "玉林", "玉林市", "G02路") == "511"
+assert query._veh_from(_plate_res, "现在999去哪里了", "玉林", "玉林市", "G02路") == ""   # 配不上就不瞎认
+assert query._veh_from(_plate_res, "513路现在到哪", "玉林", "玉林市", "G02路") == ""    # 513路 是线号
+query._selfno_mate = _mate_keep
+# 真线名要带「路」：掌上实时只认「G02路」，拿「G02」去要 mate 会一个都配不上
+_oc13, query._catalog = query._catalog, lambda cn: {"buslines": [{"lineName": "G02路"}]}
+assert query._line_real("玉林市", "G02") == "G02路"
+query._catalog = _oc13
 # 「现在513去哪里了」「现在呢」没写线号：短句追问沿上一句那条线
 assert query._vehicle_talk("现在513去哪里了") and query._vehicle_talk("现在呢")
 assert query._vehicle_talk("那辆呢") and query._vehicle_talk("它到哪了")
@@ -512,13 +527,23 @@ assert not query._vehicle_talk("晚上吃点啥呢") and not query._vehicle_talk
 assert not query._vehicle_talk("513路现在到哪")
 # 追问「现在呢」沿用上一句那辆；问「G02还有几辆」就该报整条线
 _lq, query.query = query.query, lambda ck, wants, src=None, veh="": dict(_res, source="车来了")
-_lr, query.render = query.render, lambda ck, want, res, veh="", d="": f"RENDER[{want}|veh={veh}]"
+_lr, query.render = query.render, lambda ck, want, res, veh="", d="", shown="": f"RENDER[{want}|veh={veh}|{shown}]"
 _lw = {}
-assert query._one("玉林", "", "G02", "", "现在513去哪里了", None, True, _lw) == "RENDER[G02|veh=513]"
-assert query._one("玉林", "", "G02", "", "现在呢", None, True, _lw) == "RENDER[G02|veh=513]"
-assert query._one("玉林", "", "G02", "", "G02还有几辆", None, True, _lw) == "RENDER[G02|veh=]"
+assert query._one("玉林", "", "G02", "", "现在513去哪里了", None, True, _lw) == "RENDER[G02|veh=513|]"
+assert query._one("玉林", "", "G02", "", "现在呢", None, True, _lw) == "RENDER[G02|veh=513|]"
+assert query._one("玉林", "", "G02", "", "G02还有几辆", None, True, _lw) == "RENDER[G02|veh=|]"
 assert "veh" not in _lw                      # 问了整条线就不再盯那辆车
 query.query, query.render = _lq, _lr
+# 掌上那份是车牌、用户按自编号问：抬头把两个号都写上，追问也保持；两家的号按 GPS 配
+_lq2, query.query = query.query, lambda ck, wants, src=None, veh="": dict(_plate_res, source="掌上公交")
+_lr2, query.render = query.render, lambda ck, want, res, veh="", d="", shown="": f"RENDER[{want}|veh={veh}|{shown}]"
+_ms2, query._selfno_mate = query._selfno_mate, lambda ck, cn, line: (
+    {"K12627D": ("513", 30), "K12623D": ("511", 120)}, {})
+_ocs, query._catalog = query._catalog, lambda cn: {"buslines": [{"lineName": "G02路"}]}
+_lw2 = {}
+assert query._one("玉林", "玉林市", "G02", "", "现在513去哪里了", None, True, _lw2)     == "RENDER[G02|veh=桂K12627D|513（桂K12627D）]"
+assert query._one("玉林", "玉林市", "G02", "", "现在呢", None, True, _lw2)     == "RENDER[G02|veh=桂K12627D|513（桂K12627D）]"
+query.query, query.render, query._selfno_mate, query._catalog = _lq2, _lr2, _ms2, _ocs
 # 「用掌上公交查G02路」：数据源那层壳不能当城市名，否则前缀取成「上公交」
 assert query.parse(query.SRCPRE.sub("", "用掌上公交查G02路")) == ("G02", "")
 assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41", "石家庄")

@@ -1040,11 +1040,30 @@ def _vehicle_talk(msg):
                 or m in ("现在呢", "呢", "到哪了", "在哪"))
 
 
-def _veh_from(res, msg):
-    """句子里夹着的车号（车来了报自编号 513，掌上报车牌）能对上哪一辆。
+def _line_real(city_name, want):
+    """目录里的真线名（「G02」→「G02路」）：掌上的实时接口只认带「路」的那个。"""
+    for r in _catalog(city_name).get("buslines") or []:
+        if norm_line(r.get("lineName") or "") == norm_line(want):
+            return r["lineName"]
+    return want
 
-    以前只认「G02的512」「…车」这两种写法，用户说「现在513去哪里了」「513高新产业园那辆车」
-    一个都匹不上，于是整条线的车全报出来——问一辆、回两辆，要的那辆还混在里头。
+
+def _selfno_token(msg):
+    """句子里那个像自编号的号：2~5 位纯数字，且不是线号（513路 / G02 / 通 3 号线）。"""
+    for m in re.finditer(r"(?<![\dA-Za-z])(\d{2,5})(?![\dA-Za-z])", msg or ""):
+        tok, nxt = m.group(1), msg[m.end():m.end() + 1]
+        if nxt in ("路", "线", "号") or (m.start() and msg[m.start() - 1] in "号线路"):
+            continue
+        return tok
+    return ""
+
+
+def _veh_from(res, msg, city_key="", city_name="", line=""):
+    """句子里点的那辆车 → 实时清单里对应的那一辆。
+
+    「现在513去哪里了」「513高新产业园那辆车」这种只夹个车号的说法以前匹不上，于是整条线的车
+    全报出来——问一辆、回两辆。513 是**自编号**（车来了那套），掌上报的是车牌（桂K12627D），
+    所以直接匹不上时按同一刻 GPS 把两家的号配一次（_selfno_mate），两个方向都认。
     """
     ids = [str(b[0]) for _, bs in (res.get("groups") or []) for b in bs if b]
     if not ids or not msg:
@@ -1055,17 +1074,39 @@ def _veh_from(res, msg):
         hit = [i for i in ids if pm.group(1) in i or i in pm.group(1)]
         if len(hit) == 1:
             return hit[0]
+    tok = _selfno_token(msg)
     for m in re.finditer(r"(?<![\dA-Za-z])(\d{2,5})(?![\dA-Za-z])", msg):
-        tok, nxt = m.group(1), msg[m.end():m.end() + 1]
+        one, nxt = m.group(1), msg[m.end():m.end() + 1]
         if nxt in ("路", "线", "号") or (m.start() and msg[m.start() - 1] in "号线路"):
-            continue                      # 513路 / G02 是线号，不是车号
-        hit = [i for i in ids if i == tok]
+            continue
+        hit = [i for i in ids if i == one]
         if len(hit) == 1:
             return hit[0]
     # 车牌里的数字（「12623 那辆车」）：后面粘着字母 D 也算，够长才不会把 02 当成 G02 的号
     for m in re.finditer(r"(?<!\d)(\d{4,5})(?!\d)", msg):
-        tok = m.group(1)
-        hit = [i for i in ids if tok in i]
+        hit = [i for i in ids if m.group(1) in i]
+        if len(hit) == 1:
+            return hit[0]
+    if not (tok or pm) or not city_name or not line:
+        return ""
+    # 号对不上：多半是拿自编号问、手上这份是车牌（或反过来）。按 GPS 配一次两家的号
+    try:
+        mate, _cars = _selfno_mate(city_key, city_name, _line_real(city_name, line))
+    except Exception:
+        return ""
+    if not mate:
+        return ""
+    if pm:                                    # 用户给的是车牌，清单里是自编号
+        for plate, (no, _d) in mate.items():
+            if plate in pm.group(1):
+                hit = [i for i in ids if i == str(no)]
+                if len(hit) == 1:
+                    return hit[0]
+        return ""
+    for plate, (no, _d) in mate.items():      # 用户给的是自编号，清单里是车牌
+        if str(no) != tok:
+            continue
+        hit = [i for i in ids if plate in i]
         if len(hit) == 1:
             return hit[0]
     return ""
@@ -1351,7 +1392,7 @@ def render_ghost(city_key, city_name, want):
     return None
 
 
-def render(city_key, want, res, veh="", dir=""):
+def render(city_key, want, res, veh="", dir="", shown=""):
     if "error" in res:
         e = res["error"]
         if e.startswith("是 "):                       # 目录里有近似线名，报候选
@@ -1454,7 +1495,7 @@ def render(city_key, want, res, veh="", dir=""):
     if many:                                        # 「25路(五大队观太)」不代表别的支线，抬头去掉括号
         line = re.sub(r"[（(].*?[)）]", "", line)
     rows = [f"有，{_ask_name(want, line)} 现在 {total} 辆在路上" if not veh
-            else f"{veh} 这辆在 {_ask_name(want, line)} 上："]
+            else f"{shown or veh} 这辆在 {_ask_name(want, line)} 上："]
     for label, buses in groups:
         if not buses:
             if multi and label and not many:
@@ -3659,26 +3700,34 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
                 return out
     vm = VEH_RE.search(msg)
     veh = next((g for g in vm.groups() if g), "") if vm else ""
+    inherited_veh = False
     res = query(city_key, wants, src, veh)
     if not veh and not res.get("error"):
-        # 句子里夹着车号（「现在513去哪里了」）：拿实时清单里的车号对一遍，对上哪辆就只报哪辆
-        veh = _veh_from(res, msg)
+        # 句子里夹着车号（「现在513去哪里了」）：拿实时清单里的车号对一遍，对上哪辆就只报哪辆。
+        # 513 是自编号，手上这份可能是车牌——_veh_from 会按 GPS 把两家的号配一次
+        veh = _veh_from(res, msg, city_key, name, wants[0])
         if not veh:
             # 「现在呢」「到哪了」：上一句问的就是某一辆车，接着问的还是那辆（半小时内）
             if (last.get("veh") and last.get("line") == wants[0]
                     and time.time() - (last.get("veh_t") or 0) < 1800
                     and len(msg) <= 12 and _FOLLOW_VEH.search(msg)
                     and any(_veh(b, last["veh"]) for _, bs in res.get("groups") or [] for b in bs)):
-                veh = last["veh"]
+                veh, inherited_veh = last["veh"], True
+    # 用户是用自编号问的、清单里报的是车牌：抬头把两个号都写上，别让他以为答错了车
+    tok = _selfno_token(msg)
+    shown = f"{tok}（{veh}）" if veh and tok and tok != str(veh) else ""
+    if not shown and inherited_veh:
+        shown = last.get("veh_shown") or ""      # 追问「现在呢」时接着写「513（桂K…）」
     if veh:
         last["veh"], last["veh_t"] = veh, time.time()
         # 车号是分源记的（车来了报自编号 514、掌上报车牌桂K12623D）：追问得接着用它那一家的源，
         # 换一家这个号对不上任何一辆，用户问的那辆就丢了
         last["veh_src"] = "chelaile" if res.get("source") == LABEL["chelaile"] else "mygolbs"
+        last["veh_shown"] = shown
     else:
-        last.pop("veh", None)
-        last.pop("veh_src", None)
-    txt = render(city_key, wants[0], res, veh, _dir(msg))
+        for k in ("veh", "veh_src", "veh_shown"):
+            last.pop(k, None)
+    txt = render(city_key, wants[0], res, veh, _dir(msg), shown)
     # 点名车来了、可这条线只有掌上有：别让掌上的车冒充车来了的
     if src and res.get("source") == LABEL["mygolbs" if src == "chelaile" else "chelaile"]:
         txt += f"\n（{LABEL[src]}那边没这条，这份是{res['source']}的）"
