@@ -1090,8 +1090,13 @@ def _veh_tokens(msg):
         out.append(pm.group(1))
     for m in re.finditer(r"(?<![\dA-Za-z])([0-9][0-9A-Za-z]{2,9})(?![\dA-Za-z])", msg or ""):
         tok, nxt = m.group(1), (msg or "")[m.end():m.end() + 1]
-        if nxt in ("路", "线", "号") or (m.start() and msg[m.start() - 1] in "号线路"):
-            continue                      # 513路 / G02路 是线号，不是车号
+        after = (msg or "")[m.end():m.end() + 2]
+        if nxt in ("路", "线"):
+            continue                      # 513路 / G02线 是线号
+        if nxt == "号" and after[1:2] != "车":
+            continue                      # 397号线 是线号，「397号车」是车
+        if m.start() and msg[m.start() - 1] in "号线路":
+            continue
         if _id_kind(tok):
             out.append(tok)
     return list(dict.fromkeys(out))
@@ -3823,7 +3828,7 @@ def render_selfno(city_key, city_name, token):
     own = next((k for k in mine if _id_eq(k, token)), "")
     mate = _pair_ids(mine, other)
     got = mate.get(own)
-    where = f"在 {name} 上" + (f"，刚过 {st.strip()}" if st else "")
+    where = f"在 {_line_label(name)} 上" + (f"，刚过 {st.strip()}" if st else "")
     if src == "车来了" and not (ids.get("mygolbs")):
         # 这城掌上那条线没报车，没有另一家可对
         return f"{token}（{kind}）{where}；这城掌上没报这条线的车，另一个号对不上"
@@ -4368,6 +4373,12 @@ def answer(msg, default_city, ctx="", key=""):
         # 前缀是线路名的一部分（容县11路），明写城市也不该丢——explicit 只管去哪个目录找
         return _one(city_key, name, line[0], prefix, msg, src, explicit, last, key)
     if name:
+        # 「玉林397号车在哪」：没写线路号，只有车号——全城找这一辆，报它在哪条线上。
+        # 以前这里落到站名那条路，最后返空，模型就自己编「玉林没有 397 这条线」
+        if _veh_tokens(msg) and re.search(r"车|辆|号", msg):
+            out = render_selfno(city_key, name, _veh_tokens(msg)[0])
+            if out:
+                return out
         # 「还运营吗」「哪条线在跑」没有站名，别拿去当站名搜（哈尔滨 → 哈尔滨站）
         pl = re.search(r"车牌|号牌", msg)
         # 「你们那还有多少车是纯发动机的」不是问哪条线在跑，是问车辆本身（车型/动力）——

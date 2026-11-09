@@ -600,6 +600,14 @@ assert _cz["昆明"]["chelaile"] == "081", _cz["昆明"]
 # 明写「安宁区」还是兰州的
 assert _cz["安宁区"].get("mygolbs") == "兰州市", _cz["安宁区"]
 
+# 「玉林397号车在哪」：没有线路号、只有车号。以前落到站名那条路返空，模型就编
+# 「玉林没有 397 这条线」——可 397 是自编号，真在 17 路上跑
+assert query._veh_tokens("玉林397号车在哪") == ["397"]
+assert query._veh_tokens("397号车") == ["397"]
+assert query._veh_tokens("397号线") == []       # 地铁 397 号线是线号
+assert query._veh_tokens("397路") == []
+assert query._veh_tokens("G02") == []
+
 # 「530呢」：本线没这辆车时去全城其它线路找，别只丢一句「没跑这辆」
 _cs14, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "zd440"}}
 _pi_keep2, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX: ({}, 46, 46)
