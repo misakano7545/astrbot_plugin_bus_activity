@@ -1058,57 +1058,52 @@ def _selfno_token(msg):
     return ""
 
 
+def _veh_tokens(msg):
+    """句子里所有像车号的东西（车牌、纯数字自编号、8A9E8AA8 这种机器号），按出现顺序。"""
+    out = []
+    for pm in PLATE_RE.finditer(msg or ""):
+        out.append(pm.group(1))
+    for m in re.finditer(r"(?<![\dA-Za-z])([0-9][0-9A-Za-z]{2,9})(?![\dA-Za-z])", msg or ""):
+        tok, nxt = m.group(1), (msg or "")[m.end():m.end() + 1]
+        if nxt in ("路", "线", "号") or (m.start() and msg[m.start() - 1] in "号线路"):
+            continue                      # 513路 / G02路 是线号，不是车号
+        if _id_kind(tok):
+            out.append(tok)
+    return list(dict.fromkeys(out))
+
+
 def _veh_from(res, msg, city_key="", city_name="", line=""):
     """句子里点的那辆车 → 实时清单里对应的那一辆。
 
     「现在513去哪里了」「513高新产业园那辆车」这种只夹个车号的说法以前匹不上，于是整条线的车
-    全报出来——问一辆、回两辆。513 是**自编号**（车来了那套），掌上报的是车牌（桂K12627D），
-    所以直接匹不上时按同一刻 GPS 把两家的号配一次（_selfno_mate），两个方向都认。
+    全报出来——问一辆、回两辆。两家给的号格式各城不同（玉林掌上是车牌、车来了是 513 这种自编号，
+    河池车来了是 000105，武汉两家都是 8A9E8AA8 这种机器号），所以：
+    先按形状无关的规则直接匹，匹不上就按同一刻 GPS 把两家的号配一次。
     """
     ids = [str(b[0]) for _, bs in (res.get("groups") or []) for b in bs if b]
     if not ids or not msg:
         return ""
-    # 「玉林G02 桂K12623D 到哪了」：整块车牌，直接对
-    pm = PLATE_RE.search(msg)
-    if pm:
-        hit = [i for i in ids if pm.group(1) in i or i in pm.group(1)]
+    toks = _veh_tokens(msg)
+    for tok in toks:
+        hit = [i for i in ids if _id_eq(i, tok)]
         if len(hit) == 1:
             return hit[0]
-    tok = _selfno_token(msg)
-    for m in re.finditer(r"(?<![\dA-Za-z])(\d{2,5})(?![\dA-Za-z])", msg):
-        one, nxt = m.group(1), msg[m.end():m.end() + 1]
-        if nxt in ("路", "线", "号") or (m.start() and msg[m.start() - 1] in "号线路"):
-            continue
-        hit = [i for i in ids if i == one]
-        if len(hit) == 1:
-            return hit[0]
-    # 车牌里的数字（「12623 那辆车」）：后面粘着字母 D 也算，够长才不会把 02 当成 G02 的号
-    for m in re.finditer(r"(?<!\d)(\d{4,5})(?!\d)", msg):
-        hit = [i for i in ids if m.group(1) in i]
-        if len(hit) == 1:
-            return hit[0]
-    if not (tok or pm) or not city_name or not line:
+    if not toks or not city_name or not line:
         return ""
-    # 号对不上：多半是拿自编号问、手上这份是车牌（或反过来）。按 GPS 配一次两家的号
+    # 号对不上：多半是拿另一家那套号问的（自编号 ↔ 车牌、或两家写法不同）。按 GPS 配一次
     try:
-        mate, _cars = _selfno_mate(city_key, city_name, _line_real(city_name, line))
+        mine_src = "chelaile" if str(res.get("source") or "").startswith(LABEL["chelaile"]) else "mygolbs"
+        ids_by = _line_ids(city_key, city_name, _line_real(city_name, line))
+        mate = _pair_ids(ids_by.get(mine_src) or {},
+                         ids_by.get("chelaile" if mine_src == "mygolbs" else "mygolbs") or {})
     except Exception:
         return ""
-    if not mate:
-        return ""
-    if pm:                                    # 用户给的是车牌，清单里是自编号
-        for plate, (no, _d) in mate.items():
-            if plate in pm.group(1):
-                hit = [i for i in ids if i == str(no)]
+    for a_id, (b_id, _m) in mate.items():
+        for x, y in ((b_id, a_id), (a_id, b_id)):     # 号可能在任一家那一套里
+            if any(_id_eq(x, t) for t in toks):
+                hit = [i for i in ids if _id_eq(i, y)]
                 if len(hit) == 1:
                     return hit[0]
-        return ""
-    for plate, (no, _d) in mate.items():      # 用户给的是自编号，清单里是车牌
-        if str(no) != tok:
-            continue
-        hit = [i for i in ids if plate in i]
-        if len(hit) == 1:
-            return hit[0]
     return ""
 
 
@@ -3141,6 +3136,7 @@ SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让
 STOP_SWEEP_SECONDS = 20  # 车来了没站点搜索只能逐线扫；大目录按秒数收口
 # 按车牌查只能逐线翻 104（两家都没这个接口）：一个城扫到此为止，再多群里等不起
 PLATE_MAX = 2600      # 深圳 2310 个方向，够了；北京 3477 / 上海 3262 仍只扫前 2600
+SCAN_BUDGET = 4.5     # 临时找一辆车时最多扫这么久，到点就报「只翻了前 N 个方向」
 PLATE_TTL = 60
 
 
@@ -3266,10 +3262,107 @@ def _plate_core(p):
     return re.sub(r"^[^0-9]+", "", _plate_key(p))
 
 
-def _plate_index(city_name):
-    """全城逐线翻一遍，车牌 → (线路, 方向, 站位)。两家都没按车牌查的接口，只能这样。
+# ── 车辆身份：两家给的号格式各城都不一样，别把「车牌」「自编号」绑到某个源上 ──
+# 实测（同一时刻真接口）：玉林 掌上=车牌、车来了=513 这种自编号；河池 掌上=车牌、车来了=000105；
+# 武汉 掌上=8A9E8AA8 这种机器号；石家庄 掌上=7376、郑州 掌上=15479（纯数字自编号）；
+# 南宁 两家都是车牌；湛江 只有车来了、报的也是车牌。所以判定只能看号本身的形状，不看是谁给的。
+_PLATE_GC = re.compile(r"[京津沪渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云藏陕甘青宁新]")
+KIND_CN = {"plate": "车牌", "selfno": "自编号", "code": "车号"}
+
+
+def _id_key(s):
+    """去掉分隔符、统一大写：「桂k12627d」「桂K·12627D」都成一个键。"""
+    return re.sub(r"[^0-9A-Z]", "", (s or "").upper())
+
+
+def _id_kind(s):
+    """这个号是什么样式：plate 车牌 / selfno 纯数字自编号 / code 其它机器号。"""
+    raw = re.sub(r"[\s·・]", "", (s or "")).upper()
+    k = _id_key(raw)
+    if not k:
+        return ""
+    if _PLATE_GC.search(raw) or re.fullmatch(r"[A-Z]{1,3}\d{4,6}[A-Z]?", k):
+        return "plate"
+    if k.isdigit():
+        return "selfno"
+    return "code"
+
+
+def _id_eq(a, b):
+    """两个号是不是同一辆车（跨格式）：桂K12627D ≈ K12627D ≈ 12627D；000105 ≈ 105。"""
+    ka, kb = _id_key(a), _id_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    ca, cb = _plate_core(a), _plate_core(b)
+    if len(ca) >= 5 and ca == cb:
+        return True
+    # 「12627 那辆车」只写了车牌里数字那截
+    if len(ca) >= 5 and len(cb) >= 5 and (ca.startswith(cb) or cb.startswith(ca)):
+        return True
+    if ka.isdigit() and kb.isdigit():
+        return ka.lstrip("0") == kb.lstrip("0")
+    return False
+
+
+def _line_ids(city_key, city_name, line):
+    """这条线上两家各自报的车号和坐标：{源: {号: (lat, lng, 站名, 方向)}}。不看号是什么格式。"""
+    out, my = {}, {}
+    for d in ("1", "2"):
+        try:
+            for c in _live_my(city_name, line, d).get("list") or []:
+                lat, lng = float(c.get("bus_lat") or 0), float(c.get("bus_lng") or 0)
+                no = str(c.get("busNumber") or "")
+                if no and lat and lng:
+                    my.setdefault(no, (lat, lng, c.get("stationName") or "", d))
+        except Exception:
+            pass
+    if my:
+        out["mygolbs"] = my
+    cid = (cities().get(city_key) or {}).get("chelaile")
+    cl = {}
+    if cid:
+        try:
+            for nm, lid in chelaile.lines(cid):
+                if norm_line(nm) != norm_line(line):
+                    continue
+                d = _cached("live-cl", (cid, lid), LIVE_TTL, lambda i=lid: chelaile.live(cid, i))
+                pos = d.get("pos") or {}
+                for b in d.get("buses") or []:
+                    p = pos.get(str(b[0]))
+                    if p:
+                        cl.setdefault(str(b[0]), (p["lat"], p["lng"],
+                                                  (b[1] if len(b) > 1 else ""), d.get("to") or ""))
+        except Exception:
+            pass
+    if cl:
+        out["chelaile"] = cl
+    return out
+
+
+def _pair_ids(a, b, max_m=1500):
+    """两份 {号: (lat, lng, …)} 按同一刻 GPS 一对一配：{a 号: (b 号, 米)}。与号格式无关。"""
+    pairs = sorted((m, ka, kb) for ka, va in a.items() for kb, vb in b.items()
+                   if (m := _dist_m({"lat": va[0], "lng": va[1]},
+                                    {"lat": vb[0], "lng": vb[1]})) is not None)
+    # shortcut: 两家 GPS 刷新节奏不同，同一辆车常差 500 米上下，1.5km 是实测上限
+    used_a, used_b, mate = set(), set(), {}
+    for m, ka, kb in pairs:
+        if m > max_m:
+            break
+        if ka in used_a or kb in used_b:
+            continue
+        used_a.add(ka), used_b.add(kb)
+        mate[ka] = (kb, m)
+    return mate
+
+
+def _plate_index(city_name, cap=PLATE_MAX, budget=SCAN_BUDGET):
+    """全城逐线翻一遍，车号 → (线路, 方向, 站位)。两家都没按车号查的接口，只能这样。
 
     返回 (索引, 扫了几个方向, 全城几个方向)，扫不完时前两个不等。
+    cap 默认扫够 PLATE_MAX；临时找一辆车时传小一点，十几个方向的城 2 秒、大城也不会拖住群消息。
     """
     rows = _catalog(city_name).get("buslines") or []
     dirs = {}
@@ -3279,38 +3372,47 @@ def _plate_index(city_name):
             dirs.setdefault(r["lineName"], []).append(d)
     jobs = [(n, d) for n, ds in dirs.items() for d in ds]
     total = len(jobs)
-    if total > PLATE_MAX:
+    if total > cap:
         # shortcut: 上千条线的城市扫不满，先扫按号排的主线再补其余的，扫不全别报成「全城都没有」
         trunk = sorted((n for n in dirs if n.endswith("路") and n[:-1].isdigit()),
                        key=lambda n: int(n[:-1]))
         names = trunk + [n for n in dirs if n not in set(trunk)]
-        jobs = [(n, d) for n in names for d in dirs[n]][:PLATE_MAX]
+        jobs = [(n, d) for n in names for d in dirs[n]][:cap]
     idx, core = {}, {}
+    done, t0 = 0, time.time()
+
+    def fetch(j):
+        return _live_my(city_name, j[0], j[1]).get("list") or []
+
     with ThreadPoolExecutor(max_workers=12) as pool:
-        got = pool.map(lambda j: _live_my(city_name, j[0], j[1]).get("list") or [], jobs)
-        for (name, d), cs in zip(jobs, got):
-            for c in cs:
-                b = _plate_key(c.get("busNumber"))
-                if not b:
-                    continue
-                hit = (name, d, c.get("stationName") or "在途")
-                idx[b] = hit
-                k = _plate_core(b)
-                if k != b:      # 有些城的号只在数字那截一样；撞了就作废，别把两辆车认成一辆
-                    core[k] = None if k in core and core[k] != hit else hit
+        for i in range(0, len(jobs), 40):
+            chunk = jobs[i:i + 40]
+            for (name, d), cs in zip(chunk, pool.map(fetch, chunk)):
+                for c in cs:
+                    b = _plate_key(c.get("busNumber"))
+                    if not b:
+                        continue
+                    hit = (name, d, c.get("stationName") or "在途")
+                    idx[b] = hit
+                    k = _plate_core(b)
+                    if k != b:      # 有些城的号只在数字那截一样；撞了就作废，别把两辆车认成一辆
+                        core[k] = None if k in core and core[k] != hit else hit
+            done += len(chunk)
+            if time.time() - t0 > budget:
+                break           # 大城按时间收口，扫了多少照实说
     for k, hit in core.items():
         if hit and k not in idx:
             idx[k] = hit
-    return idx, len(jobs), total
+    return idx, done, total
 
 
 def render_plate(city_name, plate, dir_msg=""):
     """「闽A17997D 在哪」：扫全城找这一辆，报它在哪条线、哪个方向、到了哪站。"""
     try:
-        idx, scanned, total = _cached("plate-idx", city_name, PLATE_TTL,
+        idx, scanned, total = _cached("plate-idx", (city_name, PLATE_MAX), PLATE_TTL,
                                       lambda: _plate_index(city_name))
     except Exception:
-        return f"{city_name}这边扫车牌的时候上游没响应，过会儿再问一次"
+        return f"{city_name}这边扫车号的时候上游没响应，过会儿再问一次"
     key = _plate_key(plate)
     if key not in idx:      # 「粤B05070D」在掌上叫「BS05070D」，只有数字那截一样
         key = _plate_core(key)
@@ -3341,10 +3443,11 @@ SELFNO_TTL = 45
 
 
 def _selfno_index(city_id, cap=SELFNO_MAX):
-    """全城翻一遍车来了实时：自编号 → [(线名, 方向终点, 到站)]。
+    """全城翻一遍车来了实时：号（归一化）→ [(线名, 方向终点, 到站)]。
 
     车来了没有按车号查的接口，问「530 现在跑哪条线」只能这样扫。
     玉林 23 条线 46 个方向实测 3.1 秒；上千方向的城市按 SELFNO_MAX 截断，扫了多少照实说。
+    这里不判断号是车牌还是自编号——各城不一样，统一按归一化键入索引。
     """
     rows = _cached("catalog-cl", city_id, CATALOG_TTL, lambda: chelaile.lines(city_id))
     jobs = rows[:cap]
@@ -3358,75 +3461,147 @@ def _selfno_index(city_id, cap=SELFNO_MAX):
             return None
         return nm, d.get("to") or "", d.get("buses") or []
 
+    done, t0 = 0, time.time()
     with ThreadPoolExecutor(max_workers=12) as pool:
-        for got in pool.map(one, jobs):
-            if not got:
-                continue
-            nm, to, bs = got
-            for b in bs:
-                idx.setdefault(str(b[0]), []).append((nm, to, b[1] if len(b) > 1 else ""))
-    return idx, len(jobs), len(rows)
+        for i in range(0, len(jobs), 40):
+            chunk = jobs[i:i + 40]
+            for got in pool.map(one, chunk):
+                done += 1
+                if not got:
+                    continue
+                nm, to, bs = got
+                for b in bs:
+                    idx.setdefault(_id_key(str(b[0])), []).append(
+                        (nm, to, b[1] if len(b) > 1 else ""))
+            if time.time() - t0 > SCAN_BUDGET:
+                break
+    return idx, done, len(rows)
 
 
-def render_veh_city(city_key, city_name, veh, line=""):
-    """这条线上没这辆车时，去全城其它线路找它。
+CITY_SCAN_MAX = 300       # 全城找一辆车时掌上最多翻这么多方向（再按 SCAN_BUDGET 收口）
+
+
+def _line_kinds(city_name, line):
+    """这条线掌上报的号是什么形状（车牌 / 纯数字自编号 / 机器号）——按实际数据判断，不写死。"""
+    if not city_name or not line:
+        return None
+    try:
+        ids = [str(c.get("busNumber")) for d in ("1", "2")
+               for c in (_live_my(city_name, line, d).get("list") or [])]
+    except Exception:
+        return None
+    return {_id_kind(i) for i in ids if i} or None
+
+
+def _city_hits(city_key, city_name, tok, line="", my_kinds=None):
+    """全城找这个号：掌上、车来了都翻，返回 (命中 [(源, 线名, 终点, 站名)], 扫描说明)。
+
+    两家给的号格式各城不同（有的城掌上是车牌车来了是自编号，有的反过来，有的两家都是车牌），
+    所以按「形状无关」的规则查：归一化键相等、车牌数字段相等、纯数字去前导零相等。
+    先翻「号最可能是这一种」的那家（车牌先翻掌上、数字/机器号先翻车来了），命中就停，别两家都扫。
+    """
+    kind = _id_kind(tok)
+    order = ["mygolbs", "chelaile"] if kind == "plate" else ["chelaile", "mygolbs"]
+    # 这条线上掌上给的号全是车牌、要问的却是纯数字：掌上这套号里不会有它，别白扫一遍
+    # （各城规则不同，所以按这条线的实际数据判断，不写死「掌上=车牌」）
+    kinds_my = my_kinds if my_kinds else _line_kinds(city_name, line)
+    if kinds_my and kind and kind not in kinds_my:
+        order = [x for x in order if x != "mygolbs"]
+    order = tuple(order)
+    hits, spans = [], []
+    key, core = _id_key(tok), _plate_core(tok)
+    ends = {r["lineName"]: (r.get("from") or "", r.get("to") or "")
+            for r in _catalog(city_name).get("buslines") or []}
+    cid = (cities().get(city_key) or {}).get("chelaile")
+
+    def scan_my():
+        try:
+            return _cached("plate-idx", (city_name, CITY_SCAN_MAX), PLATE_TTL,
+                           lambda: _plate_index(city_name, CITY_SCAN_MAX))
+        except Exception:
+            return {}, 0, 0
+
+    def scan_cl():
+        if not cid:
+            return {}, 0, 0
+        try:
+            return _cached("selfno-idx", (cid, SELFNO_MAX), SELFNO_TTL,
+                           lambda: _selfno_index(cid))
+        except Exception:
+            return {}, 0, 0
+
+    for src in order:
+        idx, scanned, total = scan_my() if src == "mygolbs" else scan_cl()
+        if total:
+            spans.append((scanned, total))
+        found = []
+        if src == "mygolbs":
+            for k in (key, core):
+                got = idx.get(k) if k else None
+                if got:
+                    name, d, st = got
+                    a, b = ends.get(name, ("", ""))
+                    found.append(("掌上公交", name, b if str(d) == "1" else a, st))
+                    break
+        else:
+            for k in (key, core):
+                for nm, to, st in (idx.get(k) or []) if k else []:
+                    found.append(("车来了", nm, to, st))
+                if found:
+                    break
+            if not found:
+                # 数字号宽松认：000105 ≈ 105，别因为前导零错过
+                for k, rows in idx.items():
+                    if _id_eq(k, tok):
+                        found += [("车来了", nm, to, st) for nm, to, st in rows]
+                        break
+        found = [h for h in found if norm_line(h[1]) != norm_line(line)]
+        if found:
+            return found, _scan_span(spans)
+    return [], _scan_span(spans)
+
+
+def _scan_span(spans):
+    if not spans:
+        return ""
+    scan, tot = max(spans, key=lambda p: p[1])
+    return (f"全城 {tot} 个方向都翻了" if scan >= tot
+            else f"只翻了前 {scan} 个方向（全城 {tot} 个）")
+
+
+def render_veh_city(city_key, city_name, veh, line="", my_kinds=None):
+    """这条线上没这辆车时，去全城其它线路找它（两家都翻，号是什么格式都认）。
 
     「530呢」：530 是 G02 号段里的一辆，这会儿可能调去别的线了、也可能停场。
     只回一句「G02 没跑 530」等于把活儿推回给用户——他要的就是这辆车现在在哪。
     """
     if not veh:
         return ""
-    if PLATE_RE.search(str(veh)):
-        return render_plate(city_name, str(veh)) or ""
-    cid = (cities().get(city_key) or {}).get("chelaile")
-    if not cid:
-        return ""
-    try:
-        idx, scanned, total = _cached("selfno-idx", (cid, SELFNO_MAX), SELFNO_TTL,
-                                      lambda: _selfno_index(cid))
-    except Exception:
-        return ""
-    hits = [h for h in idx.get(str(veh), []) if norm_line(h[0]) != norm_line(line)]
-    span = (f"全城 {total} 个方向都翻了" if scanned >= total
-            else f"只翻了前 {scanned} 个方向（全城 {total} 个）")
+    hits, span = _city_hits(city_key, city_name, str(veh), line, my_kinds)
     if hits:
         bits = "、".join(f"{_line_label(nm)}（往{to}，刚过{st.strip()}）" if to and st
-                        else _line_label(nm) for nm, to, st in hits[:3])
+                        else _line_label(nm) for _src, nm, to, st in hits[:3])
         return f"不过它这会儿在其它线上：{bits}"
-    return f"{span}，这会儿没看到 {veh} 在路上——多半停场或者收车了"
+    return f"{span or '全城'}，这会儿没看到 {veh} 在路上——多半停场或者收车了"
 
 
 def _selfno_mate(city_key, city_name, name):
-    """一条线上，掌上的车牌和车来了的自编号按同一刻 GPS 一对一配上。
-    返回 ({车牌key: (对面号, 距离米)}, {车牌key: 车})。"""
-    cid = (cities().get(city_key) or {}).get("chelaile")
+    """一条线上，两家各自报的车号按同一刻 GPS 一对一配上（与号是车牌还是自编号无关）。
+
+    返回 ({掌上号 key: (车来了号, 距离米)}, {掌上号 key: 掌上那辆车})。
+    玉林两家是「车牌 ↔ 513」，河池是「车牌 ↔ 000105」，武汉两家都是机器号——
+    格式各城不同，这里只按坐标配，不看形状。
+    """
     rows = []
     for d in ("1", "2"):
         rows += [c for c in (_live_my(city_name, name, d).get("list") or [])
                  if float(c.get("bus_lat") or 0) and float(c.get("bus_lng") or 0)]
-    # 车来了同名的线全拿进来：两家的方向名写法不一样（掌上「汽车总站（二医院）」vs 车来了
-    # 「玉林汽车总站」），按 to 过滤会把整个方向滤掉；反方向的车隔着几公里，靠距离就能分开
-    cand = []
-    if cid and rows:
-        try:
-            for nm, lid in chelaile.lines(cid):
-                if norm_line(nm) == norm_line(name):
-                    cand += list((chelaile.live(cid, lid).get("pos") or {}).items())
-        except Exception:
-            cand = []
-    pairs = sorted((m, c["busNumber"], no) for c in rows for no, p in cand
-                   if (m := _dist_m({"lat": c["bus_lat"], "lng": c["bus_lng"]}, p)) is not None)
-    # shortcut: 两家 GPS 刷新节奏不同，同一辆车常差 500 米上下，1.5km 是实测上限；
-    # 车队密集到两辆离同一辆都很近时会配错，那种情况命中不了就走「对不上」
-    used_p, used_n, mate = set(), set(), {}
-    for m, pn, no in pairs:
-        if m > 1500:
-            break
-        if pn in used_p or no in used_n:
-            continue
-        used_p.add(pn), used_n.add(no)
-        mate[_plate_key(pn)] = (no, m)
-    return mate, {_plate_key(c["busNumber"]): c for c in rows}
+    mine = {str(c["busNumber"]): (float(c["bus_lat"]), float(c["bus_lng"]), c.get("stationName") or "", d)
+            for c in rows}
+    ids = _line_ids(city_key, city_name, name)
+    mate = _pair_ids(mine, ids.get("chelaile") or {})
+    return ({_plate_key(k): v for k, v in mate.items()},
+            {_plate_key(c["busNumber"]): c for c in rows})
 
 
 def _selfno_of(own, other):
@@ -3492,6 +3667,8 @@ def render_line_selfno(city_key, city_name, want):
                   c.get("statusType")).rstrip()
         if sn:
             out.append(f"{at} → {sn}")
+        elif got and _id_eq(own, got[0]):
+            out.append(f"{at} → 两家给的是同一个号")
         else:
             miss += 1
             out.append(f"{at} → 没配上（车来了那边给它挂的也是车牌）" if got
@@ -3594,43 +3771,46 @@ def render_bp(city_name, want):
     return "\n".join(out)
 
 
-def render_selfno(city_key, city_name, plate):
-    """「XX 的自编号是啥」：掌上只给车牌（104 的 busNumber），车来了只给自编号（licence），
-    两家没有共同的键。唯一能对上的东西是这一刻的 GPS —— 同方向里取离它最近的那辆，
-    只有「近得离谱、且第二名远得多」才敢报，对不准就说对不上。"""
-    try:
-        idx, _scanned, _total = _cached("plate-idx", city_name, PLATE_TTL,
-                                        lambda: _plate_index(city_name))
-    except Exception:
-        return f"{city_name}这边查车牌的时候上游没响应，过会儿再问一次"
-    full = _plate_key(plate)
-    core = _plate_core(full)
-    key = full if full in idx else core      # 「粤B05070D」在掌上叫「BS05070D」，只有数字那截一样
-    hit = idx.get(key)
-    if not hit:
-        # 收班了/调走了：全城实时里没这辆车，但它跟自编号的对应关系是记着的
-        old = _selfno_recall(plate)
+def render_selfno(city_key, city_name, token):
+    """「XX 的自编号是啥 / 这辆车的另一个号是啥」：用户给的可能是车牌，也可能是自编号。
+
+    两家给的号格式各城不一样（玉林掌上=车牌、车来了=513；河池车来了=000105；武汉两家都是
+    8A9E8AA8 这种机器号；南宁两家都是车牌），所以先全城定位它在哪条线，再按同一刻 GPS
+    把另一家给的那个号配出来，并说清哪个是车牌、哪个是自编号。
+    """
+    token = (token or "").strip()
+    if not token:
+        return ""
+    kind = KIND_CN.get(_id_kind(token), "车号")
+    hits, span = _city_hits(city_key, city_name, token)
+    if not hits:
+        old = _selfno_recall(token)
         if old:
-            return (f"{plate} 这会儿不在路上，上次 {old[2]} 在 {old[1]} 上对上的自编号是 {old[0]}"
+            return (f"{token} 这会儿不在路上，上次 {old[2]} 在 {old[1]} 上对上的另一个号是 {old[0]}"
                     f"（车要是调了线，这条就旧了）")
-        return f"没扫到 {plate} 这辆车，自编号更对不上"
-    name = hit[0]
-    mate, cars = _selfno_mate(city_key, city_name, name)
-    got = next((v for pn, v in mate.items() if _plate_core(pn) == core), None)
+        return f"{span or '全城都翻了'}，没看到 {token} 这辆车"
+    src, name, _to, st = hits[0]
+    ids = _line_ids(city_key, city_name, _line_real(city_name, name))
+    mine_src = "mygolbs" if src == "掌上公交" else "chelaile"
+    mine = ids.get(mine_src) or {}
+    other_src = "chelaile" if mine_src == "mygolbs" else "mygolbs"
+    other = ids.get(other_src) or {}
+    own = next((k for k in mine if _id_eq(k, token)), "")
+    mate = _pair_ids(mine, other)
+    got = mate.get(own)
+    where = f"在 {name} 上" + (f"，刚过 {st.strip()}" if st else "")
+    if src == "车来了" and not (ids.get("mygolbs")):
+        # 这城掌上那条线没报车，没有另一家可对
+        return f"{token}（{kind}）{where}；这城掌上没报这条线的车，另一个号对不上"
     if got:
-        own = next((c.get("busNumber") for pn, c in cars.items()
-                    if _plate_core(pn) == core), plate)
-        sn = _selfno_of(own, got[0])
-        if sn:
-            _selfno_remember({own: sn}, name)
-            return (f"{plate} 在 {name}上，这会儿的位置对着呢：自编号是 {sn}"
-                    f"（两家 GPS 差 {got[1]} 米，这条路上离它最近的一辆）")
-        return f"{plate} 在 {name}上，车来了那边给它挂的也是车牌，没另给自编号"
-    old = _selfno_recall(plate)
-    if old:
-        return (f"{plate} 在 {name} 上，这会儿两家对不上哪辆；上次 {old[2]} 在这条线上对上的自编号是 {old[0]}")
-    head = f"{plate} 在 {name} 上，两家的号没对上哪辆"
-    return head + "；这条线的车号这会儿配不齐，隔一分钟再问"
+        other_id, dist = got
+        o_kind = KIND_CN.get(_id_kind(other_id), "车号")
+        if _id_eq(own, other_id):
+            return f"{token}（{kind}）{where}；另一家给的是同一个号" \
+                   if o_kind == kind else f"{token}（{kind}）{where}；另一家也叫 {other_id}"
+        return (f"{token}（{kind}）{where}；另一家给它的号是 {other_id}（{o_kind}）"
+                f"，两家 GPS 差 {dist:.0f} 米")
+    return f"{token}（{kind}）{where}；这条线另一家没报这辆车，暂时对不上"
 
 
 LAST = {}          # 会话 → 上一条答过的城市/线路；追问「每站能换乘啥」不带车次，靠它
@@ -3741,7 +3921,8 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
                         out += "\n" + live.replace("有，", "", 1)   # 单独发才需要「有，」
             # 「G02 这几辆的自编号」：整条线一次列完，别只答一辆
             elif SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
-                out = render_line_selfno(city_key, name, w)
+                _vt = _veh_tokens(msg)
+                out = render_selfno(city_key, name, _vt[0]) if _vt else render_line_selfno(city_key, name, w)
             # 「到终点站还要多久」问的是时长，不是起讫站
             elif ENDS_RE.search(msg) and not re.search(r"多久|几分钟|几站|多远", msg):
                 out = render_ends(name, w)
@@ -3766,14 +3947,15 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
                 return out
     vm = VEH_RE.search(msg)
     veh = next((g for g in vm.groups() if g), "") if vm else ""
-    tok = _selfno_token(msg)          # 句子里那个像自编号的号（「530呢」里的 530）
+    _toks = _veh_tokens(msg)          # 句子里那个车号（「530呢」的 530、8A9E8AA8…）
+    tok = _toks[0] if _toks else ""
     inherited_veh = False
     res = query(city_key, wants, src, veh)
     if not veh and not res.get("error"):
         # 句子里夹着车号（「现在513去哪里了」）：拿实时清单里的车号对一遍，对上哪辆就只报哪辆。
         # 513 是自编号，手上这份可能是车牌——_veh_from 会按 GPS 把两家的号配一次
         veh = _veh_from(res, msg, city_key, name, wants[0])
-        if not veh and tok and (re.search(r"车|辆|号", msg) or _vehicle_talk(msg)):
+        if not veh and tok and (re.search(r"车|辆|号|到哪|在哪|哪了|去哪", msg) or _vehicle_talk(msg)):
             # 号对不上本线任何一辆也先当这辆答：「…没跑 530 这辆」+ 去全城找。
             # 摊开整条线等于把「530 在哪」这个问题推回给用户
             veh = tok
@@ -3800,7 +3982,9 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
     txt = render(city_key, wants[0], res, veh, _dir(msg), shown)
     # 「530呢」：这条线没这辆车时去全城其它线路找一遍再答，别只丢一句「没跑这辆」
     if veh and f"没跑 {veh}" in txt:
-        other = render_veh_city(city_key, name, veh, wants[0])
+        _kinds = ({_id_kind(str(b[0])) for _, bs in res.get("groups") or [] for b in bs}
+                  if str(res.get("source") or "").startswith(LABEL["mygolbs"]) else None)
+        other = render_veh_city(city_key, name, veh, wants[0], _kinds)
         if other:
             txt += f"\n{other}"
     # 点名车来了、可这条线只有掌上有：别让掌上的车冒充车来了的
@@ -4028,9 +4212,10 @@ def answer(msg, default_city, ctx="", key=""):
             return render_selfno(city_key, name, pm.group(1))
         return render_plate(name, pm.group(1))
     got = hop(msg)
-    # 「玉林G02 桂K12623D 到哪了」：HOP_RE 按「到」切成「从桂K12623D到哪」，答成换乘方案。
-    # 车牌/车号 + 到哪 问的是那辆车的位置，不是换乘
-    if pm or _vehicle_talk(msg):
+    # 「玉林G02 桂K12623D 到哪了」「石家庄43路 7376 到哪了」：HOP_RE 按「到」切成
+    # 「从X到哪」，答成换乘方案。带车牌/车号问「到哪」问的是那辆车的位置，不是换乘。
+    # 车号形状各城不同（车牌、7376、8A9E8AA8），所以按 _veh_tokens 判，不只看车牌
+    if pm or (line and _veh_tokens(msg)) or _vehicle_talk(msg):
         got = None
     # 「有一条线路查不到实时信息我就不写出来了（）」：HOP_RE 按「到」切出两个假站名，
     # 整句没问法、两个端点也不在站表里——是吐槽，不是问路，别抢答（交给模型接话）
@@ -4112,9 +4297,13 @@ def answer(msg, default_city, ctx="", key=""):
         if out:
             last["line"] = want
             return out
-    # 「这三辆车的自编号分别是多少」：没写线路号时沿用上一条问过的线，整条线一次列完
+    # 「这三辆车的自编号分别是多少」：没写线路号时沿用上一条问过的线，整条线一次列完。
+    # 但句子里点了具体一辆（「514 的自编号是啥」）就只答那一辆，别把整条线摊开
     if not line and name and SELFNO_RE.search(msg) and not PLATE_RE.search(msg):
+        _vt = _veh_tokens(msg)
         want = last.get("line") or ""
+        if _vt and want:
+            return render_selfno(city_key, name, _vt[0])
         out = render_line_selfno(city_key, name, want) if want else None
         if not out:
             # 光给一句号（「济宁公交自编号230021」）没有线路名：扫全城太慢，问一句比一声不吭强

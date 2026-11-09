@@ -505,17 +505,43 @@ _pl = {"groups": [("甲", [("桂K12623D", "x", 1)]), ("乙", [("桂K12682D", "y"
 assert query._veh_from(_pl, "玉林G02 桂K12623D 到哪了") == "桂K12623D"
 assert query._veh_from(_pl, "桂K12682D 到哪") == "桂K12682D"
 assert query._veh_from(_pl, "G02还有几辆") == ""
-# 513 这种是**自编号**（车来了那套），掌上那份报的是车牌：直接匹不上时按 GPS 配一次两家的号
-_mate_keep = query._selfno_mate
-query._selfno_mate = lambda ck, cn, line: ({"K12627D": ("513", 30), "K12623D": ("511", 120)}, {})
+# 号格式各城不一样：掌上可能报车牌（玉林）、也可能报纯数字自编号（石家庄 7376、郑州 15479）
+# 或机器号（武汉 8A9E8AA8）；车来了可能报自编号，也可能报车牌。所以按形状无关的规则匹，
+# 匹不上再按 GPS 把两家的号配一次
+assert query._id_kind("桂K12627D") == "plate" and query._id_kind("513") == "selfno"
+assert query._id_kind("8A9E8AA8") == "code" and query._id_kind("000105") == "selfno"
+assert query._id_eq("桂K12627D", "K12627D") and query._id_eq("桂K12627D", "12627")
+assert query._id_eq("000105", "105") and not query._id_eq("513", "514")
 _plate_res = {"groups": [("甲", [("桂K12627D", "x", 1)]), ("乙", [("桂K12623D", "y", 2)])]}
+_lid_keep, query._line_ids = query._line_ids, lambda ck, cn, line: {
+    "mygolbs": {"桂K12627D": (22.72, 110.23, "A", "1"), "桂K12623D": (22.71, 110.22, "B", "1")},
+    "chelaile": {"513": (22.7201, 110.2301, "A", "to"), "511": (22.7101, 110.2201, "B", "to")}}
 assert query._veh_from(_plate_res, "现在513去哪里了", "玉林", "玉林市", "G02路") == "桂K12627D"
 assert query._veh_from(_plate_res, "513高新产业园那辆车", "玉林", "玉林市", "G02路") == "桂K12627D"
 _sn_res = {"groups": [("甲", [("513", "x", 1)]), ("乙", [("511", "y", 2)])]}
 assert query._veh_from(_sn_res, "桂K12623D 到哪了", "玉林", "玉林市", "G02路") == "511"
 assert query._veh_from(_plate_res, "现在999去哪里了", "玉林", "玉林市", "G02路") == ""   # 配不上就不瞎认
 assert query._veh_from(_plate_res, "513路现在到哪", "玉林", "玉林市", "G02路") == ""    # 513路 是线号
-query._selfno_mate = _mate_keep
+# 同一格式最好使：石家庄那种纯数字自编号，号在清单里就直接对上，不用 GPS 配
+assert query._veh_from({"groups": [("甲", [("7376", "x", 1)]), ("乙", [("7369", "y", 2)])]},
+                       "7376 到哪了", "石家庄", "石家庄市", "43路") == "7376"
+assert query._veh_from({"groups": [("甲", [("8A9E8AA8", "x", 1)])]},
+                       "8A9E8AA8 到哪了", "武汉", "武汉市", "913路") == "8A9E8AA8"
+query._line_ids = _lid_keep
+# 号格式各城不同，别把「车牌」「自编号」绑死在某一家上——实测过的四种写法：
+# 玉林 掌上=车牌/车来了=513；河池 车来了=000105；武汉 两家都=8A9E8AA8；南宁 两家都=车牌
+assert query._id_eq("000105", "105") and query._id_eq("8A9E8AA8", "8a9e8aa8")
+assert not query._id_eq("桂K12627D", "桂K12682D")
+assert query._id_kind("8A9E8AA8") == "code" and query._id_kind("7376") == "selfno"
+# 车来了报 000105 这种带前导零的自编号时，问「105 到哪了」也要能匹上
+_lead0 = {"groups": [("甲", [("000105", "A", 1)]), ("乙", [("000111", "B", 2)])]}
+assert query._veh_from(_lead0, "105 到哪了", "河池", "河池市", "8路") == "000105"
+# 武汉那种机器号
+_mach = {"groups": [("甲", [("8A9E8AA8", "A", 1)]), ("乙", [("9CBF001E", "B", 2)])]}
+assert query._veh_from(_mach, "8a9e8aa8 现在在哪", "武汉", "武汉市", "913路") == "8A9E8AA8"
+# 两家都给车牌（南宁）：同一辆对得上，别当成两个号
+_twoplate = {"groups": [("甲", [("桂A00658D", "A", 1)])]}
+assert query._veh_from(_twoplate, "桂A00658D 到哪了", "南宁", "南宁市", "k10路") == "桂A00658D"
 # 真线名要带「路」：掌上实时只认「G02路」，拿「G02」去要 mate 会一个都配不上
 _oc13, query._catalog = query._catalog, lambda cn: {"buslines": [{"lineName": "G02路"}]}
 assert query._line_real("玉林市", "G02") == "G02路"
@@ -539,14 +565,20 @@ _lq2, query.query = query.query, lambda ck, wants, src=None, veh="": dict(_plate
 _lr2, query.render = query.render, lambda ck, want, res, veh="", d="", shown="": f"RENDER[{want}|veh={veh}|{shown}]"
 _ms2, query._selfno_mate = query._selfno_mate, lambda ck, cn, line: (
     {"K12627D": ("513", 30), "K12623D": ("511", 120)}, {})
+_lid2, query._line_ids = query._line_ids, lambda ck, cn, line: {
+    "mygolbs": {"桂K12627D": (22.72, 110.23, "A", "1"), "桂K12623D": (22.71, 110.22, "B", "1")},
+    "chelaile": {"513": (22.7201, 110.2301, "A", "to"), "511": (22.7101, 110.2201, "B", "to")}}
 _ocs, query._catalog = query._catalog, lambda cn: {"buslines": [{"lineName": "G02路"}]}
 _lw2 = {}
 assert query._one("玉林", "玉林市", "G02", "", "现在513去哪里了", None, True, _lw2)     == "RENDER[G02|veh=桂K12627D|513（桂K12627D）]"
 assert query._one("玉林", "玉林市", "G02", "", "现在呢", None, True, _lw2)     == "RENDER[G02|veh=桂K12627D|513（桂K12627D）]"
 query.query, query.render, query._selfno_mate, query._catalog = _lq2, _lr2, _ms2, _ocs
+query._line_ids = _lid2
 
 # 「530呢」：本线没这辆车时去全城其它线路找，别只丢一句「没跑这辆」
 _cs14, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "zd440"}}
+_pi_keep2, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX: ({}, 46, 46)
+query._cache.pop(("plate-idx", ("玉林市", query.CITY_SCAN_MAX)), None)
 _ci14, query._selfno_index = query._selfno_index, lambda cid, cap=query.SELFNO_MAX: (
     {"530": [("26", "人民大北路口", "辛田村路口")], "516": [("G02", "玉林汽车总站", "榕楼社区")]}, 46, 46)
 query._cache.pop(("selfno-idx", ("zd440", query.SELFNO_MAX)), None)
@@ -557,19 +589,24 @@ assert "没看到 516 在路上" in _vc2, _vc2
 _vc3 = query.render_veh_city("玉林", "玉林市", "999", "G02")
 assert "全城 46 个方向都翻了" in _vc3 and "没看到 999" in _vc3, _vc3
 assert query.render_veh_city("玉林", "玉林市", "", "G02") == ""
-_rp14, query.render_plate = query.render_plate, lambda cn, p, *a: f"PLATE[{cn}|{p}]"
-assert query.render_veh_city("玉林", "玉林市", "桂K11878D", "G02") == "PLATE[玉林市|桂K11878D]"
-query.render_plate = _rp14
+# 车牌号也能在全城找：掌上那份索引里就有（各城报车牌还是自编号不一样，规则不绑源）
+_pi14, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX: ({"K11878D": ("26", "1", "文化广场路口")}, 46, 46)
+_cat14, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "26", "from": "人民大北路口", "to": "玉林汽车总站"}]}
+query._cache.pop(("plate-idx", ("玉林市", query.CITY_SCAN_MAX)), None)
+assert "26路" in query.render_veh_city("玉林", "玉林市", "桂K11878D", "G02路")
+query._plate_index, query._catalog = _pi14, _cat14
 # 挂在 _one 上：答案里说「没跑这辆」时补一句全城结果
 _lq3, query.query = query.query, lambda ck, wants, src=None, veh="": {
     "source": "车来了", "line": "G02", "groups": [("甲", [("516", "A", 1)])], "pos": {}}
 _lr3, query.render = query.render, lambda ck, want, res, veh="", d="", shown="": f"G02 这会儿没跑 {veh} 这辆"
-_lvc3, query.render_veh_city = query.render_veh_city, lambda ck, cn, v, line="": "CITYSCAN"
+_lvc3, query.render_veh_city = query.render_veh_city, lambda ck, cn, v, line="", mk=None: "CITYSCAN"
 _o530 = query._one("玉林", "玉林市", "G02", "", "530呢", None, True, {})
 _nl = chr(10)
 assert _o530 == "G02 这会儿没跑 530 这辆" + _nl + "CITYSCAN", _o530
 query.query, query.render, query.render_veh_city = _lq3, _lr3, _lvc3
 query.cities, query._selfno_index = _cs14, _ci14
+query._plate_index = _pi_keep2
 # 「用掌上公交查G02路」：数据源那层壳不能当城市名，否则前缀取成「上公交」
 assert query.parse(query.SRCPRE.sub("", "用掌上公交查G02路")) == ("G02", "")
 assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41", "石家庄")
@@ -1526,7 +1563,7 @@ _pi, query._plate_index = query._plate_index, lambda cn: ({"K12345": ("9路", "1
 query._cache.clear()
 assert query.render_plate("玉林市", "桂K12345") == "桂K12345 在 9路 上，往乙站方向，刚过 火车站"
 assert "只扫了前 50 条" in query.render_plate("玉林市", "桂K99999")
-query._plate_index = lambda cn: ({}, 80, 80)
+query._plate_index = lambda cn, cap=query.PLATE_MAX: ({}, 80, 80)
 query._cache.clear()
 assert "80 条方向全扫了" in query.render_plate("玉林市", "桂K99999")
 query._plate_index, query._catalog = _pi, _cat
@@ -1573,19 +1610,20 @@ _lm, query._live_my = query._live_my, lambda cn, ln, d: {"list": [
      "stationName": "甲站", "busToStationNiheDistance": 480, "statusType": "2"},
     {"busNumber": "桂K54321", "bus_lat": 22.7066, "bus_lng": 110.2260,
      "stationName": "乙站", "statusType": "0"}]}
-query._plate_index = lambda cn: ({"K12345": ("9路", "1", "火车站"),
+query._plate_index = lambda cn, cap=query.PLATE_MAX: ({"K12345": ("9路", "1", "火车站"),
                                   "K54321": ("9路", "1", "甲站")}, 2, 80)
 query._cache.clear()
-assert "自编号是 514" in query.render_selfno("玉林", "玉林市", "桂K12345")
-assert "自编号是 397" in query.render_selfno("玉林", "玉林市", "桂K54321")
+_s514 = query.render_selfno("玉林", "玉林市", "桂K12345")
+assert "514（自编号）" in _s514 and "车牌" in _s514, _s514
+assert "397（自编号）" in query.render_selfno("玉林", "玉林市", "桂K54321")
 # 「这几辆车自编号分别是多少」整条线一次列完，一辆一行
 _bl = query.render_line_selfno("玉林", "玉林市", "9")
 assert "桂K12345 甲站 480m → 514" in _bl and "桂K54321 已到乙站 → 397" in _bl
 # 「几辆 / 到哪了 / 自编号」一句话问三件，三件都得在
 assert _bl.split("\n")[0].endswith("自编号：") and "甲站" in _bl
-query._plate_index = lambda cn: ({}, 80, 80)
+query._plate_index = lambda cn, cap=query.PLATE_MAX: ({}, 80, 80)
 query._cache.clear()
-assert "没扫到" in query.render_selfno("玉林", "玉林市", "桂K99999")
+assert "没看到 桂K99999" in query.render_selfno("玉林", "玉林市", "桂K99999")
 query._live_my, query._plate_index, query.cities, query.chelaile = _lm, _pi, _ci, _cl2
 query._cache.clear()
 
