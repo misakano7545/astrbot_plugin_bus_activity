@@ -29,6 +29,14 @@ except ImportError:
 
 HERE = Path(__file__).parent
 CHELAILE_CITIES = json.loads((HERE / "cities.json").read_text("utf-8"))
+# 车来了单独开成城市的县级市：归一化城名 → (cityId, 掌上原名)。
+# 安宁（昆明下辖县级市）在车来了是独立城市 342「安宁公交」，线名带县名前缀
+# （安宁1 / 安宁12 / 安宁K12）。以前借父城昆明的 081，只查得到昆明市区的线，
+# 群里问「安宁12」被答成「两家都没收，只有建档资料」——可车来了明明有实时。
+# 出处：车来了 H5 的城市配置（web.chelaile.net.cn/customer_ch5/scripts/scripts-*.js）。
+CHELAILE_OWN = {
+    "安宁": ("342", "昆明市"),
+}
 # 区县 → 地级市：「东胜区8路」这种写法得先知道东胜区属鄂尔多斯，掌上不认区县当城市名。
 # 只收全国不重名的区县，重名的（朝阳区、城区）指不准是哪座城，宁可交回模型。
 DISTRICTS = json.loads((HERE / "districts.json").read_text("utf-8"))
@@ -473,36 +481,53 @@ def _lines(msg):
     return out
 
 
+def _merge_cities(ch_ids, my_names):
+    """把两家的城市表并起来：{归一化名: {"mygolbs": 平台原名, "chelaile": cityId}}。
+
+    单独抽出来是为了能自测（真跑 cities() 要连网拉掌上的城市表）。
+    """
+    idx = {}
+    for name, cid in ch_ids.items():
+        idx.setdefault(norm_city(name), {})["chelaile"] = cid
+    for name in my_names:
+        idx.setdefault(norm_city(name), {})["mygolbs"] = name
+    # 区名剥掉后缀会顶掉同名县级市：「安宁」在掌上只有兰州的安宁区，用户说「安宁」
+    # 多指昆明的安宁市。两边指向不同城、且父城在表里时，按县级市走。
+    for _k, _v in DISTRICTS.items():
+        _b = norm_city(_k)
+        if not _k.endswith("市") or _b not in idx:
+            continue
+        _host = idx[_b].get("mygolbs") or ""
+        if _host != _k and DISTRICTS.get(_host) not in (None, _v) and norm_city(_v) in idx:
+            idx[_b] = dict(idx[norm_city(_v)])
+            idx[_host] = {"mygolbs": DISTRICTS[_host]}   # 明写「安宁区」还查兰州，裸「安宁」才归昆明
+    # 县级市掌上认（吴川市），车来了只给地级市的 id：补一份父城的，否则只在车来了
+    # 目录里的线（吴川2路（梅菉-霞山旧线））永远查不到。只补掌上认得的城，区名不碰
+    for _k, _v in DISTRICTS.items():
+        _e = idx.get(norm_city(_k))
+        if not _e or _e.get("chelaile") or not _e.get("mygolbs"):
+            continue
+        _p = idx.get(norm_city(_v)) or {}
+        if _p.get("chelaile"):
+            _e["chelaile"] = _p["chelaile"]
+            _e["_borrow"] = True      # 借来的 id 只查带地名的线名，裸号会答成父城的车
+    # 车来了把某些县级市单独开了一个城市，线名全部带县名前缀（安宁公交 cityId=342，
+    # 里面是「安宁1」「安宁12」「安宁K12」…）。这些城不能借父城的 id：借 081（昆明）
+    # 只查得到昆明市区的线，安宁12 会被答成「两家都没收」。
+    # 来源：车来了 H5 包里的城市配置（web.chelaile.net.cn/customer_ch5/scripts/*.js）。
+    for _k, (_id, _my) in CHELAILE_OWN.items():
+        _e = idx.setdefault(_k, {})
+        _e.pop("_borrow", None)
+        _e["chelaile"] = _id
+        if _my and not _e.get("mygolbs"):
+            _e["mygolbs"] = _my
+    return idx
+
+
 def cities():
     """归一化城市名 → {"mygolbs": 平台原名, "chelaile": cityId}"""
-    def build():
-        idx = {}
-        for name, cid in CHELAILE_CITIES.items():
-            idx.setdefault(norm_city(name), {})["chelaile"] = cid
-        for name in mygolbs.city_names():
-            idx.setdefault(norm_city(name), {})["mygolbs"] = name
-        # 区名剥掉后缀会顶掉同名县级市：「安宁」在掌上只有兰州的安宁区，用户说「安宁」
-        # 多指昆明的安宁市。两边指向不同城、且父城在表里时，按县级市走。
-        for _k, _v in DISTRICTS.items():
-            _b = norm_city(_k)
-            if not _k.endswith("市") or _b not in idx:
-                continue
-            _host = idx[_b].get("mygolbs") or ""
-            if _host != _k and DISTRICTS.get(_host) not in (None, _v) and norm_city(_v) in idx:
-                idx[_b] = dict(idx[norm_city(_v)])
-                idx[_host] = {"mygolbs": DISTRICTS[_host]}   # 明写「安宁区」还查兰州，裸「安宁」才归昆明
-        # 县级市掌上认（吴川市），车来了只给地级市的 id：补一份父城的，否则只在车来了
-        # 目录里的线（吴川2路（梅菉-霞山旧线））永远查不到。只补掌上认得的城，区名不碰
-        for _k, _v in DISTRICTS.items():
-            _e = idx.get(norm_city(_k))
-            if not _e or _e.get("chelaile") or not _e.get("mygolbs"):
-                continue
-            _p = idx.get(norm_city(_v)) or {}
-            if _p.get("chelaile"):
-                _e["chelaile"] = _p["chelaile"]
-                _e["_borrow"] = True      # 借来的 id 只查带地名的线名，裸号会答成父城的车
-        return idx
-    return _cached("cities", "", CITY_TTL, build)
+    return _cached("cities", "", CITY_TTL,
+                   lambda: _merge_cities(CHELAILE_CITIES, mygolbs.city_names()))
 
 
 def detect_city(msg, prefix, default_city):

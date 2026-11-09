@@ -590,6 +590,16 @@ assert query._one("玉林", "玉林市", "G02", "玉林九中", "玉林九中3�
                   None, True, {}).endswith("是哪一站等？说个站名我给几分钟")
 query.render_at, query.find_stop, query.query = _rss, _fss, _qstr
 
+# 「安宁12」：安宁是昆明下辖县级市，可车来了把它单独开成一个城市（cityId 342「安宁公交」），
+# 线名带县名前缀（安宁1 / 安宁12 / 安宁K12）。以前借父城昆明的 081，只查得到昆明市区的线，
+# 于是「安宁12」被答成「两家都没收，只有建档资料」——群里那位说「车来了上查的到啊」是对的
+assert query.CHELAILE_OWN["安宁"][0] == "342"
+_cz = query._merge_cities({"昆明市": "081"}, ["昆明市", "安宁区"])
+assert _cz["安宁"]["chelaile"] == "342" and not _cz["安宁"].get("_borrow"), _cz["安宁"]
+assert _cz["昆明"]["chelaile"] == "081", _cz["昆明"]
+# 明写「安宁区」还是兰州的
+assert _cz["安宁区"].get("mygolbs") == "兰州市", _cz["安宁区"]
+
 # 「530呢」：本线没这辆车时去全城其它线路找，别只丢一句「没跑这辆」
 _cs14, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "zd440"}}
 _pi_keep2, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX: ({}, 46, 46)
