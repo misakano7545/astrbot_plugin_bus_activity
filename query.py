@@ -3330,6 +3330,72 @@ def render_plate(city_name, plate, dir_msg=""):
             f"，刚过 {station}")
 
 
+def _line_label(name):
+    """车来了目录里的线名是裸号（「26」），念出来像半句话：加个「路」（港澳的号本来不带路）。"""
+    name = (name or "").strip()
+    return name + "路" if name.isdigit() else name
+
+
+SELFNO_MAX = 240      # 全城找一辆车时最多翻这么多方向（12 并发约 6–8 秒）
+SELFNO_TTL = 45
+
+
+def _selfno_index(city_id, cap=SELFNO_MAX):
+    """全城翻一遍车来了实时：自编号 → [(线名, 方向终点, 到站)]。
+
+    车来了没有按车号查的接口，问「530 现在跑哪条线」只能这样扫。
+    玉林 23 条线 46 个方向实测 3.1 秒；上千方向的城市按 SELFNO_MAX 截断，扫了多少照实说。
+    """
+    rows = _cached("catalog-cl", city_id, CATALOG_TTL, lambda: chelaile.lines(city_id))
+    jobs = rows[:cap]
+    idx = {}
+
+    def one(row):
+        nm, lid = row
+        try:
+            d = _cached("live-cl", (city_id, lid), LIVE_TTL, lambda: chelaile.live(city_id, lid))
+        except Exception:
+            return None
+        return nm, d.get("to") or "", d.get("buses") or []
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        for got in pool.map(one, jobs):
+            if not got:
+                continue
+            nm, to, bs = got
+            for b in bs:
+                idx.setdefault(str(b[0]), []).append((nm, to, b[1] if len(b) > 1 else ""))
+    return idx, len(jobs), len(rows)
+
+
+def render_veh_city(city_key, city_name, veh, line=""):
+    """这条线上没这辆车时，去全城其它线路找它。
+
+    「530呢」：530 是 G02 号段里的一辆，这会儿可能调去别的线了、也可能停场。
+    只回一句「G02 没跑 530」等于把活儿推回给用户——他要的就是这辆车现在在哪。
+    """
+    if not veh:
+        return ""
+    if PLATE_RE.search(str(veh)):
+        return render_plate(city_name, str(veh)) or ""
+    cid = (cities().get(city_key) or {}).get("chelaile")
+    if not cid:
+        return ""
+    try:
+        idx, scanned, total = _cached("selfno-idx", (cid, SELFNO_MAX), SELFNO_TTL,
+                                      lambda: _selfno_index(cid))
+    except Exception:
+        return ""
+    hits = [h for h in idx.get(str(veh), []) if norm_line(h[0]) != norm_line(line)]
+    span = (f"全城 {total} 个方向都翻了" if scanned >= total
+            else f"只翻了前 {scanned} 个方向（全城 {total} 个）")
+    if hits:
+        bits = "、".join(f"{_line_label(nm)}（往{to}，刚过{st.strip()}）" if to and st
+                        else _line_label(nm) for nm, to, st in hits[:3])
+        return f"不过它这会儿在其它线上：{bits}"
+    return f"{span}，这会儿没看到 {veh} 在路上——多半停场或者收车了"
+
+
 def _selfno_mate(city_key, city_name, name):
     """一条线上，掌上的车牌和车来了的自编号按同一刻 GPS 一对一配上。
     返回 ({车牌key: (对面号, 距离米)}, {车牌key: 车})。"""
@@ -3700,12 +3766,17 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
                 return out
     vm = VEH_RE.search(msg)
     veh = next((g for g in vm.groups() if g), "") if vm else ""
+    tok = _selfno_token(msg)          # 句子里那个像自编号的号（「530呢」里的 530）
     inherited_veh = False
     res = query(city_key, wants, src, veh)
     if not veh and not res.get("error"):
         # 句子里夹着车号（「现在513去哪里了」）：拿实时清单里的车号对一遍，对上哪辆就只报哪辆。
         # 513 是自编号，手上这份可能是车牌——_veh_from 会按 GPS 把两家的号配一次
         veh = _veh_from(res, msg, city_key, name, wants[0])
+        if not veh and tok and (re.search(r"车|辆|号", msg) or _vehicle_talk(msg)):
+            # 号对不上本线任何一辆也先当这辆答：「…没跑 530 这辆」+ 去全城找。
+            # 摊开整条线等于把「530 在哪」这个问题推回给用户
+            veh = tok
         if not veh:
             # 「现在呢」「到哪了」：上一句问的就是某一辆车，接着问的还是那辆（半小时内）
             if (last.get("veh") and last.get("line") == wants[0]
@@ -3714,7 +3785,6 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
                     and any(_veh(b, last["veh"]) for _, bs in res.get("groups") or [] for b in bs)):
                 veh, inherited_veh = last["veh"], True
     # 用户是用自编号问的、清单里报的是车牌：抬头把两个号都写上，别让他以为答错了车
-    tok = _selfno_token(msg)
     shown = f"{tok}（{veh}）" if veh and tok and tok != str(veh) else ""
     if not shown and inherited_veh:
         shown = last.get("veh_shown") or ""      # 追问「现在呢」时接着写「513（桂K…）」
@@ -3728,6 +3798,11 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
         for k in ("veh", "veh_src", "veh_shown"):
             last.pop(k, None)
     txt = render(city_key, wants[0], res, veh, _dir(msg), shown)
+    # 「530呢」：这条线没这辆车时去全城其它线路找一遍再答，别只丢一句「没跑这辆」
+    if veh and f"没跑 {veh}" in txt:
+        other = render_veh_city(city_key, name, veh, wants[0])
+        if other:
+            txt += f"\n{other}"
     # 点名车来了、可这条线只有掌上有：别让掌上的车冒充车来了的
     if src and res.get("source") == LABEL["mygolbs" if src == "chelaile" else "chelaile"]:
         txt += f"\n（{LABEL[src]}那边没这条，这份是{res['source']}的）"

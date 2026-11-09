@@ -544,6 +544,32 @@ _lw2 = {}
 assert query._one("玉林", "玉林市", "G02", "", "现在513去哪里了", None, True, _lw2)     == "RENDER[G02|veh=桂K12627D|513（桂K12627D）]"
 assert query._one("玉林", "玉林市", "G02", "", "现在呢", None, True, _lw2)     == "RENDER[G02|veh=桂K12627D|513（桂K12627D）]"
 query.query, query.render, query._selfno_mate, query._catalog = _lq2, _lr2, _ms2, _ocs
+
+# 「530呢」：本线没这辆车时去全城其它线路找，别只丢一句「没跑这辆」
+_cs14, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "zd440"}}
+_ci14, query._selfno_index = query._selfno_index, lambda cid, cap=query.SELFNO_MAX: (
+    {"530": [("26", "人民大北路口", "辛田村路口")], "516": [("G02", "玉林汽车总站", "榕楼社区")]}, 46, 46)
+query._cache.pop(("selfno-idx", ("zd440", query.SELFNO_MAX)), None)
+_vc = query.render_veh_city("玉林", "玉林市", "530", "G02")
+assert "26路" in _vc and "辛田村路口" in _vc, _vc
+_vc2 = query.render_veh_city("玉林", "玉林市", "516", "G02")   # 同一辆在本线上：这条已经答过，不重复
+assert "没看到 516 在路上" in _vc2, _vc2
+_vc3 = query.render_veh_city("玉林", "玉林市", "999", "G02")
+assert "全城 46 个方向都翻了" in _vc3 and "没看到 999" in _vc3, _vc3
+assert query.render_veh_city("玉林", "玉林市", "", "G02") == ""
+_rp14, query.render_plate = query.render_plate, lambda cn, p, *a: f"PLATE[{cn}|{p}]"
+assert query.render_veh_city("玉林", "玉林市", "桂K11878D", "G02") == "PLATE[玉林市|桂K11878D]"
+query.render_plate = _rp14
+# 挂在 _one 上：答案里说「没跑这辆」时补一句全城结果
+_lq3, query.query = query.query, lambda ck, wants, src=None, veh="": {
+    "source": "车来了", "line": "G02", "groups": [("甲", [("516", "A", 1)])], "pos": {}}
+_lr3, query.render = query.render, lambda ck, want, res, veh="", d="", shown="": f"G02 这会儿没跑 {veh} 这辆"
+_lvc3, query.render_veh_city = query.render_veh_city, lambda ck, cn, v, line="": "CITYSCAN"
+_o530 = query._one("玉林", "玉林市", "G02", "", "530呢", None, True, {})
+_nl = chr(10)
+assert _o530 == "G02 这会儿没跑 530 这辆" + _nl + "CITYSCAN", _o530
+query.query, query.render, query.render_veh_city = _lq3, _lr3, _lvc3
+query.cities, query._selfno_index = _cs14, _ci14
 # 「用掌上公交查G02路」：数据源那层壳不能当城市名，否则前缀取成「上公交」
 assert query.parse(query.SRCPRE.sub("", "用掌上公交查G02路")) == ("G02", "")
 assert query.parse(query.SRCPRE.sub("", "车来了查石家庄41路")) == ("41", "石家庄")
