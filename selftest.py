@@ -644,6 +644,13 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 「去天安门做几路」：做=坐 的手滑，尾巴砍不掉就整句当站名搜 → 「这个站没查到」
+_tm = query.TAIL.sub("", query.LEAD.sub("", "去天安门做几路"))
+assert _tm == "天安门", _tm
+assert query.TAIL.sub("", query.LEAD.sub("", "去天安门坐几路")) == "天安门"
+assert query.TAIL.sub("", query.LEAD.sub("", "天安门做几路车")) == "天安门"
+assert query.TAIL.sub("", query.LEAD.sub("", "去天安门做哪路车")) == "天安门"
+
 assert not query.NOT_TEXT.search("查看北流城南站方向还有没有")   # 微信 appmsg 要解析出 title，不能整段丢
 assert query._veh_tokens("2026 那辆车") == [] and query._veh_tokens("2025年") == []
 assert query._veh_tokens("48542557 到哪") == ["48542557"]        # 武汉车号就是长数字
