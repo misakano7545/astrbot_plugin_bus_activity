@@ -608,13 +608,23 @@ assert query._veh_tokens("397号线") == []       # 地铁 397 号线是线号
 assert query._veh_tokens("397路") == []
 assert query._veh_tokens("G02") == []
 
+# 「石家庄43路7376到哪了」：线号在前、车号在后，车号不能被前一个「路」字挡掉
+assert query._veh_tokens("石家庄43路7376到哪了") == ["7376"]
+assert query._veh_tokens("玉林G02 397号车到哪了") == ["397"]
+# 位数就对不上时不做几百个方向的白扫：直接按形状说清（昆明车号都是 5 位）
+assert query._id_hint({"chelaile": ["51434", "04387"]}, "4449").startswith("（这城车号是 5 位")
+assert query._id_hint({"chelaile": ["51434"]}, "5143") != ""
+assert query._id_hint({"chelaile": ["51434"]}, "51434") == ""
+assert query._id_hint({"chelaile": ["桂A1"]}, "4449") == ""
+
 # 「530呢」：本线没这辆车时去全城其它线路找，别只丢一句「没跑这辆」
 _cs14, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "zd440"}}
-_pi_keep2, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX: ({}, 46, 46)
+_pi_keep2, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX, budget=0, start=0: ({}, 46, 46)
 query._cache.pop(("plate-idx", ("玉林市", query.CITY_SCAN_MAX)), None)
-_ci14, query._selfno_index = query._selfno_index, lambda cid, cap=query.SELFNO_MAX: (
+query._cache.pop(("id-kinds", "玉林"), None)
+_ci14, query._selfno_index = query._selfno_index, lambda cid, cap=query.SELFNO_MAX, start=0, budget=0: (
     {"530": [("26", "人民大北路口", "辛田村路口")], "516": [("G02", "玉林汽车总站", "榕楼社区")]}, 46, 46)
-query._cache.pop(("selfno-idx", ("zd440", query.SELFNO_MAX)), None)
+query._cache.pop(("selfno-idx", "zd440"), None)
 _vc = query.render_veh_city("玉林", "玉林市", "530", "G02")
 assert "26路" in _vc and "辛田村路口" in _vc, _vc
 _vc2 = query.render_veh_city("玉林", "玉林市", "516", "G02")   # 同一辆在本线上：这条已经答过，不重复
@@ -623,10 +633,11 @@ _vc3 = query.render_veh_city("玉林", "玉林市", "999", "G02")
 assert "全城 46 个方向都翻了" in _vc3 and "没看到 999" in _vc3, _vc3
 assert query.render_veh_city("玉林", "玉林市", "", "G02") == ""
 # 车牌号也能在全城找：掌上那份索引里就有（各城报车牌还是自编号不一样，规则不绑源）
-_pi14, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX: ({"K11878D": ("26", "1", "文化广场路口")}, 46, 46)
+_pi14, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX, budget=0, start=0: ({"K11878D": ("26", "1", "文化广场路口")}, 46, 46)
 _cat14, query._catalog = query._catalog, lambda cn: {"buslines": [
     {"lineName": "26", "from": "人民大北路口", "to": "玉林汽车总站"}]}
 query._cache.pop(("plate-idx", ("玉林市", query.CITY_SCAN_MAX)), None)
+query._cache.pop(("id-kinds", "玉林"), None)
 assert "26路" in query.render_veh_city("玉林", "玉林市", "桂K11878D", "G02路")
 query._plate_index, query._catalog = _pi14, _cat14
 # 挂在 _one 上：答案里说「没跑这辆」时补一句全城结果
@@ -1592,11 +1603,11 @@ assert query._plate_key("闽A·17997d") == query._plate_key("A17997D") == "A1799
 # 找不到要报扫了多少，别报成「全城都没有」；找到要报线路、方向和站位
 _cat, query._catalog = query._catalog, lambda cn: {"buslines": [
     {"lineName": "9路", "from": "甲站", "to": "乙站", "upperOrDown": "1"}]}
-_pi, query._plate_index = query._plate_index, lambda cn: ({"K12345": ("9路", "1", "火车站")}, 50, 80)
+_pi, query._plate_index = query._plate_index, lambda cn, cap=query.PLATE_MAX, budget=0, start=0: ({"K12345": ("9路", "1", "火车站")}, 50, 80)
 query._cache.clear()
 assert query.render_plate("玉林市", "桂K12345") == "桂K12345 在 9路 上，往乙站方向，刚过 火车站"
 assert "只扫了前 50 条" in query.render_plate("玉林市", "桂K99999")
-query._plate_index = lambda cn, cap=query.PLATE_MAX: ({}, 80, 80)
+query._plate_index = lambda cn, cap=query.PLATE_MAX, budget=0, start=0: ({}, 80, 80)
 query._cache.clear()
 assert "80 条方向全扫了" in query.render_plate("玉林市", "桂K99999")
 query._plate_index, query._catalog = _pi, _cat
@@ -1643,7 +1654,7 @@ _lm, query._live_my = query._live_my, lambda cn, ln, d: {"list": [
      "stationName": "甲站", "busToStationNiheDistance": 480, "statusType": "2"},
     {"busNumber": "桂K54321", "bus_lat": 22.7066, "bus_lng": 110.2260,
      "stationName": "乙站", "statusType": "0"}]}
-query._plate_index = lambda cn, cap=query.PLATE_MAX: ({"K12345": ("9路", "1", "火车站"),
+query._plate_index = lambda cn, cap=query.PLATE_MAX, budget=0, start=0: ({"K12345": ("9路", "1", "火车站"),
                                   "K54321": ("9路", "1", "甲站")}, 2, 80)
 query._cache.clear()
 _s514 = query.render_selfno("玉林", "玉林市", "桂K12345")
@@ -1654,7 +1665,7 @@ _bl = query.render_line_selfno("玉林", "玉林市", "9")
 assert "桂K12345 甲站 480m → 514" in _bl and "桂K54321 已到乙站 → 397" in _bl
 # 「几辆 / 到哪了 / 自编号」一句话问三件，三件都得在
 assert _bl.split("\n")[0].endswith("自编号：") and "甲站" in _bl
-query._plate_index = lambda cn, cap=query.PLATE_MAX: ({}, 80, 80)
+query._plate_index = lambda cn, cap=query.PLATE_MAX, budget=0, start=0: ({}, 80, 80)
 query._cache.clear()
 assert "没看到 桂K99999" in query.render_selfno("玉林", "玉林市", "桂K99999")
 query._live_my, query._plate_index, query.cities, query.chelaile = _lm, _pi, _ci, _cl2

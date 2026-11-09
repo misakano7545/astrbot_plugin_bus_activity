@@ -1095,8 +1095,6 @@ def _veh_tokens(msg):
             continue                      # 513路 / G02线 是线号
         if nxt == "号" and after[1:2] != "车":
             continue                      # 397号线 是线号，「397号车」是车
-        if m.start() and msg[m.start() - 1] in "号线路":
-            continue
         if _id_kind(tok):
             out.append(tok)
     return list(dict.fromkeys(out))
@@ -3166,7 +3164,9 @@ SWEEP_MAX = 60          # 扫 60 条线就是 120 个请求；再大的城市让
 STOP_SWEEP_SECONDS = 20  # 车来了没站点搜索只能逐线扫；大目录按秒数收口
 # 按车牌查只能逐线翻 104（两家都没这个接口）：一个城扫到此为止，再多群里等不起
 PLATE_MAX = 2600      # 深圳 2310 个方向，够了；北京 3477 / 上海 3262 仍只扫前 2600
-SCAN_BUDGET = 4.5     # 临时找一辆车时最多扫这么久，到点就报「只翻了前 N 个方向」
+SCAN_BUDGET = 6.0     # 临时找一辆车时一次最多扫这么久，到点就报「只翻了前 N 个方向」，下次接着扫
+SCAN_WORKERS = 32     # 全城找车是"问一辆车在哪"，并发给高些：昆明 680 个方向 24 并发 18.6 秒
+IDX_TTL = 300         # 全城车号索引攒在缓存里，5 分钟内再问接着用、接着往后扫
 PLATE_TTL = 60
 
 
@@ -3388,11 +3388,12 @@ def _pair_ids(a, b, max_m=1500):
     return mate
 
 
-def _plate_index(city_name, cap=PLATE_MAX, budget=SCAN_BUDGET):
+def _plate_index(city_name, cap=PLATE_MAX, budget=SCAN_BUDGET, start=0):
     """全城逐线翻一遍，车号 → (线路, 方向, 站位)。两家都没按车号查的接口，只能这样。
 
-    返回 (索引, 扫了几个方向, 全城几个方向)，扫不完时前两个不等。
-    cap 默认扫够 PLATE_MAX；临时找一辆车时传小一点，十几个方向的城 2 秒、大城也不会拖住群消息。
+    返回 (索引, 扫到第几个方向, 全城几个方向)，扫不完时前两个不等。
+    cap 默认扫够 PLATE_MAX；临时找一辆车时传小一点。start 是上次扫到的位置，
+    大城一次翻不完，下一次接着往后翻（结果攒在 _scan_cache 里）。
     """
     rows = _catalog(city_name).get("buslines") or []
     dirs = {}
@@ -3409,12 +3410,13 @@ def _plate_index(city_name, cap=PLATE_MAX, budget=SCAN_BUDGET):
         names = trunk + [n for n in dirs if n not in set(trunk)]
         jobs = [(n, d) for n in names for d in dirs[n]][:cap]
     idx, core = {}, {}
-    done, t0 = 0, time.time()
+    done, t0 = start, time.time()
+    jobs = jobs[start:start + cap]
 
     def fetch(j):
         return _live_my(city_name, j[0], j[1]).get("list") or []
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
         for i in range(0, len(jobs), 40):
             chunk = jobs[i:i + 40]
             for (name, d), cs in zip(chunk, pool.map(fetch, chunk)):
@@ -3468,19 +3470,20 @@ def _line_label(name):
     return name + "路" if name.isdigit() else name
 
 
-SELFNO_MAX = 240      # 全城找一辆车时最多翻这么多方向（12 并发约 6–8 秒）
-SELFNO_TTL = 45
+SELFNO_MAX = 800      # 车来了一侧最多翻这么多方向（昆明 680 个方向要能翻完）
+CITY_SCAN_MAX = 1200  # 掌上一侧同上
 
 
-def _selfno_index(city_id, cap=SELFNO_MAX):
-    """全城翻一遍车来了实时：号（归一化）→ [(线名, 方向终点, 到站)]。
+def _selfno_index(city_id, cap=SELFNO_MAX, start=0, budget=SCAN_BUDGET):
+    """翻车来了实时：号（归一化）→ [(线名, 方向终点, 到站)]，从 start 起翻 cap 个方向。
 
     车来了没有按车号查的接口，问「530 现在跑哪条线」只能这样扫。
-    玉林 23 条线 46 个方向实测 3.1 秒；上千方向的城市按 SELFNO_MAX 截断，扫了多少照实说。
+    返回 (索引, 扫到第几个方向, 全城几个方向)；扫不完时下一次接着往后翻。
     这里不判断号是车牌还是自编号——各城不一样，统一按归一化键入索引。
     """
     rows = _cached("catalog-cl", city_id, CATALOG_TTL, lambda: chelaile.lines(city_id))
-    jobs = rows[:cap]
+    total = len(rows)
+    jobs = rows[start:start + cap]
     idx = {}
 
     def one(row):
@@ -3491,8 +3494,8 @@ def _selfno_index(city_id, cap=SELFNO_MAX):
             return None
         return nm, d.get("to") or "", d.get("buses") or []
 
-    done, t0 = 0, time.time()
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    done, t0 = start, time.time()
+    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
         for i in range(0, len(jobs), 40):
             chunk = jobs[i:i + 40]
             for got in pool.map(one, chunk):
@@ -3503,12 +3506,50 @@ def _selfno_index(city_id, cap=SELFNO_MAX):
                 for b in bs:
                     idx.setdefault(_id_key(str(b[0])), []).append(
                         (nm, to, b[1] if len(b) > 1 else ""))
-            if time.time() - t0 > SCAN_BUDGET:
+            if time.time() - t0 > budget:
                 break
-    return idx, done, len(rows)
+    return idx, done, total
 
 
-CITY_SCAN_MAX = 300       # 全城找一辆车时掌上最多翻这么多方向（再按 SCAN_BUDGET 收口）
+def _scan_cached(kind, key, fn):
+    """攒着扫：同一个城 5 分钟内接着上次的位置往后翻，翻完就再也不扫。
+
+    大城（昆明 680 个方向）一次翻不完，得把上次的成果留着，再问一次接着翻——
+    不然每次都是「只翻了前 80 个方向」，永远查不到。
+    """
+    ck = (kind, key)
+    hit = _cache.get(ck)
+    data = hit[1] if hit and time.time() - hit[0] < IDX_TTL else None
+    idx, pos, total = {}, 0, 0
+    if data:
+        idx = dict(data["idx"])
+        if data.get("lists"):
+            idx = {k: list(v) for k, v in idx.items()}
+        pos, total = data["pos"], data["total"]
+        if pos >= total:
+            return idx, pos, total
+    try:
+        part, pos2, total2 = fn(pos)
+    except Exception:
+        return idx, pos, total
+    lists = bool(part) and all(isinstance(v, list) for v in part.values())
+    for k, v in part.items():
+        if k in idx and isinstance(idx[k], list):
+            idx[k] = idx[k] + list(v)
+        else:
+            idx[k] = list(v) if isinstance(v, list) else v
+    _cache[ck] = (time.time(), {"idx": idx, "pos": pos2, "total": total2, "lists": lists})
+    return idx, pos2, total2
+
+
+def _selfno_scan(city_id):
+    return _scan_cached("selfno-idx", city_id,
+                        lambda pos: _selfno_index(city_id, SELFNO_MAX, pos))
+
+
+def _plate_scan(city_name):
+    return _scan_cached("plate-idx", (city_name, CITY_SCAN_MAX),
+                        lambda pos: _plate_index(city_name, CITY_SCAN_MAX, SCAN_BUDGET, pos))
 
 
 def _line_kinds(city_name, line):
@@ -3523,45 +3564,105 @@ def _line_kinds(city_name, line):
     return {_id_kind(i) for i in ids if i} or None
 
 
+def _source_kinds(city_key, city_name, cid):
+    """采样：两家各自报的号长什么样（各看十几条线就够）。
+
+    返回 {源: {"kinds": 形状集合, "ids": 样例号, "no_real": 这城是否整城不给车辆位置}}。
+    昆明这种城掌上整城不给车机（hasReal=0）、车来了给 5 位自编号（04387），
+    拿一个 4 位数去问时就不必把掌上 797 个方向、车来了 680 个方向全翻一遍。
+    """
+    ck = ("id-kinds", city_key)
+    hit = _cache.get(ck)
+    if hit and time.time() - hit[0] < IDX_TTL:
+        return hit[1]
+    out = {}
+
+    def grab(fn, jobs, n=40):
+        ids, flags = [], []
+        try:
+            with ThreadPoolExecutor(max_workers=12) as pool:
+                for got in pool.map(fn, jobs):
+                    ids += got[0] or []
+                    flags += got[1] or []
+                    if len(ids) >= n or len(flags) >= 3:
+                        break
+        except Exception:
+            pass
+        return {"kinds": {_id_kind(i) for i in ids if i}, "ids": ids[:4],
+                "no_real": bool(flags) and all(f == "0" for f in flags)}
+
+    def my_one(j):
+        p = _live_my(city_name, j[0], j[1])
+        return ([str(c.get("busNumber")) for c in (p.get("list") or [])],
+                [str(p.get("hasReal"))] if "hasReal" in p else [])
+
+    rows = [r for r in (_catalog(city_name).get("buslines") or [])
+            if str(r.get("upperOrDown")) in ("1", "2")][:16]
+    out["mygolbs"] = grab(my_one, [(r["lineName"], str(r["upperOrDown"])) for r in rows])
+
+    if cid:
+        def cl_one(j):
+            d = _cached("live-cl", (cid, j[1]), LIVE_TTL, lambda: chelaile.live(cid, j[1]))
+            return ([str(b[0]) for b in (d.get("buses") or [])], [])
+        try:
+            crow = _cached("catalog-cl", cid, CATALOG_TTL, lambda: chelaile.lines(cid))[:16]
+        except Exception:
+            crow = []
+        out["chelaile"] = grab(cl_one, crow)
+    _cache[ck] = (time.time(), out)
+    return out
+
+
+def _id_hint(samples, tok):
+    """号对不上时给一句形状提示：「这城车号是 5 位数字（像 04387），4449 位数不一样」。"""
+    tok = str(tok)
+    if not tok.isdigit():
+        return ""
+    got = [str(i) for ids in samples.values() for i in ids if str(i).isdigit()]
+    if got and all(len(i) != len(tok) for i in got):
+        return (u"（这城车号是 %d 位数字，像 %s，%s 位数不一样）"
+                % (len(got[0]), u"、".join(got[:2]), tok))
+    return ""
+
+
 def _city_hits(city_key, city_name, tok, line="", my_kinds=None):
-    """全城找这个号：掌上、车来了都翻，返回 (命中 [(源, 线名, 终点, 站名)], 扫描说明)。
+    """全城找这个号：掌上、车来了都翻，返回 (命中 [(源, 线名, 终点, 站名)], 扫描说明, 形状提示)。
 
     两家给的号格式各城不同（有的城掌上是车牌车来了是自编号，有的反过来，有的两家都是车牌），
     所以按「形状无关」的规则查：归一化键相等、车牌数字段相等、纯数字去前导零相等。
-    先翻「号最可能是这一种」的那家（车牌先翻掌上、数字/机器号先翻车来了），命中就停，别两家都扫。
+    先翻「号最可能是这一种」的那家，命中就停；形状明显对不上的那家直接跳过（采样判断）。
     """
     kind = _id_kind(tok)
     order = ["mygolbs", "chelaile"] if kind == "plate" else ["chelaile", "mygolbs"]
-    # 这条线上掌上给的号全是车牌、要问的却是纯数字：掌上这套号里不会有它，别白扫一遍
-    # （各城规则不同，所以按这条线的实际数据判断，不写死「掌上=车牌」）
+    cid = (cities().get(city_key) or {}).get("chelaile")
+    samples, hint = {}, ""
     kinds_my = my_kinds if my_kinds else _line_kinds(city_name, line)
-    if kinds_my and kind and kind not in kinds_my:
+    if not line:      # 没写线路号：先采样看两家报什么形状，再决定翻哪家、值不值得翻
+        sk = _source_kinds(city_key, city_name, cid)
+        samples = {src: v["ids"] for src, v in sk.items()}
+        hint = _id_hint(samples, tok)
+        # 位数就对不上（问 4449、这城车号都是 5 位）就别白扫几百个方向了：直接说清
+        if hint and kind == "selfno":
+            return [], "", hint
+        for src in list(order):
+            e = sk.get(src, {})
+            # 掌上整城不给车机（昆明 hasReal=0），翻它也是白翻
+            if e.get("no_real"):
+                order.remove(src)
+            elif e.get("kinds") and kind and kind not in e["kinds"]:
+                order.remove(src)
+    elif kinds_my and kind and kind not in kinds_my:
         order = [x for x in order if x != "mygolbs"]
-    order = tuple(order)
     hits, spans = [], []
     key, core = _id_key(tok), _plate_core(tok)
     ends = {r["lineName"]: (r.get("from") or "", r.get("to") or "")
             for r in _catalog(city_name).get("buslines") or []}
-    cid = (cities().get(city_key) or {}).get("chelaile")
-
-    def scan_my():
-        try:
-            return _cached("plate-idx", (city_name, CITY_SCAN_MAX), PLATE_TTL,
-                           lambda: _plate_index(city_name, CITY_SCAN_MAX))
-        except Exception:
-            return {}, 0, 0
-
-    def scan_cl():
-        if not cid:
-            return {}, 0, 0
-        try:
-            return _cached("selfno-idx", (cid, SELFNO_MAX), SELFNO_TTL,
-                           lambda: _selfno_index(cid))
-        except Exception:
-            return {}, 0, 0
 
     for src in order:
-        idx, scanned, total = scan_my() if src == "mygolbs" else scan_cl()
+        if src == "mygolbs":
+            idx, scanned, total = _plate_scan(city_name)
+        else:
+            idx, scanned, total = _selfno_scan(cid) if cid else ({}, 0, 0)
         if total:
             spans.append((scanned, total))
         found = []
@@ -3587,16 +3688,16 @@ def _city_hits(city_key, city_name, tok, line="", my_kinds=None):
                         break
         found = [h for h in found if norm_line(h[1]) != norm_line(line)]
         if found:
-            return found, _scan_span(spans)
-    return [], _scan_span(spans)
+            return found, _scan_span(spans), hint
+    return [], _scan_span(spans), hint
 
 
 def _scan_span(spans):
     if not spans:
         return ""
     scan, tot = max(spans, key=lambda p: p[1])
-    return (f"全城 {tot} 个方向都翻了" if scan >= tot
-            else f"只翻了前 {scan} 个方向（全城 {tot} 个）")
+    return (u"全城 %d 个方向都翻了" % tot if scan >= tot
+            else u"只翻了前 %d 个方向（全城 %d 个）" % (scan, tot))
 
 
 def render_veh_city(city_key, city_name, veh, line="", my_kinds=None):
@@ -3607,12 +3708,14 @@ def render_veh_city(city_key, city_name, veh, line="", my_kinds=None):
     """
     if not veh:
         return ""
-    hits, span = _city_hits(city_key, city_name, str(veh), line, my_kinds)
+    hits, span, hint = _city_hits(city_key, city_name, str(veh), line, my_kinds)
     if hits:
-        bits = "、".join(f"{_line_label(nm)}（往{to}，刚过{st.strip()}）" if to and st
-                        else _line_label(nm) for _src, nm, to, st in hits[:3])
-        return f"不过它这会儿在其它线上：{bits}"
-    return f"{span or '全城'}，这会儿没看到 {veh} 在路上——多半停场或者收车了"
+        bits = u"、".join(_line_label(nm) + (u"（往%s，刚过%s）" % (to, st.strip()) if to and st else u"")
+                         for _src, nm, to, st in hits[:3])
+        return u"不过它这会儿在其它线上：%s" % bits
+    more = u"，再问一次我接着往后扫" if span and u"只翻了前" in span else u""
+    lead = (span + u"，") if span else u""
+    return u"%s这会儿没看到 %s 在路上——多半停场或者收车了%s%s" % (lead, veh, hint, more)
 
 
 def _selfno_mate(city_key, city_name, name):
@@ -3812,13 +3915,15 @@ def render_selfno(city_key, city_name, token):
     if not token:
         return ""
     kind = KIND_CN.get(_id_kind(token), "车号")
-    hits, span = _city_hits(city_key, city_name, token)
+    hits, span, hint = _city_hits(city_key, city_name, token)
     if not hits:
         old = _selfno_recall(token)
         if old:
             return (f"{token} 这会儿不在路上，上次 {old[2]} 在 {old[1]} 上对上的另一个号是 {old[0]}"
                     f"（车要是调了线，这条就旧了）")
-        return f"{span or '全城都翻了'}，没看到 {token} 这辆车"
+        more = "，再问一次我接着往后扫" if span and "只翻了前" in span else ""
+        lead = (span + "，") if span else ""
+        return f"{lead}没看到 {token} 这辆车{hint}{more}"
     src, name, _to, st = hits[0]
     ids = _line_ids(city_key, city_name, _line_real(city_name, name))
     mine_src = "mygolbs" if src == "掌上公交" else "chelaile"
