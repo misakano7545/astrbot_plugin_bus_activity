@@ -644,6 +644,25 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 「南宁 b3」：小写线号前面紧挨着地名，是线路不是版本号（以前被 _chatty_code 当代码丢掉，返空）
+_csC, query.cities = query.cities, lambda: {"南宁": {"mygolbs": "南宁市", "chelaile": "046"},
+                                            "玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+assert query._chatty_code("南宁 b3") is False
+assert query._chatty_code("南宁B3") is False and query._chatty_code("南宁3") is False
+assert query._chatty_code("拿玉林那个 h5 起步的") is True      # 闲聊里的版本号照旧不接
+assert query._chatty_code("这个 h5 页面打不开") is True
+# 「南宁3」不是这城的线路，但同号段有 30/31/32/301：报候选，别答成「没看到 3 这辆车」
+_catN, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "30路", "upperOrDown": "1"}, {"lineName": "31路", "upperOrDown": "1"},
+    {"lineName": "301路", "upperOrDown": "1"}, {"lineName": "B3路", "upperOrDown": "1"}]}
+_snN, query.render_selfno = query.render_selfno, lambda ck, cn, tok, line="", mk=None: (
+    "[车 %s]" % tok if tok == "999" else "全城 46 个方向都翻了，没看到 %s 这辆车" % tok)
+_r99 = query.answer("南宁999", "南宁市")
+assert _r99 == "[车 999]", _r99                       # 没同号段线路时按车答
+_r3 = query.answer("南宁3", "南宁市") or ""
+assert "没看到 3 这辆车" not in _r3, _r3               # 有同号段线路时不给车的结论
+query.cities, query._catalog, query.render_selfno = _csC, _catN, _snN
+
 # 「玉林512现在在哪」：本城没有 512 这条线，512 只能是车号（自编号）。
 # parse 把「玉林512」认成线路，以前一路查到目录里没有，回「没查到「512」这条线」
 _csS, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}

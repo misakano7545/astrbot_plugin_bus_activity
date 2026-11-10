@@ -426,8 +426,17 @@ def _chatty_code(msg):
     目录里小写线名都是两位数字（k10路、Cj10路），一位数字（h5、k3）一个都没有；
     这类词只在句子里聊到网页/软件时出现，只要没写「路/线/号」就别当线号。
     """
-    return bool(re.search(r"(?<![A-Za-z0-9])[a-z]{1,2}\d(?![A-Za-z0-9])", msg or "")) \
-        and not re.search(r"路|线|号", msg or "")
+    m = re.search(r"(?<![A-Za-z0-9])[a-z]{1,2}\d(?![A-Za-z0-9])", msg or "")
+    if not m or re.search(r"路|线|号", msg or ""):
+        return False
+    # 「南宁 b3」：号前面紧挨着地名，那是线路不是版本号（南宁的 B3 路照写小写也认）
+    try:
+        head = re.sub(r"[^\u4e00-\u9fa5]", "", (msg or "")[:m.start()])
+        if head and (norm_city(head[-3:]) in cities() or norm_city(head[-2:]) in cities()):
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def _about_someone(msg):
@@ -4218,6 +4227,14 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
             and not PLATE_RE.search(msg) and not re.search(r"路|线|号", msg) \
             and not _num_is_line(city_key, name, num):
         out = render_selfno(city_key, name, num)
+        if out and ("没看到" in out or "刚查过" in out):
+            # 同号段有线路（问「3」这城有 30/31/32/301）时按线路答候选，别给一句车的结论
+            try:
+                near = [r.get("lineName") or "" for r in _catalog(name).get("buslines") or []]
+            except Exception:
+                near = []
+            if any(norm_line(n).startswith(num) for n in near if n):
+                out = ""
         if out:
             return out
     last["line"] = wants[0]
