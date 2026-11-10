@@ -135,6 +135,9 @@ BUS_RE = re.compile(
     r"公交|巴士|公共汽车|公车|地铁|轨道交通|几路|哪路|路车|末班|首班|到站|几站|\d\s*号线|号线|"
     # 「北京BRT4」「厦门BRT1」：群里就这么写，不加这条快路压根不触发，全靠模型想起来调工具
     r"BRT\s*\d{1,3}(?![0-9])|快速公交\s*\d{1,3}(?![0-9])|"
+    # 「再扫剩下的」「接着扫」：上一句说了「只扫了前 N 条」，这句是在要求继续翻。
+    # 不认它就只能指望模型想起来再调一次工具，实际是群里一声不吭
+    r"再扫|接着扫|继续扫|往后扫|扫剩下|扫完|"
     # 「397号车」「是，397号车」：车号问法不带路/线，BUS_RE 不认就进不了快路，
     # 只剩模型一条路，它会反口问「是哪一路的 397 号」。号后面跟门/楼/口那些不是车
     r"\d{1,5}\s*号(?:车|那辆|这辆)|\d{1,5}\s*号(?!(?:门|楼|口|台|厅|窗|柜|桌|房|机|库|杆|道|铺|馆|包|区|梯|路|线))|"     r"怎么坐|直达|换乘|车来了|掌上公交|车牌|号牌|自编号|自编|夜宵线|夜班线|夜线|(?<![今昨天每这那晚])夜班车|通宵线|(?<![0-9])0\d{2,3}(?![0-9])|\d{1,4}\s*[路线]|有(?:几|多少)条?线路|有哪些线路|哪几条线路|"
@@ -3535,7 +3538,9 @@ def render_plate(city_name, plate, dir_msg=""):
     if not hit:
         part = (f"只扫了前 {scanned} 条（全城 {total} 条方向）" if scanned < total
                 else f"{scanned} 条方向全扫了")
-        return f"{city_name}这会儿{part}，没看到 {plate} 这辆车，可能收班了或者在别的城市跑"
+        more = "，说「再扫剩下的」我接着往后扫" if scanned < total else ""
+        return (f"{city_name}这会儿{part}，没看到 {plate} 这辆车"
+                f"，可能收班了或者在别的城市跑{more}")
     name, d, station = hit
     ends = {r["lineName"]: f"{r.get('from')} ↔ {r.get('to')}"
             for r in (_catalog(city_name).get("buslines") or [])}
@@ -3874,6 +3879,53 @@ def render_veh_stop(city_key, city_name, veh, stop, line=""):
                         head, stop, tgt - cur_i, max(1, int(round(est))), here))
         return "%s %s，上游这会儿没给它的到站预测" % (head, here)
     return ""
+
+
+# 「再扫剩下的」「接着扫」：用户明确要求继续翻全城时，接着上次的位置往后扫
+SCAN_MORE = re.compile(r"再扫|接着扫|继续扫|往后扫|扫剩下|扫完|扫下去|剩下(?:的|那|都)|接着找|继续找")
+
+
+def render_veh_rescan(city_key, city_name, veh, line="", budget=25.0):
+    """用户说「再扫剩下的」：从上次停的地方接着翻，一次尽量翻完再答。
+
+    以前这里没有任何入口——这句没车号，`_veh_tokens` 空的，整句落到站名/换乘那几条路上，
+    群里等 43 秒收不到一个字，用户只能看到「只扫了前 80 条」然后没人理他。
+    """
+    if not veh:
+        return ""
+    veh = str(veh)
+    # 上一轮已经翻完（缓存里 pos == total）时，这句「再扫」要的是重扫一遍：
+    # 索引 5 分钟内有效，但车早就开走了/新上线了，不重扫就还是那句「没看到」
+    for k in list(_cache):
+        if k[0] == "plate-idx" and k[1] and k[1][0] == city_name:
+            _cache.pop(k, None)
+        elif k[0] == "selfno-idx" and k[1] == (cities().get(city_key) or {}).get("chelaile"):
+            _cache.pop(k, None)
+    global SCAN_WORKERS
+    keep_w, SCAN_WORKERS = SCAN_WORKERS, max(SCAN_WORKERS, 64)
+    t0 = time.time()
+    hits, span = [], ""
+    try:
+        while True:
+            hits, span, _hint = _city_hits(city_key, city_name, veh, line)
+            if hits:
+                break
+            # 已经翻完了（span 里不再有「只翻了前」），或者这次一点没往前走
+            if not span or "只翻了前" not in span:
+                break
+            if time.time() - t0 >= budget:
+                break
+    finally:
+        SCAN_WORKERS = keep_w
+    if hits:
+        bits = "、".join(_line_label(nm) + ("（往%s，刚过%s）" % (to, st.strip()) if to and st else "")
+                         for _src, nm, to, st in hits[:3])
+        return "接着往后扫了，%s 在：%s（扫了 %.0f 秒，共 %s）" % (veh, bits, time.time() - t0, span)
+    if span and "只翻了前" in span:
+        return "又往后扫了 %.0f 秒，%s，还是没看到 %s 在路上——再问一次我接着扫" % (
+            time.time() - t0, span, veh)
+    return "%s，也没看到 %s 在路上——这会儿多半停场或者收车了" % (
+        span or "全城都翻完了", veh)
 
 
 def render_veh_city(city_key, city_name, veh, line="", my_kinds=None):
@@ -4387,6 +4439,17 @@ def answer(msg, default_city, ctx="", key=""):
     if URL_RE.search(msg) and len(re.findall(r"[\u4e00-\u9fff]", URL_RE.sub(" ", msg))) < 2:
         return ""
     last = _last(key)
+    # 「再扫剩下的」：上一句说「只扫了前 N 条」，这句是明确要求接着翻。
+    # 用上一句那辆车和那座城——这句里没有车号也没有城市名，落到后面就会被当成
+    # 站名/换乘去查，白等四十多秒还一个字不回
+    if SCAN_MORE.search(msg) and last.get("veh"):
+        _ck = last.get("city") if last.get("city") in cities() else norm_city(default_city)
+        _cn = (cities().get(_ck) or {}).get("mygolbs") or _ck
+        # 不传线路：`_city_hits` 会把「本线」的命中过滤掉，而用户要找的这辆车很可能
+        # 就停在自己那条线上（512 在 G02 上），过滤掉就成了「全城翻完也没看到」
+        out = render_veh_rescan(_ck, _cn, last["veh"])
+        if out:
+            return out
     t0 = time.time()
     msg = RES_WORD.sub(" ", MARKUP_RE.sub(" ", AT_RE.sub(" ", msg)))
     qm = QUOTE_RE.search(msg)
@@ -4573,6 +4636,8 @@ def answer(msg, default_city, ctx="", key=""):
             if out:
                 return out
     if pm and (not line or SELFNO_RE.search(msg)):
+        # 记下这台车：下一句「再扫剩下的」没写车号，靠它接着扫
+        last["veh"], last["veh_t"] = pm.group(1), time.time()
         if SELFNO_RE.search(msg):
             return render_selfno(city_key, name, pm.group(1))
         return render_plate(name, pm.group(1))

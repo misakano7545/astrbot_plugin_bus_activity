@@ -644,6 +644,30 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 「再扫剩下的」：上一句说了「只扫了前 N 条」，这句要接着往后扫（以前整句返空）
+assert query.BUS_RE.search("再扫剩下的") and query.SCAN_MORE.search("接着扫")
+_chS, query._city_hits = query._city_hits, lambda ck, cn, tok, line="", mk=None: (
+    [], "只翻了前 100 个方向（全城 200 个）", "")
+_r = query.render_veh_rescan("玉林", "玉林市", "桂A07188D", budget=0.01)
+assert "又往后扫了" in _r and "只翻了前" in _r, _r
+query._city_hits = lambda ck, cn, tok, line="", mk=None: (
+    [], "全城 200 个方向都翻了", "")
+assert "也没看到 桂A07188D" in query.render_veh_rescan("玉林", "玉林市", "桂A07188D")
+query._city_hits = lambda ck, cn, tok, line="", mk=None: (
+    [("掌上公交", "G02路", "玉林北站", "和睦村")], "全城 200 个方向都翻了", "")
+assert "在：" in query.render_veh_rescan("玉林", "玉林市", "桂A07188D")
+query._city_hits = _chS
+# 没记着车号时不能乱扫
+_lk2 = query._last("")
+_lk2.clear()
+assert query.answer("再扫剩下的", "玉林市") == ""
+_lk2["veh"], _lk2["city"] = "桂A07188D", "玉林"
+_chS2, query._city_hits = query._city_hits, lambda ck, cn, tok, line="", mk=None: (
+    [], "全城 200 个方向都翻了", "")
+assert "桂A07188D" in (query.answer("再扫剩下的", "玉林市") or "")
+query._city_hits = _chS2
+_lk2.clear()
+
 # 「怎么坐公交车从玉林八中到玉林北站」：起点那截不许跨过「从」，
 # 以前非贪婪从「怎」开始匹，整段被当成出发站 →「玉林站表里没找到「怎么坐公交车从玉林八中」」
 assert query.hop("怎么坐公交车从玉林八中到玉林北站") == ("玉林八中", "玉林北站")
