@@ -644,6 +644,14 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 「怎么坐公交车从玉林八中到玉林北站」：起点那截不许跨过「从」，
+# 以前非贪婪从「怎」开始匹，整段被当成出发站 →「玉林站表里没找到「怎么坐公交车从玉林八中」」
+assert query.hop("怎么坐公交车从玉林八中到玉林北站") == ("玉林八中", "玉林北站")
+assert query.hop("从玉林八中到玉林北站怎么坐车") == ("玉林八中", "玉林北站")
+assert query.hop("玉林八中到玉林北站") == ("玉林八中", "玉林北站")
+assert query.hop("玉林八中怎么去玉林北站") == ("玉林八中", "玉林北站")
+assert query.hop("从市体育中心坐到玉林北站") == ("市体育中心", "玉林北站")
+
 # 「南宁 b3」：小写线号前面紧挨着地名，是线路不是版本号（以前被 _chatty_code 当代码丢掉，返空）
 _csC, query.cities = query.cities, lambda: {"南宁": {"mygolbs": "南宁市", "chelaile": "046"},
                                             "玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
