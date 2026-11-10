@@ -4210,6 +4210,16 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
             # 目录里这个县的线路自成一套（博罗1路、博罗222路…）：只认带县名的写法，
             # 裸号是同城的另一条线，不能拿来顶
             wants = [w for w in wants if w.startswith(prefix)] or [prefix + num]
+    # 「玉林512现在在哪」：这城根本没有 512 这条线，512 就只能是车号（自编号）。
+    # parse 把「玉林512」认成线路，一路查到目录里没有，回「没查到「512」这条线」——
+    # 用户问的是一台车，不是一条线
+    # 句子里明写了「路/线/号」时仍按线路问（「玉林512路」就是问这条线在不在）
+    if name and num.isdigit() and (not prefix or norm_city(prefix) == city_key) \
+            and not PLATE_RE.search(msg) and not re.search(r"路|线|号", msg) \
+            and not _num_is_line(city_key, name, num):
+        out = render_selfno(city_key, name, num)
+        if out:
+            return out
     last["line"] = wants[0]
     # 「2路到汽车总站叫我」：答应了就得真在后台盯着，别只给一句实时就完
     if key and name and WATCH_RE.search(msg):
@@ -4652,13 +4662,18 @@ def answer(msg, default_city, ctx="", key=""):
     # 以前这里直接返空，群里一声不吭，模型只好自己编「玉林没有这个线路号，你得说几路」
     if not line and name and not re.search(r"车|辆|号|路|线", msg):
         _vt2 = _veh_tokens(msg)
-        # 整句剥掉「那/查/看一下/呢」之后只剩这个号，才算在问它：
-        # 「9999x 8123等于多少」也带数字，不能拿去全城找车
-        _rest = re.sub(r"^(?:那|这|再|帮我|给我|麻烦)?\s*"
-                       r"(?:查询|查一下|查查|查|看看|看|问一下|问|搜一下|搜)?\s*", "", msg.strip())
-        _rest = re.sub(r"(?:呢|吗|啊|呀|吧|的位置|在哪|到哪)$", "", _rest).strip()
-        if _vt2 and _rest in (_vt2[0], _vt2[0] + "号") \
-                and not _num_is_line(city_key, name, _vt2[0]):
+        # 整句剥掉号本身、城市名和「那/查/看一下/现在在哪」这些问法之后，剩不下别的字，
+        # 才算在问这个号（「9999x 8123等于多少」剥完还剩「等于多少」，不能拿去全城找车）。
+        # 「玉林512到哪了」parse 认不出线路，以前直接返空——群里一声不吭
+        _rest = msg
+        for _t in _vt2:
+            _rest = _rest.replace(_t, " ")
+        for _ck in (norm_city(name), city_key, prefix):
+            if _ck:
+                _rest = _rest.replace(_ck, " ")
+        _FILL = set("那这再帮我给麻烦查询看问搜现如请问呢吗啊呀的吧了位置哪儿到走了跑"
+                    "在哪里去趟坐乘搭车号辆路线的候时要等多久几站？?！!~。，,、 ")
+        if _vt2 and all(c in _FILL for c in _rest) and not _num_is_line(city_key, name, _vt2[0]):
             out = render_selfno(city_key, name, _vt2[0])
             if out:
                 return out

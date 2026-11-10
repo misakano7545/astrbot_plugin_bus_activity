@@ -644,6 +644,19 @@ _lk.clear(); _lk.update(_keep)
 assert query._lines("【4K】双层车") == [] and query.answer("这个视频4K的", "玉林市") == ""
 assert query._lines("【1080P】520路") == [("520", "")]
 
+# 「玉林512现在在哪」：本城没有 512 这条线，512 只能是车号（自编号）。
+# parse 把「玉林512」认成线路，以前一路查到目录里没有，回「没查到「512」这条线」
+_csS, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}
+_catS, query._catalog = query._catalog, lambda cn: {"buslines": [
+    {"lineName": "17路", "upperOrDown": "1"}, {"lineName": "G02路", "upperOrDown": "1"}]}
+_snS, query.render_selfno = query.render_selfno, lambda ck, cn, tok, line="", mk=None: f"[车 {tok}]"
+for _m in ("玉林512现在在哪", "玉林512", "玉林512到哪了"):
+    assert query.answer(_m, "玉林市") == "[车 512]", (_m, query.answer(_m, "玉林市"))
+# 有这条线时照旧走线路；明写「路」也照旧按线路问
+assert query.answer("玉林17现在在哪", "玉林市") != "[车 17]"
+assert query.answer("玉林512路", "玉林市") != "[车 512]"
+query.cities, query._catalog, query.render_selfno = _csS, _catS, _snS
+
 # 特定车辆到特定站：「桂k11878d 什么时候到玉林北站」
 # 小写车牌也要认（群里打全小写），不然整句认不出车号，落到换乘
 assert query._veh_tokens("桂k11878d 什么时候到玉林北站") == ["桂K11878D"]
