@@ -8,6 +8,7 @@
 import base64
 import hashlib
 import json
+import math
 import urllib.parse
 import urllib.request
 
@@ -70,6 +71,15 @@ def stations(city_id, line_id):
     return [s.get("sn") or "" for s in data.get("stations") or []]
 
 
+def _away(a_lat, a_lng, b_lat, b_lng):
+    """两点直线距离（米）。这份响应里每站都带坐标，用它算「距下一站」才靠谱。"""
+    r = 6371000.0
+    p1, p2 = math.radians(float(a_lat)), math.radians(float(b_lat))
+    dp, dl = p2 - p1, math.radians(float(b_lng) - float(a_lng))
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
 def _decrypt(blob):
     dec = Cipher(algorithms.AES(KEY), modes.ECB()).decryptor()
     raw = dec.update(base64.b64decode(blob)) + dec.finalize()
@@ -96,8 +106,16 @@ def live(city_id, line_id):
         station = stops[order - 1]["sn"] if isinstance(order, int) and 0 < order <= len(stops) else "途中"
         # 香港这类车队没有车牌，busId 形如 9_20261103203011，取前段当车号
         plate = (b.get("licence") or "").split("_")[0] or str(b.get("busId") or "?").split("_")[0]
-        buses.append((plate, station,
-                      b.get("distanceToWaitStn")))
+        # distanceToWaitStn 是「到候车站的剩余距离」（没传候车站时默认终点），不是距下一站：
+        # G02 实测车在 4/30 站时它报 16119 米，到下一站直线其实只有 1254 米。
+        # 有坐标就自己算；缺坐标就不报距离，别把差十几倍的数发出去
+        dist = None
+        try:
+            if isinstance(order, int) and 0 < order <= len(stops)                     and b.get("lat") and b.get("lng")                     and stops[order - 1].get("lat") and stops[order - 1].get("lng"):
+                dist = _away(b["lat"], b["lng"], stops[order - 1]["lat"], stops[order - 1]["lng"])
+        except (TypeError, ValueError):
+            dist = None
+        buses.append((plate, station, dist))
         # 掌上只报车牌、车来了只报自编号，两家唯一的公共键就是这一刻的 GPS 位置
         if b.get("lat") and b.get("lng"):
             pos[plate] = {"lat": b["lat"], "lng": b["lng"]}
