@@ -676,6 +676,21 @@ assert query.hop("玉林八中到玉林北站") == ("玉林八中", "玉林北�
 assert query.hop("玉林八中怎么去玉林北站") == ("玉林八中", "玉林北站")
 assert query.hop("从市体育中心坐到玉林北站") == ("市体育中心", "玉林北站")
 
+# 「你应该不能查询线路配车」是闲聊（在问机器人行不行），不是查站：
+# 以前里面有「线路」两字，被反问成「「你应该不能查询」这个站没查到，是哪座城的？」
+assert query._about_bot("你应该不能查询线路配车") is True
+assert query._about_bot("你应该不能查询") is True
+assert query._about_bot("你能查公交吗") is True
+assert query.answer("你应该不能查询线路配车", "玉林市") == ""
+assert query.answer("你应该不能查询线路配车吧?", "玉林市") == ""
+# 点了城市/线号/车牌的照旧答
+assert query._about_bot("你能查玉林G02吗") is False
+if "北京" in query.cities():
+    assert query._about_bot("你查不到北京地铁吗") is False   # 点了城市名就不算闲聊
+assert query._about_bot("玉林G02") is False
+# 「配车/车型」没写线路号时别再转成查站
+assert query.FLEET_RE.search("你应该不能查询线路配车")
+
 # 「南宁 b3」：小写线号前面紧挨着地名，是线路不是版本号（以前被 _chatty_code 当代码丢掉，返空）
 _csC, query.cities = query.cities, lambda: {"南宁": {"mygolbs": "南宁市", "chelaile": "046"},
                                             "玉林": {"mygolbs": "玉林市", "chelaile": "440"}}

@@ -442,6 +442,27 @@ def _chatty_code(msg):
     return True
 
 
+# 在跟机器人说话（而不是在问公交）：「你应该不能查询线路配车」「你能查地铁吗」
+BOT_ADDR = re.compile(r"你|您|机器人|大肥鱼", re.I)
+BOT_MODAL = re.compile(r"不能|不会|能不能|会不会|可不可以|行不行|支不支持|能查|查不到|查不了|查得到")
+
+
+def _about_bot(msg):
+    """这句是在问「你能干这个吗」，不是真的在查公交。
+
+    「你应该不能查询线路配车」被当成公交问句查过：里面有个「线路」，站名猜不出，
+    就回「「你应该不能查询」这个站没查到，是哪座城的？」——把闲聊抢成了查站。
+    带数字（线号/车牌）或点了城市名的照旧放行。
+    """
+    m = msg or ""
+    if re.search(r"\d", m) or not (BOT_ADDR.search(m) and BOT_MODAL.search(m)):
+        return False
+    try:
+        return not detect_city(m, "", "")[1]
+    except Exception:
+        return False
+
+
 def _about_someone(msg):
     """跟群里别人说话、不是问机器人：「不是，他查的是公交公司门口的公交站」。
     裸「查」进了 ASK，第三人称的叙述句也会被当问句接住 → 真去反问「是哪座城的」。
@@ -4423,6 +4444,9 @@ def answer(msg, default_city, ctx="", key=""):
     # 玉林站表里有个「公交二车队」，以前会答「公交二车队 车来了这边有 1 条线路：3 红十字会医院 ↔ 公交二车队」
     if _generic_word(msg):
         return ""
+    # 「你应该不能查询线路配车」：在说机器人行不行，不是在查公交
+    if _about_bot(msg):
+        return ""
     # 微信的引用整段是 XML：真要答的那句在 <title>，被引用的话在 <refermsg><content>
     if "<refermsg>" in msg or "<appmsg>" in msg:
         rm = WX_REF.search(msg)
@@ -4834,7 +4858,10 @@ def answer(msg, default_city, ctx="", key=""):
         # 「有一条线路查不到实时信息我就不写出来了（）」是吐槽，反问就抢话了
         # 还得真的是公交问句：「这是抓的档案站吗」只有一个「站」字，
         # 反问成「「这是抓的档案站」这个站没查到」就把闲聊抢了
-        if not explicit and BUS_RE.search(msg) and re.search(r"站|线路|几路", msg) \
+        # 「线路配车」里的「线路」不是站名：「你应该不能查询线路配车」以前被反问成
+        # 「「你应该不能查询」这个站没查到」。配车/车型没写线路号时没有可答的东西，交给模型
+        if not explicit and not FLEET_RE.search(msg) \
+                and BUS_RE.search(msg) and re.search(r"站|线路|几路", msg) \
                 and not re.search(r"查不到|不写|没查到|找不到", msg):
             hint = re.sub(r"公交$", "", STOPSUF.sub("", TAIL.sub("", msg))).strip()
             return (f"「{hint}」这个站没查到，是哪座城的？说个城市名我再查" if hint
