@@ -1173,8 +1173,10 @@ import types as _t
 _lt, _real = query.time, sys.modules["time"]
 def _at(hh, mm):
     s = _real.localtime()
-    query.time = _t.SimpleNamespace(localtime=lambda *a: s.__replace__(tm_hour=hh, tm_min=mm),
-                                    gmtime=lambda *a: s.__replace__(tm_hour=hh, tm_min=mm),
+    # struct_time 不是 namedtuple：3.11 既没有 _replace 也没有 __replace__，按字段重建
+    _mk = lambda *a: _real.struct_time((s.tm_year, s.tm_mon, s.tm_mday, hh, mm, 0,
+                                       s.tm_wday, s.tm_yday, s.tm_isdst))
+    query.time = _t.SimpleNamespace(localtime=_mk, gmtime=_mk,
                                     strftime=_real.strftime, time=_real.time)
 for _now, _last, _want in [((0, 2), "22:40", True), ((0, 10), "00:30", False),
                            ((23, 50), "24:10", False), ((0, 20), "24:10", True),
