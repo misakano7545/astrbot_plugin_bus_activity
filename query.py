@@ -1695,6 +1695,32 @@ _WNAME_MOD = ("东线", "西线", "南线", "北线", "中线", "环线", "区�
               "夜班", "夜线", "长线", "短线", "专线", "副线", "高峰", "大站", "直达", "接驳")
 
 
+# 「永泰汽车站-盘古乡站有什么线路」：目录里叫「永泰车站-盘谷」，是起讫点式线名不是站名。
+# 用户照着站牌写、还带个同音字，拿去站表里搜当然没有
+_DASH_SPLIT = re.compile(r"\s*(?:-|—|–|至|<>|↔)\s*")
+_DASH_NOISE = re.compile(r"(?:汽车站|客运站|车站|汽车|站|乡|镇|村|市|县)+$")
+
+
+def _dash_line(city_name, raw):
+    """整句是「A-B」就回目录里对应的起讫点式线名，没把握返回 None。"""
+    parts = [p for p in _DASH_SPLIT.split(raw or "") if p]
+    if len(parts) != 2:
+        return None
+    key = "-".join(_DASH_NOISE.sub("", p) for p in parts)
+    if any(len(k) < 2 for k in key.split("-")):
+        return None
+    best, score = None, 0.0
+    for bl in _catalog(city_name).get("buslines", []):
+        np = [p for p in _DASH_SPLIT.split(bl["lineName"]) if p]
+        if len(np) != 2:
+            continue
+        r = difflib.SequenceMatcher(None, key,
+                                    "-".join(_DASH_NOISE.sub("", p) for p in np)).ratio()
+        if r > score:
+            best, score = bl["lineName"], r
+    return best if score >= 0.6 else None
+
+
 def _written_name(msg, want):
     """句子里那个号的写法（「从1路东线」「增城105」），纯「1路」返回空串。"""
     if not want:
@@ -4829,6 +4855,13 @@ def answer(msg, default_city, ctx="", key=""):
                 only = _stop_lines(name, last["stop"])[1]
             return render_sweep(name, bool(pl), only or None)
         out = render_stop(city_key, name, msg, src)
+        # 「永泰汽车站-盘古乡站」这种照着站牌写起讫点的，站表里没有，但目录里是「永泰车站-盘谷」
+        if not out:
+            dl = _dash_line(name, JUNK_TAIL.sub("", JUNK_HEAD.sub("", STOPASK_RE.sub("", msg))))
+            if dl:
+                out = _one(city_key, name, dl, "", msg, src, explicit, last, key)
+                if out:
+                    last["line"] = dl
         # 「伦教街道办事处公交线路」没写城市：默认城没这个站就沿用上一条问过的城，
         # 佛山 342 路问完接着问伦教，别去玉林的站表里找
         if not out and not explicit and prev in cities() and prev != city_key:

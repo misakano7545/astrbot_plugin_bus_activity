@@ -2469,6 +2469,14 @@ _p10, query.pick_stop = query.pick_stop, lambda cn, m: "安宁区医院"   # 上
 assert query.render_at("兰州", "兰州市", "8", "安宁区8路") is None
 assert query.render_at("鄂尔多斯", "鄂尔多斯市", "8", "东胜区 8路 夜班车") is None
 query.pick_stop = _p10
+# ④「永泰汽车站-盘古乡站有什么线路」：目录里叫「永泰车站-盘谷」，照着站牌写还带同音字也得认出来
+_cat11 = query._catalog
+query._catalog = lambda cn: {"buslines": [{"lineName": "永泰车站-盘谷"},
+                                          {"lineName": "福清-永泰"}]}
+assert query._dash_line("福州市", "永泰汽车站-盘古乡站") == "永泰车站-盘谷"
+assert query._dash_line("福州市", "玉林9路") is None
+assert query._dash_line("福州市", "北京至天津") is None
+query._catalog = _cat11
 
 print("selftest ok")
 if "--live" in sys.argv:
