@@ -2477,6 +2477,14 @@ assert query._dash_line("福州市", "永泰汽车站-盘古乡站") == "永泰�
 assert query._dash_line("福州市", "玉林9路") is None
 assert query._dash_line("福州市", "北京至天津") is None
 query._catalog = _cat11
+# ⑤ 南安 181：同地名的线一大把，列前 4 条会被读成「这地方只有这几条」，宁可只说没查到
+_cat12, _ci12 = query._catalog, query.cities
+query.cities = lambda: {"泉州市": {"mygolbs": "泉州市"}}
+query._catalog = lambda cn: {"buslines": [{"lineName": "南安%d路" % i} for i in range(2, 13)]}
+assert query._near("泉州市", "南安181") == ""
+query._catalog = lambda cn: {"buslines": [{"lineName": "南安1A路"}, {"lineName": "南安2路"}]}
+assert query._near("泉州市", "南安181") == "南安1A路、南安2路"
+query._catalog, query.cities = _cat12, _ci12
 
 print("selftest ok")
 if "--live" in sys.argv:

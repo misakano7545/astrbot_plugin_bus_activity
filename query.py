@@ -1681,7 +1681,8 @@ def _near(city_key, want, n=4):
             same += [n for n, _ in (chelaile.lines(cl) or []) if norm_line(n).startswith(head.group(0))]
         same = list(dict.fromkeys(same))
         if same:
-            return "、".join(same[:n])
+            # 同地名的线太多时（南安 20 多条）列前 4 条会被读成「这地方只有这几条」
+            return "、".join(same[:n]) if len(same) <= n else ""
     hit = sorted({r["lineName"] for r in rows},
                  key=lambda x: -difflib.SequenceMatcher(None, norm_line(x), w).ratio())[:n]
     return "、".join(hit) if hit and difflib.SequenceMatcher(None, norm_line(hit[0]), w).ratio() >= 0.5 else ""
@@ -4887,6 +4888,13 @@ def answer(msg, default_city, ctx="", key=""):
                     return got
             bare = raw_place.replace(norm_city(name), "", 1).strip()
             return f"{norm_city(name)}站表里没查到「{bare if len(bare) >= 3 else raw_place}」这个站"
+        # 「泉州南安181 182 183这三条线路」：一句点了好几个号、一个都没认出，
+        # 回空模型就会自己圆出「那边只有 1A、1B 这几条」（181/182/183 是 11-26 才开通的新线）
+        if explicit:
+            nums = list(dict.fromkeys(re.findall(r"(?<![\dA-Za-z路号线])(\d{2,4})(?![\d])", msg)))
+            if len(nums) >= 2:
+                return (f"{norm_city(name)}目录里没有 " + "、".join(nums)
+                        + " 这几条线，先确认下号有没有写错")
         # 站名猜不出是哪座城的：问一句，别回空让模型自己圆话（「返回的是玉林全市正在跑的线路」）。
         # 「有一条线路查不到实时信息我就不写出来了（）」是吐槽，反问就抢话了
         # 还得真的是公交问句：「这是抓的档案站吗」只有一个「站」字，
