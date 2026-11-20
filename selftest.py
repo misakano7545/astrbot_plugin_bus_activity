@@ -2485,6 +2485,18 @@ assert query._near("泉州市", "南安181") == ""
 query._catalog = lambda cn: {"buslines": [{"lineName": "南安1A路"}, {"lineName": "南安2路"}]}
 assert query._near("泉州市", "南安181") == "南安1A路、南安2路"
 query._catalog, query.cities = _cat12, _ci12
+# ⑥「玉林万达定制有没有车」：全名太长没人写全，句中那段按字序落进长线名就认（要唯一）
+_cat13, _ci13, _cl13 = query._catalog, query.cities, query.chelaile
+query.cities = lambda: {"玉林市": {"mygolbs": "玉林市", "chelaile": "440"}}
+query._catalog = lambda cn: {"buslines": [{"lineName": "玉林北站定制夜班车", "to": "玉林北站"},
+                                          {"lineName": "万达广场夜游定制公交专线", "to": "玉州万达广场"}]}
+query.chelaile = _t.SimpleNamespace(lines=lambda cid: [], stations=lambda *a: [])
+assert query._long_line("玉林市", "玉林万达定制有没有车") == "万达广场夜游定制公交专线"
+assert query._long_line("玉林市", "万达广场夜游定制公交专线") == "万达广场夜游定制公交专线"
+assert query._long_line("玉林市", "玉林9路") is None
+# 「南安有哪些公交线路」只列南安自己的线，不带整城
+assert query.render_city_lines("玉林市", "万达") == "万达这边 1 条线路：\n万达广场夜游定制公交专线：玉州万达广场"
+query._catalog, query.cities, query.chelaile = _cat13, _ci13, _cl13
 
 print("selftest ok")
 if "--live" in sys.argv:

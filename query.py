@@ -1047,8 +1047,16 @@ def _chelaile(city_id, want):
             except Exception:
                 n = 0
         res["paused"] = True
-        res["note"] = ("车来了那边这条线标的是" + (f"「{desc}」" if desc else "「临时停运」")
-                       + "（停运状态）" + (f"，这条线 {n} 站" if n else ""))
+        # 首班还没到、或者已经收班，上游也报 -2（万达广场夜游定制专线 20:00 首班）：
+        # 那不是停运，按运营窗口说清
+        try:
+            hs = chelaile.hours(city_id).get(name) or []
+        except Exception:
+            hs = []
+        nt = re.sub(r"^现在 \d{1,2}:\d{2}，", "", _window_note([("", f, l) for f, l in hs]))
+        res["note"] = ((nt + (f"，这条线 {n} 站" if n else "")) if nt else
+                       ("车来了那边这条线标的是" + (f"「{desc}」" if desc else "「临时停运」")
+                        + "（停运状态）" + (f"，这条线 {n} 站" if n else "")))
     if states and all(s == -5 for s in states) and not any(g for _, g in groups):
         res["unknown"] = True
         ck = next((k for k, v in cities().items() if (v or {}).get("chelaile") == city_id), "")
@@ -1720,6 +1728,36 @@ def _dash_line(city_name, raw):
         if r > score:
             best, score = bl["lineName"], r
     return best if score >= 0.6 else None
+
+
+def _long_line(city_name, msg):
+    """全名太长没人写得全（「万达定制」→「万达广场夜游定制公交专线」）：
+    句子里最长的那一段是某条中文长线名按字序的子序列就认，且必须只有一条命中。"""
+    ent = cities().get(norm_city(city_name)) or {}
+    names = [r.get("lineName") or "" for r in (_catalog(city_name).get("buslines") or [])]
+    if ent.get("chelaile"):
+        try:
+            names += [n for n, _ in (chelaile.lines(ent["chelaile"]) or [])]
+        except Exception:
+            pass
+    names = [n for n in dict.fromkeys(names) if len(n) >= 5 and not re.search(r"\d", n)]
+    core = msg.replace(norm_city(city_name), "")
+    if not names or len(core) < 3:
+        return None
+
+    def span(n):     # 句子里最长的那一段能按字序落进线名
+        b = 0
+        for i in range(len(core)):
+            for j in range(len(core), i + b, -1):
+                if _subseq(core[i:j], n):
+                    b = j - i
+                    break
+        return b
+
+    spans = [(span(n), n) for n in names]
+    best = max(s for s, _ in spans)
+    hits = [n for s, n in spans if s == best]
+    return hits[0] if len(hits) == 1 and best >= 3 else None
 
 
 def _written_name(msg, want):
@@ -2897,13 +2935,14 @@ def _city_wide(msg, city_name):
 CITYLINES_MAX = 40
 
 
-def render_city_lines(city_name):
-    """全城线路清单。119 目录一个方向一条记录，按线名合并成「A ↔ B」。"""
+def render_city_lines(city_name, place=""):
+    """全城线路清单。119 目录一个方向一条记录，按线名合并成「A ↔ B」。
+    place 非空时只列那个县级市的线（南安这类线名自带地名）。"""
     rows = _catalog(city_name).get("buslines") or []
     ends = {}
     for r in rows:
         n = r.get("lineName")
-        if n:
+        if n and (not place or place in n):
             ends.setdefault(n, []).append(r.get("to") or "")
     if not ends:
         # 香港这类城市掌上的 114 返空（status=1 但没目录），车来了那边有整城线名清单
@@ -2919,7 +2958,7 @@ def render_city_lines(city_name):
     names = list(ends)
     # 650 条一次发不完，群消息会被平台截断：先列一截，剩下的让他直接报线号
     more = len(names) > CITYLINES_MAX
-    out = [f"{norm_city(city_name)}这边 {len(ends)} 条线路"
+    out = [f"{place or norm_city(city_name)}这边 {len(ends)} 条线路"
            + (f"，先列前 {CITYLINES_MAX} 条：" if more else "：")]
     for n in names[:CITYLINES_MAX]:
         ts = [t for t in dict.fromkeys(ends[n]) if t]
@@ -4855,8 +4894,23 @@ def answer(msg, default_city, ctx="", key=""):
                     and re.search(r"这四|这几|这些|上面|刚才|四条|几条|哪条|哪个", msg)):
                 only = _stop_lines(name, last["stop"])[1]
             return render_sweep(name, bool(pl), only or None)
+        # 「南安有哪些公交线路」问的是南安这个地方，不是站名「南安村」——南安是泉州的
+        # 县级市，线在父城目录里以地名开头（南安2路…），按地名挑出来列
+        for pl in sorted((b for b, v in DIST_BARE.items()
+                          if v and norm_city(v) == city_key and b in msg), key=len, reverse=True):
+            if _city_wide(msg.replace(pl, "", 1), name):
+                got = render_city_lines(name, pl)
+                if got:
+                    return got
+        # 「玉林万达定制有没有车」：全名「万达广场夜游定制公交专线」没人写得全，
+        # 句中那段是它按字序的子序列就认（只在那条线名唯一时生效）
+        ln = _long_line(city_key, msg)
+        if ln:
+            got = _one(city_key, name, norm_line(ln), "", msg, src, explicit, last, key)
+            if got:
+                last["line"] = ln
+                return got
         out = render_stop(city_key, name, msg, src)
-        # 「永泰汽车站-盘古乡站」这种照着站牌写起讫点的，站表里没有，但目录里是「永泰车站-盘谷」
         if not out:
             dl = _dash_line(name, JUNK_TAIL.sub("", JUNK_HEAD.sub("", STOPASK_RE.sub("", msg))))
             if dl:

@@ -65,6 +65,18 @@ def lines(city_id):
     return [(name, lid) for name, lids in seen.items() for lid in lids]
 
 
+def hours(city_id):
+    """{lineName: [(首班, 末班)]}。cityLineList 里带首末班，lines() 只要名字把它丢了 ——
+    首班还没到的线上游也报 state=-2（万达广场夜游定制专线 20:00 才发首班），得靠它分清。"""
+    data = _unwrap(_get("bus/cityLineList", _params(city_id)))
+    out = {}
+    for row in (data.get("allLines") or {}).get("all") or []:
+        f, l = row.get("firstTime"), row.get("lastTime")
+        if f and l:
+            out.setdefault(row.get("lineName") or "", []).append((f, l))
+    return out
+
+
 def stations(city_id, line_id):
     """线路站表（明文 lineRoute），只要站名——车来了没有站点搜索接口，找站只能扫这个。"""
     data = _unwrap(_get("bus/line!lineRoute.action", _params(city_id, lineId=line_id)))
