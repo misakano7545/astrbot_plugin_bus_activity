@@ -2113,7 +2113,9 @@ def _cands(city_name, msg):
             # 「中化泉州公司」这种同名不同地的站
             core = re.sub(r"(公交)?(车?站|台)?$", "", c) or c
             if len(c) >= 2 and norm_city(c) != city and norm_city(core) != city \
-                    and not LINE_RE.search(c) and not _generic_word(c):
+                    and not LINE_RE.search(c) and not _generic_word(c) \
+                    and not re.fullmatch(r"\d{1,4}[路线]?",
+                                         re.sub(rf"^{re.escape(city)}", "", c)):
                 yield c
 
 

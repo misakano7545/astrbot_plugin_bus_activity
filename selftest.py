@@ -960,6 +960,10 @@ _st4 = query.stops
 query.stops = lambda cn, kw: [{"stationName": "北京密码小区", "relatedRoutes": ["密101路"]}]
 assert query.pick_stop("北京市", "北京密101路") is None
 query.stops = _st4
+# 「重庆109」：裸线号不是站名。上游子串搜「109」会匹上「大路边（109乡道）」，
+# 于是答成「109路 不经过大路边（109乡道）」
+assert list(query._cands("重庆市", "重庆109")) == []
+assert query.pick_stop("重庆市", "重庆109") is None
 # 「AirPods5和pro3选哪个比较好」：QQ 的 @ 前缀里 CA0308D 让前导零线号命中进快路，
 # 抹掉 @ 之后「pro3」里的 3 又被当成 3 路——数字打头的线名不许粘在英文字母后面
 assert not query.BUS_RE.search(query.AT_RE.sub(" ", "<@CA0308D02E977A8606EF36B77DB31115> AirPods5和pro3选哪个比较好"))
