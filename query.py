@@ -1693,6 +1693,11 @@ def _near(city_key, want, n=4):
             return "、".join(same[:n]) if len(same) <= n else ""
     hit = sorted({r["lineName"] for r in rows},
                  key=lambda x: -difflib.SequenceMatcher(None, norm_line(x), w).ratio())[:n]
+    # 「哈尔滨J8」：字母号跟 8路/82路/81路 的相似度也能到 0.8（共用一个 8），
+    # 报出来等于瞎猜。带字母的只跟同样带这串字母的线比（K502 → K501/K503）
+    lt = re.sub(r"[^A-Za-z]", "", w).lower()
+    if lt:
+        hit = [x for x in hit if lt in re.sub(r"[^A-Za-z]", "", norm_line(x)).lower()]
     return "、".join(hit) if hit and difflib.SequenceMatcher(None, norm_line(hit[0]), w).ratio() >= 0.5 else ""
 
 

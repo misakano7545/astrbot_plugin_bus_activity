@@ -2483,11 +2483,17 @@ assert query._dash_line("福州市", "北京至天津") is None
 query._catalog = _cat11
 # ⑤ 南安 181：同地名的线一大把，列前 4 条会被读成「这地方只有这几条」，宁可只说没查到
 _cat12, _ci12 = query._catalog, query.cities
-query.cities = lambda: {"泉州市": {"mygolbs": "泉州市"}}
+query.cities = lambda: {"泉州市": {"mygolbs": "泉州市"}, "哈尔滨": {"mygolbs": "哈尔滨"},
+                        "济南": {"mygolbs": "济南"}}
 query._catalog = lambda cn: {"buslines": [{"lineName": "南安%d路" % i} for i in range(2, 13)]}
 assert query._near("泉州市", "南安181") == ""
 query._catalog = lambda cn: {"buslines": [{"lineName": "南安1A路"}, {"lineName": "南安2路"}]}
 assert query._near("泉州市", "南安181") == "南安1A路、南安2路"
+# 字母号别跟数字号比相似度：「哈尔滨J8」会被挑成 8路/82路/81路/58路
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("8路", "82路", "81路", "58路")]}
+assert query._near("哈尔滨", "J8") == ""
+query._catalog = lambda cn: {"buslines": [{"lineName": n} for n in ("K501路", "K503路", "6路")]}
+assert sorted(query._near("济南", "K502").split("、")) == ["K501路", "K503路"]
 query._catalog, query.cities = _cat12, _ci12
 # ⑥「玉林万达定制有没有车」：全名太长没人写全，句中那段按字序落进长线名就认（要唯一）
 _cat13, _ci13, _cl13 = query._catalog, query.cities, query.chelaile
