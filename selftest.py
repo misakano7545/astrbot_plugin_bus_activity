@@ -764,6 +764,9 @@ query._station_seq, query._catalog, query._live_my = _seq0, _catE, _lvE
 # 不能返空（返空群里一声不吭，模型就自己编「玉林没有这个线路号」）
 assert query._num_is_line("玉林", "玉林市", "17") is True     # 玉林真有 17 路
 assert query._num_is_line("玉林", "玉林市", "527") is False
+# 「北流105」：县级市的线在目录里叫「北流105路」，带上前缀核才算数，光核裸号会说成车号
+assert query._num_is_line("北流", "北流市", "北流105") is True
+assert query._num_is_line("北流", "北流市", "105") is False
 _sn0, query.render_selfno = query.render_selfno, (
     lambda ck, cn, tok, line="", mk=None: f"[全城找 {tok}]")
 _csR, query.cities = query.cities, lambda: {"玉林": {"mygolbs": "玉林市", "chelaile": "440"}}

@@ -4371,9 +4371,11 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
     # parse 把「玉林512」认成线路，一路查到目录里没有，回「没查到「512」这条线」——
     # 用户问的是一台车，不是一条线
     # 句子里明写了「路/线/号」时仍按线路问（「玉林512路」就是问这条线在不在）
+    # 「北流105」：县级市的线在目录里叫「北流105路」，光拿裸号 105 去核当然没有，
+    # 于是答成「没看到 105 这辆车」——wants 里已经拼好了带前缀的写法，按它核
     if name and num.isdigit() and (not prefix or norm_city(prefix) == city_key) \
             and not PLATE_RE.search(msg) and not re.search(r"路|线|号", msg) \
-            and not _num_is_line(city_key, name, num):
+            and not any(_num_is_line(city_key, name, w) for w in [num] + list(wants or [])):
         out = render_selfno(city_key, name, num)
         if out and ("没看到" in out or "刚查过" in out):
             # 同号段有线路（问「3」这城有 30/31/32/301）时按线路答候选，别给一句车的结论
