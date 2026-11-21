@@ -4500,7 +4500,8 @@ def _one(city_key, name, num, prefix, msg, src, explicit, last, key=""):
         return (f"「{w}」{norm_city(city_key)}这边没这条，这是哪座城市的线？"
                 f"带上城市名我再查（像「广州{w}」）")
     # 没明写城市就按默认城市查，查不到时别让用户以为「这线路不存在」
-    if txt.startswith("没查到") and city_key not in msg:
+    # 「昆山104路」：昆山是苏州的县级市，用户写了地名（explicit），不能反过来说他没写城市
+    if txt.startswith("没查到") and city_key not in msg and not explicit:
         txt += f"\n（你没写城市，我按{norm_city(city_key)}查的，别的城市前面带上城市名）"
     return txt
 

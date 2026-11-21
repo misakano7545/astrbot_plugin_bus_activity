@@ -347,6 +347,14 @@ assert _txt.startswith("没查到「999」这条线") and "我按玉林查的" i
 _ex = query.answer("南宁 999 路有车吗", "玉林市")   # 明写了城市就不念这句
 assert "我按" not in _ex, _ex
 query.query, query.cities, query.render_at = _q, _c, _a
+# 「昆山104路」：昆山是苏州的县级市，写了地名却查不到时不能反过来说「你没写城市」
+_qq, query.query = query.query, lambda ck, wants, src=None, veh="": {"error": "没这条线路"}
+_cc, query.cities = query.cities, lambda: {"苏州": {"mygolbs": "苏州市"}}
+_kk = query.answer("104路", "苏州市")
+assert "我按苏州查的" in _kk, _kk
+_kk = query.answer("昆山104路", "苏州市")
+assert "我按" not in _kk and "昆山" in _kk, _kk
+query.query, query.cities = _qq, _cc
 
 # 掌上这座城没实时（hasReal=0，北京/成都）→ 下一问先问车来了，别再空等一轮
 _rq = query.query
